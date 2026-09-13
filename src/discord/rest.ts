@@ -4,13 +4,16 @@ import type { Env } from "../env.ts";
 const API = "https://discord.com/api/v10";
 
 export class DiscordError extends Error {
-  constructor(
-    readonly status: number,
-    readonly code: number | undefined,
-    message: string,
-  ) {
+  // Plain fields, not parameter properties: the scripts run under Node's
+  // type stripping, which refuses `constructor(readonly x: T)`.
+  readonly status: number;
+  readonly code: number | undefined;
+
+  constructor(status: number, code: number | undefined, message: string) {
     super(message);
     this.name = "DiscordError";
+    this.status = status;
+    this.code = code;
   }
 
   /** 50007 — cannot DM this user. Permanent; fall back to a channel mention. */
