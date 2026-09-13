@@ -1,0 +1,36 @@
+<!-- @dsCard group="Components" viewport="700x300" name="Navigation" subtitle="TopBar, Wordmark, SyncChip, Sidebar, SegmentedFilter, StatusBar" -->
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Navigation</title>
+<link rel="stylesheet" href="../../styles.css">
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script>
+<style>body{margin:0;padding:18px;background:var(--surface-page)}.grid{display:flex;flex-wrap:wrap;gap:14px 18px;align-items:center}.stack{display:flex;flex-direction:column;gap:10px}.k{font:var(--type-micro);letter-spacing:var(--tracking-label);text-transform:uppercase;color:var(--text-muted);width:100%;margin-top:4px}</style><style>body{padding:0}</style></head><body><div id="root"></div>
+<script type="text/babel">
+const {TopBar,Wordmark,SyncChip,Sidebar,SidebarSection,NavItem,SegmentedFilter,StatusBar,StatusItem,Tag}=window.OrreyDesignSystem_4c8cbd;
+function Card(){const [f,setF]=React.useState('All');return (
+<div style={{display:'grid',gridTemplateRows:'auto 1fr auto',height:300}}>
+<TopBar><Wordmark/><Tag>SCHEDULER v0.4</Tag>
+<div style={{marginLeft:'auto',display:'flex'}}>
+<SyncChip status="ok" label="Discord OK"/><SyncChip status="stale" label="GCal 4m ago"/><SyncChip status="off" label="Rowan"/></div>
+</TopBar>
+<div style={{display:'flex',minHeight:0}}>
+<Sidebar>
+<SidebarSection label="Campaigns" count={4}/>
+<NavItem color="var(--campaign-1)" label="Age of Umbra" meta="2d" active/>
+<NavItem color="var(--campaign-2)" label="The Salt Road" meta="5d"/>
+<NavItem color="var(--campaign-3)" label="Hollowmere" meta="9d"/>
+<NavItem color="var(--campaign-idle)" label="Iron &amp; Ivy" meta="—"/>
+<SidebarSection label="Manage"/>
+<NavItem label="Players" meta={17}/>
+</Sidebar>
+<div style={{padding:18}}>
+<SegmentedFilter options={['All','At risk','Confirmed','Unposted']} value={f} onChange={setF}/>
+<p style={{font:'var(--type-small)',color:'var(--text-muted)',maxWidth:'34ch',marginTop:14}}>
+Chrome is fixed: 44px bar, 210px rail, 26px status line. Everything between them scrolls.</p>
+</div></div>
+<StatusBar><StatusItem label="DB" value="authoritative"/><StatusItem label="Open polls" value={6}/>
+<StatusItem label="Next job" value="00:15"/><StatusItem label="Players" value={17}/></StatusBar>
+</div>);}
+ReactDOM.createRoot(document.getElementById('root')).render(<Card/>);
+</script></body></html>

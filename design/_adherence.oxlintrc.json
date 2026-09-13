@@ -1,0 +1,583 @@
+{
+  "plugins": [
+    "react",
+    "import"
+  ],
+  "rules": {
+    "react/forbid-elements": [
+      "warn",
+      {
+        "forbid": []
+      }
+    ],
+    "no-restricted-imports": [
+      "warn",
+      {
+        "patterns": [
+          {
+            "group": [
+              "components/core/**",
+              "components/data/**",
+              "components/discord/**",
+              "components/nav/**",
+              "ui_kits/console/**",
+              "ui_kits/discord/**",
+              "ui_kits/entry/**"
+            ],
+            "message": "Import design-system components from 'index.js', not component internals."
+          }
+        ]
+      }
+    ],
+    "no-restricted-syntax": [
+      "warn",
+      {
+        "selector": "Literal[value=/#[0-9a-fA-F]{3,8}\\b/]",
+        "message": "Raw hex color — use a design-system color token via var()."
+      },
+      {
+        "selector": "Literal[value=/\\b\\d+px\\b/]",
+        "message": "Raw px value — use a design-system spacing token via var()."
+      },
+      {
+        "selector": "Literal[value=/font-family\\s*:\\s*(?!['\\\"]?(?:Space Grotesk|JetBrains Mono))/i]",
+        "message": "Font not provided by the design system. Available: Space Grotesk, JetBrains Mono."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Button'] > JSXAttribute > JSXIdentifier[name!=/^(?:variant|size|disabled|full|children|key|ref|className|style|children)$/]",
+        "message": "<Button> doesn't accept that prop. Declared props: variant, size, disabled, full, children."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Button'] > JSXAttribute[name.name='variant'] > Literal[value!=/^(?:primary|secondary|ghost|danger)$/]",
+        "message": "<Button> variant must be one of 'primary' | 'secondary' | 'ghost' | 'danger'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Button'] > JSXAttribute[name.name='size'] > Literal[value!=/^(?:sm|md|lg)$/]",
+        "message": "<Button> size must be one of 'sm' | 'md' | 'lg'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Checkbox'] > JSXAttribute > JSXIdentifier[name!=/^(?:checked|label|disabled|onChange|style|key|ref|className|style|children)$/]",
+        "message": "<Checkbox> doesn't accept that prop. Declared props: checked, label, disabled, onChange, style."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Column'] > JSXAttribute > JSXIdentifier[name!=/^(?:label|width|align|key|ref|className|style|children)$/]",
+        "message": "<Column> doesn't accept that prop. Declared props: label, width, align."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Column'] > JSXAttribute[name.name='align'] > Literal[value!=/^(?:left|right|center)$/]",
+        "message": "<Column> align must be one of 'left' | 'right' | 'center'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='DayHeader'] > JSXAttribute > JSXIdentifier[name!=/^(?:lead|gutter|day|relative|colSpan|asRow|style|key|ref|className|style|children)$/]",
+        "message": "<DayHeader> doesn't accept that prop. Declared props: lead, gutter, day, relative, colSpan, asRow, style."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='DiscordButtonSpec'] > JSXAttribute > JSXIdentifier[name!=/^(?:label|style|count|emoji|disabled|onClick|key|ref|className|style|children)$/]",
+        "message": "<DiscordButtonSpec> doesn't accept that prop. Declared props: label, style, count, emoji, disabled, onClick."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='DiscordButtonSpec'] > JSXAttribute[name.name='style'] > Literal[value!=/^(?:primary|secondary|success|danger|link)$/]",
+        "message": "<DiscordButtonSpec> style must be one of 'primary' | 'secondary' | 'success' | 'danger' | 'link'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='EmbedField'] > JSXAttribute > JSXIdentifier[name!=/^(?:name|value|inline|key|ref|className|style|children)$/]",
+        "message": "<EmbedField> doesn't accept that prop. Declared props: name, value, inline."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='DiscordMessage'] > JSXAttribute > JSXIdentifier[name!=/^(?:author|bot|timestamp|avatarInitials|children|key|ref|className|style|children)$/]",
+        "message": "<DiscordMessage> doesn't accept that prop. Declared props: author, bot, timestamp, avatarInitials, children."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='DiscordSelectOption'] > JSXAttribute > JSXIdentifier[name!=/^(?:label|count|key|ref|className|style|children)$/]",
+        "message": "<DiscordSelectOption> doesn't accept that prop. Declared props: label, count."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='EphemeralNote'] > JSXAttribute > JSXIdentifier[name!=/^(?:children|dismissable|key|ref|className|style|children)$/]",
+        "message": "<EphemeralNote> doesn't accept that prop. Declared props: children, dismissable."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Field'] > JSXAttribute > JSXIdentifier[name!=/^(?:label|hint|error|required|children|key|ref|className|style|children)$/]",
+        "message": "<Field> doesn't accept that prop. Declared props: label, hint, error, required, children."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Panel'] > JSXAttribute > JSXIdentifier[name!=/^(?:title|meta|actions|flush|children|key|ref|className|style|children)$/]",
+        "message": "<Panel> doesn't accept that prop. Declared props: title, meta, actions, flush, children."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Pill'] > JSXAttribute > JSXIdentifier[name!=/^(?:tone|dot|children|key|ref|className|style|children)$/]",
+        "message": "<Pill> doesn't accept that prop. Declared props: tone, dot, children."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Pill'] > JSXAttribute[name.name='tone'] > Literal[value!=/^(?:neutral|in|maybe|out|accent|idle)$/]",
+        "message": "<Pill> tone must be one of 'neutral' | 'in' | 'maybe' | 'out' | 'accent' | 'idle'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='QuorumMeter'] > JSXAttribute > JSXIdentifier[name!=/^(?:inCount|maybeCount|outCount|total|quorum|showCount|size|key|ref|className|style|children)$/]",
+        "message": "<QuorumMeter> doesn't accept that prop. Declared props: inCount, maybeCount, outCount, total, quorum, showCount, size."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='RosterRow'] > JSXAttribute > JSXIdentifier[name!=/^(?:name|initials|role|intent|attended|note|key|ref|className|style|children)$/]",
+        "message": "<RosterRow> doesn't accept that prop. Declared props: name, initials, role, intent, attended, note."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='RosterRow'] > JSXAttribute[name.name='intent'] > Literal[value!=/^(?:in|out|maybe|silent)$/]",
+        "message": "<RosterRow> intent must be one of 'in' | 'out' | 'maybe' | 'silent'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='SegmentedFilter'] > JSXAttribute > JSXIdentifier[name!=/^(?:options|value|onChange|key|ref|className|style|children)$/]",
+        "message": "<SegmentedFilter> doesn't accept that prop. Declared props: options, value, onChange."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='SelectOption'] > JSXAttribute > JSXIdentifier[name!=/^(?:value|label|key|ref|className|style|children)$/]",
+        "message": "<SelectOption> doesn't accept that prop. Declared props: value, label."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='SessionRow'] > JSXAttribute > JSXIdentifier[name!=/^(?:when|time|inlineTime|title|subtitle|attendance|state|selected|key|ref|className|style|children)$/]",
+        "message": "<SessionRow> doesn't accept that prop. Declared props: when, time, inlineTime, title, subtitle, attendance, state, selected."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='SessionRow'] > JSXAttribute[name.name='state'] > Literal[value!=/^(?:confirmed|jeopardy|open|unposted|cancelled|played)$/]",
+        "message": "<SessionRow> state must be one of 'confirmed' | 'jeopardy' | 'open' | 'unposted' | 'cancelled' | 'played'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Sidebar'] > JSXAttribute > JSXIdentifier[name!=/^(?:children|key|ref|className|style|children)$/]",
+        "message": "<Sidebar> doesn't accept that prop. Declared props: children."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='StatusBar'] > JSXAttribute > JSXIdentifier[name!=/^(?:children|key|ref|className|style|children)$/]",
+        "message": "<StatusBar> doesn't accept that prop. Declared props: children."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='SyncChip'] > JSXAttribute > JSXIdentifier[name!=/^(?:status|label|children|key|ref|className|style|children)$/]",
+        "message": "<SyncChip> doesn't accept that prop. Declared props: status, label, children."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='SyncChip'] > JSXAttribute[name.name='status'] > Literal[value!=/^(?:ok|stale|down|off)$/]",
+        "message": "<SyncChip> status must be one of 'ok' | 'stale' | 'down' | 'off'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='SyncLogEntry'] > JSXAttribute > JSXIdentifier[name!=/^(?:at|text|tone|key|ref|className|style|children)$/]",
+        "message": "<SyncLogEntry> doesn't accept that prop. Declared props: at, text, tone."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='SyncLogEntry'] > JSXAttribute[name.name='tone'] > Literal[value!=/^(?:read|write|error)$/]",
+        "message": "<SyncLogEntry> tone must be one of 'read' | 'write' | 'error'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Tag'] > JSXAttribute > JSXIdentifier[name!=/^(?:mono|children|key|ref|className|style|children)$/]",
+        "message": "<Tag> doesn't accept that prop. Declared props: mono, children."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='TopBar'] > JSXAttribute > JSXIdentifier[name!=/^(?:children|key|ref|className|style|children)$/]",
+        "message": "<TopBar> doesn't accept that prop. Declared props: children."
+      }
+    ]
+  },
+  "overrides": [
+    {
+      "files": [
+        "**/index.js"
+      ],
+      "rules": {
+        "no-restricted-imports": "off"
+      }
+    }
+  ],
+  "x-omelette": {
+    "components": {
+      "Button": {
+        "replaces": []
+      },
+      "Checkbox": {
+        "replaces": []
+      },
+      "Column": {
+        "replaces": []
+      },
+      "DayHeader": {
+        "replaces": []
+      },
+      "DiscordButtonSpec": {
+        "replaces": []
+      },
+      "EmbedField": {
+        "replaces": []
+      },
+      "DiscordMessage": {
+        "replaces": []
+      },
+      "DiscordSelectOption": {
+        "replaces": []
+      },
+      "EphemeralNote": {
+        "replaces": []
+      },
+      "Field": {
+        "replaces": []
+      },
+      "Panel": {
+        "replaces": []
+      },
+      "Pill": {
+        "replaces": []
+      },
+      "QuorumMeter": {
+        "replaces": []
+      },
+      "RosterRow": {
+        "replaces": []
+      },
+      "SegmentedFilter": {
+        "replaces": []
+      },
+      "SelectOption": {
+        "replaces": []
+      },
+      "SessionRow": {
+        "replaces": []
+      },
+      "Sidebar": {
+        "replaces": []
+      },
+      "StatusBar": {
+        "replaces": []
+      },
+      "SyncChip": {
+        "replaces": []
+      },
+      "SyncLogEntry": {
+        "replaces": []
+      },
+      "Tag": {
+        "replaces": []
+      },
+      "TopBar": {
+        "replaces": []
+      }
+    },
+    "tokens": [
+      "--action-bg",
+      "--action-bg-active",
+      "--action-bg-hover",
+      "--action-ink",
+      "--amber-300",
+      "--amber-500",
+      "--amber-900",
+      "--amber-950",
+      "--border-accent",
+      "--border-hair",
+      "--border-strong",
+      "--border-structural",
+      "--campaign-1",
+      "--campaign-2",
+      "--campaign-3",
+      "--campaign-4",
+      "--campaign-5",
+      "--campaign-idle",
+      "--chrome-gutter",
+      "--chrome-rail",
+      "--chrome-sidebar",
+      "--chrome-statusbar",
+      "--chrome-topbar",
+      "--control-lg",
+      "--control-md",
+      "--control-sm",
+      "--discord-bg",
+      "--discord-bg-alt",
+      "--discord-blurple",
+      "--discord-blurple-hover",
+      "--discord-embed",
+      "--discord-green",
+      "--discord-grey-btn",
+      "--discord-link",
+      "--discord-muted",
+      "--discord-red",
+      "--discord-text",
+      "--duration-base",
+      "--duration-fast",
+      "--duration-instant",
+      "--duration-slow",
+      "--ease-out",
+      "--ease-standard",
+      "--focus-ring",
+      "--font-discord",
+      "--font-mono",
+      "--font-ui",
+      "--green-300",
+      "--green-500",
+      "--green-900",
+      "--green-950",
+      "--leading-body",
+      "--leading-log",
+      "--leading-snug",
+      "--leading-tight",
+      "--line-hair",
+      "--line-strong",
+      "--line-structural",
+      "--marker-attention",
+      "--marker-selected",
+      "--radius-circle",
+      "--radius-discord",
+      "--radius-md",
+      "--radius-none",
+      "--radius-pill",
+      "--radius-sm",
+      "--row-agenda",
+      "--row-default",
+      "--row-dense",
+      "--rust-300",
+      "--rust-500",
+      "--rust-900",
+      "--rust-950",
+      "--scrim",
+      "--shadow-discord",
+      "--shadow-none",
+      "--shadow-overlay",
+      "--signal-100",
+      "--signal-400",
+      "--signal-500",
+      "--signal-600",
+      "--size-body",
+      "--size-data",
+      "--size-display",
+      "--size-heading",
+      "--size-label",
+      "--size-micro",
+      "--size-small",
+      "--size-title",
+      "--slate-100",
+      "--slate-1000",
+      "--slate-200",
+      "--slate-400",
+      "--slate-500",
+      "--slate-700",
+      "--slate-750",
+      "--slate-800",
+      "--slate-850",
+      "--slate-900",
+      "--slate-950",
+      "--space-0",
+      "--space-1",
+      "--space-10",
+      "--space-11",
+      "--space-2",
+      "--space-3",
+      "--space-4",
+      "--space-5",
+      "--space-6",
+      "--space-7",
+      "--space-8",
+      "--space-9",
+      "--state-in",
+      "--state-in-bg",
+      "--state-in-line",
+      "--state-in-text",
+      "--state-maybe",
+      "--state-maybe-bg",
+      "--state-maybe-line",
+      "--state-maybe-text",
+      "--state-out",
+      "--state-out-bg",
+      "--state-out-line",
+      "--state-out-text",
+      "--state-silent",
+      "--state-silent-bg",
+      "--surface-chrome",
+      "--surface-inset",
+      "--surface-page",
+      "--surface-raised",
+      "--surface-sunken",
+      "--text-accent",
+      "--text-inverse",
+      "--text-link",
+      "--text-link-hover",
+      "--text-muted",
+      "--text-primary",
+      "--text-secondary",
+      "--tracking-body",
+      "--tracking-data",
+      "--tracking-display",
+      "--tracking-label",
+      "--tracking-wordmark",
+      "--transition-hover",
+      "--transition-meter",
+      "--type-body",
+      "--type-body-medium",
+      "--type-data",
+      "--type-display",
+      "--type-heading",
+      "--type-label",
+      "--type-log",
+      "--type-micro",
+      "--type-small",
+      "--type-title",
+      "--weight-bold",
+      "--weight-medium",
+      "--weight-regular"
+    ],
+    "tokenKinds": {
+      "--slate-1000": "color",
+      "--slate-950": "color",
+      "--slate-900": "color",
+      "--slate-850": "color",
+      "--slate-800": "color",
+      "--slate-750": "color",
+      "--slate-700": "color",
+      "--slate-500": "color",
+      "--slate-400": "color",
+      "--slate-200": "color",
+      "--slate-100": "color",
+      "--signal-600": "color",
+      "--signal-500": "color",
+      "--signal-400": "color",
+      "--signal-100": "color",
+      "--green-500": "color",
+      "--green-300": "color",
+      "--green-900": "color",
+      "--green-950": "color",
+      "--amber-500": "color",
+      "--amber-300": "color",
+      "--amber-900": "color",
+      "--amber-950": "color",
+      "--rust-500": "color",
+      "--rust-300": "color",
+      "--rust-900": "color",
+      "--rust-950": "color",
+      "--campaign-1": "color",
+      "--campaign-2": "color",
+      "--campaign-3": "color",
+      "--campaign-4": "color",
+      "--campaign-5": "color",
+      "--campaign-idle": "color",
+      "--surface-page": "color",
+      "--surface-chrome": "color",
+      "--surface-raised": "color",
+      "--surface-sunken": "color",
+      "--surface-inset": "color",
+      "--text-primary": "font",
+      "--text-secondary": "font",
+      "--text-muted": "font",
+      "--text-inverse": "font",
+      "--text-accent": "font",
+      "--text-link": "font",
+      "--text-link-hover": "font",
+      "--line-structural": "color",
+      "--line-hair": "color",
+      "--line-strong": "color",
+      "--state-in": "color",
+      "--state-in-text": "font",
+      "--state-in-line": "color",
+      "--state-in-bg": "color",
+      "--state-maybe": "color",
+      "--state-maybe-text": "font",
+      "--state-maybe-line": "color",
+      "--state-maybe-bg": "color",
+      "--state-out": "color",
+      "--state-out-text": "font",
+      "--state-out-line": "color",
+      "--state-out-bg": "color",
+      "--state-silent": "color",
+      "--state-silent-bg": "color",
+      "--action-bg": "color",
+      "--action-bg-hover": "color",
+      "--action-bg-active": "color",
+      "--action-ink": "color",
+      "--focus-ring": "color",
+      "--discord-bg": "color",
+      "--discord-bg-alt": "color",
+      "--discord-embed": "color",
+      "--discord-text": "font",
+      "--discord-muted": "color",
+      "--discord-blurple": "color",
+      "--discord-blurple-hover": "color",
+      "--discord-grey-btn": "color",
+      "--discord-green": "color",
+      "--discord-red": "color",
+      "--discord-link": "color",
+      "--font-ui": "font",
+      "--font-mono": "font",
+      "--font-discord": "font",
+      "--weight-regular": "font",
+      "--weight-medium": "font",
+      "--weight-bold": "font",
+      "--size-display": "spacing",
+      "--size-title": "spacing",
+      "--size-heading": "spacing",
+      "--size-body": "spacing",
+      "--size-small": "spacing",
+      "--size-data": "spacing",
+      "--size-label": "spacing",
+      "--size-micro": "spacing",
+      "--leading-tight": "font",
+      "--leading-snug": "font",
+      "--leading-body": "font",
+      "--leading-log": "font",
+      "--tracking-display": "font",
+      "--tracking-body": "font",
+      "--tracking-data": "font",
+      "--tracking-label": "font",
+      "--tracking-wordmark": "font",
+      "--type-display": "font",
+      "--type-title": "font",
+      "--type-heading": "font",
+      "--type-body": "font",
+      "--type-body-medium": "font",
+      "--type-small": "font",
+      "--type-data": "font",
+      "--type-label": "font",
+      "--type-micro": "font",
+      "--type-log": "font",
+      "--space-0": "spacing",
+      "--space-1": "spacing",
+      "--space-2": "spacing",
+      "--space-3": "spacing",
+      "--space-4": "spacing",
+      "--space-5": "spacing",
+      "--space-6": "spacing",
+      "--space-7": "spacing",
+      "--space-8": "spacing",
+      "--space-9": "spacing",
+      "--space-10": "spacing",
+      "--space-11": "spacing",
+      "--chrome-topbar": "spacing",
+      "--chrome-statusbar": "spacing",
+      "--chrome-sidebar": "spacing",
+      "--chrome-rail": "spacing",
+      "--chrome-gutter": "spacing",
+      "--control-sm": "spacing",
+      "--control-md": "spacing",
+      "--control-lg": "spacing",
+      "--row-dense": "spacing",
+      "--row-default": "spacing",
+      "--row-agenda": "spacing",
+      "--radius-none": "radius",
+      "--radius-sm": "radius",
+      "--radius-md": "radius",
+      "--radius-pill": "radius",
+      "--radius-circle": "radius",
+      "--radius-discord": "radius",
+      "--border-hair": "color",
+      "--border-structural": "color",
+      "--border-strong": "color",
+      "--border-accent": "color",
+      "--marker-selected": "color",
+      "--marker-attention": "color",
+      "--shadow-none": "shadow",
+      "--shadow-overlay": "shadow",
+      "--shadow-discord": "shadow",
+      "--scrim": "color",
+      "--duration-instant": "other",
+      "--duration-fast": "other",
+      "--duration-base": "other",
+      "--duration-slow": "other",
+      "--ease-standard": "other",
+      "--ease-out": "other",
+      "--transition-hover": "color",
+      "--transition-meter": "color"
+    },
+    "fontFamilies": [
+      "JetBrains Mono",
+      "Space Grotesk"
+    ]
+  }
+}

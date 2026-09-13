@@ -1,0 +1,32 @@
+<!-- @dsCard group="Components" viewport="700x400" name="Discord surface" subtitle="Message, Embed, ButtonRow, Select, EphemeralNote" -->
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Discord</title>
+<link rel="stylesheet" href="../../styles.css">
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script>
+<style>body{margin:0;padding:18px;background:var(--surface-page)}.grid{display:flex;flex-wrap:wrap;gap:14px 18px;align-items:center}.stack{display:flex;flex-direction:column;gap:10px}.k{font:var(--type-micro);letter-spacing:var(--tracking-label);text-transform:uppercase;color:var(--text-muted);width:100%;margin-top:4px}</style><style>body{padding:0;background:var(--discord-bg)}</style></head><body><div id="root"></div>
+<script type="text/babel">
+const {DiscordMessage,DiscordEmbed,DiscordButtonRow,DiscordSelect,EphemeralNote}=window.OrreyDesignSystem_4c8cbd;
+function Card(){const [sel,setSel]=React.useState(['Sat 11 Oct']);
+const tog=v=>setSel(s=>s.includes(v)?s.filter(x=>x!==v):[...s,v]);
+return (<div style={{paddingBottom:18}}>
+<DiscordMessage timestamp="Today at 17:00">
+<DiscordEmbed color="var(--campaign-1)" title="Age of Umbra · Session 14"
+ description={"Thursday 2 October, 19:30 · The Foundry"}
+ fields={[{name:'In (4)',value:'Rowan, Tam, Jodie, Priya'},{name:'Out (1)',value:'Marco'},{name:'No reply (1)',value:'Elle'}]}
+ footer="Quorum met" asOf="as of 19:02"/>
+<DiscordButtonRow buttons={[{label:'In',style:'success',count:4},{label:'Out',style:'danger',count:1},
+ {label:'Maybe',style:'secondary'},{label:'Note',style:'secondary'}]}/>
+<DiscordButtonRow buttons={[{label:'Suggest another day',style:'secondary'},{label:'Refresh',style:'secondary'}]}/>
+</DiscordMessage>
+<DiscordMessage timestamp="Today at 20:14">
+<DiscordSelect open placeholder="Which days can you make?" selected={sel} onToggle={tog}
+ options={[{label:'Sat 04 Oct',count:3},{label:'Sat 11 Oct',count:6},{label:'Sat 18 Oct',count:2}]}/>
+<DiscordButtonRow buttons={[{label:'Canonise',style:'primary'},{label:'Refresh',style:'secondary'}]}/>
+<EphemeralNote><div style={{fontSize:14,color:'var(--discord-text)',marginTop:10}}>
+Poll closes Friday 18:00. Organiser decides which dates win.</div></EphemeralNote>
+</DiscordMessage>
+</div>);}
+ReactDOM.createRoot(document.getElementById('root')).render(<Card/>);
+</script></body></html>
