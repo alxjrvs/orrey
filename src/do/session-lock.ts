@@ -3,6 +3,8 @@ import { eq, sql } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
 import { rememberUser } from "../db/users.ts";
+import { attendanceRows } from "../attendance/rows.ts";
+import type { AttendanceRow } from "../attendance/render.ts";
 import type { InteractionUser } from "../discord/types.ts";
 
 /**
@@ -22,6 +24,32 @@ export class SessionLock extends DurableObject<Env> {
     const next = this.chain.then(work);
     this.chain = next.catch(() => undefined);
     return next as Promise<T>;
+  }
+
+  /** What this person now says, and everything the post must show afterwards. */
+  async setIntent({ sessionId, actor, intent }: AttendanceIntent): Promise<AttendanceRow[]> {
+    return this.serialise(async () => {
+      // Identity is the Discord id; the names are a cache this refreshes.
+      await rememberUser(this.env, actor);
+
+      await db(this.env)
+        .insert(schema.attendance)
+        .values({ sessionId, userId: actor.id, intent, updatedAt: sql`(unixepoch())` })
+        .onConflictDoUpdate({
+          target: [schema.attendance.sessionId, schema.attendance.userId],
+          set: { intent, updatedAt: sql`(unixepoch())` },
+        });
+
+      return attendanceRows(this.env, sessionId);
+    });
+  }
+
+  /**
+   * Refresh: no write, but the same queue, so a refresh landing between two
+   * clicks reads a settled state rather than a half-written one.
+   */
+  async readIntents(sessionId: string): Promise<AttendanceRow[]> {
+    return this.serialise(() => attendanceRows(this.env, sessionId));
   }
 
   /**
@@ -52,6 +80,18 @@ export class SessionLock extends DurableObject<Env> {
       return next;
     });
   }
+}
+
+/**
+ * Six people clicking In at once is the case this exists for. Each click reads,
+ * writes and re-renders behind the same chain, and the rows it returns are the
+ * rows that click wrote — so the response can render what was just written
+ * without going back to look, and two clicks can never render the same tally.
+ */
+export interface AttendanceIntent {
+  sessionId: string;
+  actor: InteractionUser;
+  intent: "in" | "out" | "maybe";
 }
 
 export interface SmokeTally {

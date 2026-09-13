@@ -1,6 +1,8 @@
 import type { Env } from "../env.ts";
 import { decodeCustomId, encodeCustomId } from "./custom-id.ts";
 import { deleteUserData, describeReceipt } from "../privacy/delete.ts";
+import { renderAttendancePost } from "../attendance/render.ts";
+import { loadProjectionTarget } from "../projection/target.ts";
 import type { SmokeTally } from "../do/session-lock.ts";
 import {
   ButtonStyle,
@@ -122,6 +124,8 @@ async function handleComponent(
   if (!id) return retiredPost();
 
   switch (id.action) {
+    case "attend":
+      return handleAttend(interaction, env, id.arg, id.target);
     case "ping":
       return handlePing(interaction, env, id.target ?? "default");
     case "privacy":
@@ -129,6 +133,49 @@ async function handleComponent(
     default:
       return retiredPost();
   }
+}
+
+/**
+ * In / Out / Maybe / Refresh on an attendance post. The shape the smoke test
+ * proved: serialise behind the session's lock, write to D1, re-render from what
+ * was just written, and answer with UPDATE_MESSAGE so the click rewrites the
+ * message it came from. The message itself is never read — a post is a
+ * snapshot of D1, never a record of anything.
+ */
+async function handleAttend(
+  interaction: Interaction,
+  env: Env,
+  arg: string | undefined,
+  sessionId: string | undefined,
+): Promise<Json> {
+  if (!sessionId) return retiredPost();
+
+  const actor = actorOf(interaction);
+  if (!actor) return ephemeral("Orrey could not tell who clicked that.");
+
+  // The session is gone, so the post in front of them is about nothing.
+  const target = await loadProjectionTarget(env, sessionId);
+  if (!target) return retiredPost();
+
+  const lock = env.SESSION_LOCK.get(env.SESSION_LOCK.idFromName(sessionId));
+  let rows;
+  switch (arg) {
+    case "in":
+    case "out":
+    case "maybe":
+      rows = await lock.setIntent({ sessionId, actor, intent: arg });
+      break;
+    case "refresh":
+      rows = await lock.readIntents(sessionId);
+      break;
+    default:
+      return retiredPost();
+  }
+
+  return {
+    type: InteractionResponseType.UPDATE_MESSAGE,
+    data: renderAttendancePost({ target, rows, asOf: new Date() }),
+  };
 }
 
 /**

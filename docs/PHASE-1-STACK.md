@@ -101,6 +101,10 @@ as-of time in); ids round-trip through `decodeCustomId`.
 the clicker into `users`, write `attendance.intent`, re-render from D1, answer
 with `UPDATE_MESSAGE` (type 7).
 
+**Refresh rides here, not with the modal.** It is the same handler with no
+write, and leaving it in the PR above would mean a posted message with two
+buttons answering "this post is retired" for as long as that PR is in review.
+
 *Tests*: two clicks landing together produce one correct tally (the lock); an
 unknown id answers the retired-post response; the handler reads D1 only — the
 interaction's own message body is never parsed.
@@ -108,11 +112,10 @@ interaction's own message body is never parsed.
 *Review focus*: type 7 answering the click's own message, and nothing else that
 touches a posted message.
 
-### 7. `p1/7-attendance-note` — modal and refresh · closes #18
+### 7. `p1/7-attendance-note` — the modal · closes #18
 
 `Note` opens a modal, `MODAL_SUBMIT` stores the free text against the attendance
-row and re-renders; `Refresh` re-renders with a fresh as-of line — the sanctioned
-cure for a stale snapshot.
+row and re-renders. (Refresh landed one PR below, with the other re-renders.)
 
 *Review focus*: the modal's `custom_id` carries the session through the round
 trip and is minted the same way; note text is stored and rendered as text, never
