@@ -3,7 +3,7 @@
 Where the product actually lives until phase 2, and where nearly every answer arrives from
 after that. Buttons sit on the thing they concern.
 
-Built from `docs/build-plan.md` (Discord surface), `src/discord/commands.ts` and
+Built from the specification (issue #1 — Discord surface), `src/discord/commands.ts` and
 `src/discord/interactions.ts`. Discord's own palette is used throughout — the
 `--discord-*` tokens — because these are mockups of posts inside Discord, not Orrey screens.
 

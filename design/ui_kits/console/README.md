@@ -6,7 +6,7 @@ the Discord command list to four.
 
 **This is a new design, not a recreation.** `alxjrvs/orrey` is at phase 0 and ships only a
 holding page (`public/index.html`); the console lands in phase 2. Every screen here is
-drawn to `docs/build-plan.md` and the domain model in `src/db/schema.ts`.
+drawn to the specification (issue #1) and the domain model in `src/db/schema.ts`.
 
 ## Screens
 

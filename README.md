@@ -6,7 +6,8 @@ console, running as one Cloudflare Worker.
 Orrey's own database is the source of truth. Discord and Google Calendar are displays.
 
 > **Status: phase 0.** Footings only. Nothing has been cut over yet.
-> The plan this is being built to is [`docs/build-plan.md`](docs/build-plan.md).
+> The plan this is being built to is [issue #1](https://github.com/alxjrvs/orrey/issues/1)
+> — the specification, with a phase epic and ordered issues under it.
 
 ## Three premises
 
