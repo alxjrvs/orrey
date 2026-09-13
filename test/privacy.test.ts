@@ -2,6 +2,7 @@ import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../src/http/app.ts";
 import { deleteUserData } from "../src/privacy/delete.ts";
+import { seedStatements } from "../src/db/seed-sql.ts";
 import { encodeCustomId } from "../src/discord/custom-id.ts";
 import { InteractionResponseType, InteractionType } from "../src/discord/types.ts";
 import { fakeDiscord } from "./discord.ts";
@@ -112,8 +113,30 @@ describe("delete-my-data", () => {
 
   it("counts every user-keyed table, so a later phase cannot silently skip one", async () => {
     await seedUser("1001");
+
+    // Phase 1's table. It cascades off the user row either way — what is being
+    // tested is that the receipt says so, because a receipt that undercounts is
+    // how a later phase's table goes unnoticed.
+    for (const statement of seedStatements(
+      { name: "Age of Umbra", kind: "run" },
+      {
+        number: 12,
+        startsAt: Date.parse("2026-09-20T19:00:00Z") / 1000,
+        endsAt: Date.parse("2026-09-20T23:00:00Z") / 1000,
+        location: "The Wreck",
+      },
+    )) {
+      await env.DB.prepare(statement).run();
+    }
+    await env.DB.prepare(
+      "INSERT INTO attendance (session_id, user_id, intent, note) VALUES ('age-of-umbra-s12', '1001', 'in', 'bringing snacks')",
+    ).run();
+
     const receipt = await deleteUserData(env, "1001");
-    expect(Object.keys(receipt.removed)).toEqual(["users"]);
-    expect(receipt.removed).toEqual({ users: 1 });
+    expect(Object.keys(receipt.removed).sort()).toEqual(["attendance", "users"]);
+    expect(receipt.removed).toEqual({ users: 1, attendance: 1 });
+
+    const left = await env.DB.prepare("SELECT COUNT(*) AS n FROM attendance").first<{ n: number }>();
+    expect(left?.n).toBe(0);
   });
 });

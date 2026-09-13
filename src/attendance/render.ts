@@ -35,9 +35,43 @@ export interface MessagePayload {
 
 export function renderAttendancePost({ target, rows, asOf }: AttendanceView): MessagePayload {
   const { session, campaign } = target;
+
+  // Three passes, because a post over Discord's 2000 characters is not a post
+  // that reads badly — it is a post whose every later click is rejected, and
+  // under send-only there is no shortening it afterwards. Notes go first, then
+  // the names themselves, leaving the counts that actually answer the question.
+  let content = compose(target, rows, asOf, { notes: true, names: true });
+  if (content.length > LIMIT) content = compose(target, rows, asOf, { notes: false, names: true });
+  if (content.length > LIMIT) content = compose(target, rows, asOf, { notes: false, names: false });
+
+  return {
+    content,
+    components: [buttons(session.id)],
+    // The roster is the audience, and only the roster: a mention Orrey did not
+    // mean — @everyone, or a user id that wandered in from a note — cannot fire.
+    allowed_mentions: { parse: [], roles: campaign?.discordRoleId ? [campaign.discordRoleId] : [] },
+  };
+}
+
+/** Discord's ceiling is 2000; the slack absorbs the characters escaping adds. */
+const LIMIT = 1900;
+
+/** How much of each row survives this pass. */
+interface Detail {
+  notes: boolean;
+  names: boolean;
+}
+
+function compose(
+  target: ProjectionTarget,
+  rows: AttendanceRow[],
+  asOf: Date,
+  detail: Detail,
+): string {
+  const { session } = target;
   const lines = [heading(target), when(session.startsAt, session.endsAt)];
 
-  if (session.location) lines.push(session.location);
+  if (session.location) lines.push(escapeMarkdown(session.location));
   lines.push("");
 
   for (const [intent, label] of [
@@ -46,25 +80,22 @@ export function renderAttendancePost({ target, rows, asOf }: AttendanceView): Me
     ["maybe", "Maybe"],
   ] as const) {
     const named = rows.filter((row) => row.intent === intent);
-    if (named.length > 0) lines.push(`**${label} (${named.length})** — ${named.map(name).join(", ")}`);
+    if (named.length === 0) continue;
+    const who = detail.names ? ` — ${named.map((row) => name(row, detail)).join(", ")}` : "";
+    lines.push(`**${label} (${named.length})**${who}`);
   }
+
   // A note without an answer is still something the others should see.
   const unanswered = rows.filter((row) => row.intent === null && row.note);
-  if (unanswered.length > 0) lines.push(`**Notes** — ${unanswered.map(name).join(", ")}`);
-
-  if (rows.every((row) => row.intent === null) && unanswered.length === 0) {
-    lines.push("*Nobody has said yet.*");
+  const showNotes = detail.notes && detail.names && unanswered.length > 0;
+  if (showNotes) {
+    lines.push(`**Notes** — ${unanswered.map((row) => name(row, detail)).join(", ")}`);
   }
 
-  lines.push("", `-# As of <t:${unix(asOf)}:R>. Refresh for a fresh reading.`);
+  if (rows.every((row) => row.intent === null) && !showNotes) lines.push("*Nobody has said yet.*");
 
-  return {
-    content: lines.join("\n"),
-    components: [buttons(session.id)],
-    // The roster is the audience, and only the roster: a mention Orrey did not
-    // mean — @everyone, or a user id that wandered in from a note — cannot fire.
-    allowed_mentions: { parse: [], roles: campaign?.discordRoleId ? [campaign.discordRoleId] : [] },
-  };
+  lines.push("", `-# As of <t:${unix(asOf)}:R>. Refresh for a fresh reading.`);
+  return lines.join("\n");
 }
 
 /** The five buttons, in one row — Discord allows five, which is exactly enough. */
@@ -92,7 +123,8 @@ function button(label: string, sessionId: string, arg: string, style: number) {
 
 function heading(target: ProjectionTarget): string {
   const role = target.campaign?.discordRoleId;
-  return role ? `<@&${role}> **${sessionTitle(target)}**` : `**${sessionTitle(target)}**`;
+  const title = escapeMarkdown(sessionTitle(target));
+  return role ? `<@&${role}> **${title}**` : `**${title}**`;
 }
 
 /**
@@ -103,8 +135,22 @@ function when(startsAt: number, endsAt: number): string {
   return `<t:${startsAt}:F> → <t:${endsAt}:t>`;
 }
 
-function name(row: AttendanceRow): string {
-  return row.note ? `${row.name} (${row.note})` : row.name;
+function name(row: AttendanceRow, detail: Detail): string {
+  const who = escapeMarkdown(row.name);
+  return detail.notes && row.note ? `${who} (${escapeMarkdown(row.note)})` : who;
+}
+
+/**
+ * A note is somebody else's text on a post Orrey can never edit. Unescaped, a
+ * note reading `**Out (4)** — Bob, Cara` renders as a heading of Orrey's own
+ * shape, and a stray backtick reflows everything after it — the as-of line
+ * included. So the markdown a note can use is the markdown it escapes.
+ *
+ * Only the inline set: a note is normalised to one line and never rendered at
+ * the start of one, so `#` and `>` cannot open a block.
+ */
+export function escapeMarkdown(text: string): string {
+  return text.replace(/([*_`~|\\])/g, "\\$1");
 }
 
 function unix(at: Date): number {

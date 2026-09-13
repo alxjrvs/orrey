@@ -7,8 +7,9 @@ import { db, schema } from "../db/index.ts";
  *
  * Discord's developer terms require a delete-my-data path, and the only way to
  * keep one honest is for every phase that adds a user-keyed table to add its
- * delete here. Phase 0 has one such table; attendance, signups, poll responses
- * and campaign membership each join it as they land.
+ * delete here — and to have it counted on the receipt, so the person reading it
+ * learns what was actually held. Signups, poll responses and campaign
+ * membership each join as they land.
  */
 export interface DeletionReceipt {
   discordId: string;
@@ -20,6 +21,14 @@ export interface DeletionReceipt {
 export async function deleteUserData(env: Env, discordId: string): Promise<DeletionReceipt> {
   const d = db(env);
 
+  // Attendance would cascade off the user row anyway, but a receipt that says
+  // only "users (1)" is a receipt that does not tell someone what they just
+  // erased. Deleting it here first is what makes the count truthful.
+  const attendance = await d
+    .delete(schema.attendance)
+    .where(eq(schema.attendance.userId, discordId))
+    .returning({ sessionId: schema.attendance.sessionId });
+
   const users = await d
     .delete(schema.users)
     .where(eq(schema.users.discordId, discordId))
@@ -27,7 +36,7 @@ export async function deleteUserData(env: Env, discordId: string): Promise<Delet
 
   return {
     discordId,
-    removed: { users: users.length },
+    removed: { users: users.length, attendance: attendance.length },
     deletedAt: new Date().toISOString(),
   };
 }

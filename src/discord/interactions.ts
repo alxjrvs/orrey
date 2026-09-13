@@ -169,8 +169,13 @@ async function handleAttend(
     case "refresh":
       rows = await lock.readIntents(sessionId);
       break;
-    case "note":
-      return noteModal(sessionId);
+    case "note": {
+      // Prefilled with what is stored: the box comes back empty when the person
+      // clears it, and an empty box means "clear it", so an unprefilled modal
+      // would wipe a note just by being opened and submitted.
+      const mine = (await lock.readIntents(sessionId)).find((row) => row.userId === actor.id);
+      return noteModal(sessionId, mine?.note ?? "");
+    }
     default:
       return retiredPost();
   }
@@ -187,7 +192,7 @@ async function handleAttend(
  * comes back after a schema change, degrades to the retired-post response like
  * any other id Orrey no longer understands.
  */
-function noteModal(sessionId: string): Json {
+function noteModal(sessionId: string, current: string): Json {
   return {
     type: InteractionResponseType.MODAL,
     data: {
@@ -203,6 +208,7 @@ function noteModal(sessionId: string): Json {
               style: TextInputStyle.SHORT,
               label: "Anything the others should know?",
               placeholder: "Running 30 late",
+              value: current,
               max_length: 140,
               required: false,
             },
