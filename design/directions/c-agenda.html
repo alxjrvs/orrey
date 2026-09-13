@@ -1,0 +1,134 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Orrey — Direction C</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#101316;--surface:#161a1e;--raised:#1c2126;--line:#272d33;--hair:#1f252a;--ink:#e6e9ec;--ink-2:#a3acb4;--ink-3:#6d7880;--accent:#8fa86b;--accent-dim:#1d2418;--ok:#8fa86b;--warn:#c2924c;--off:#a36a64;
+--sans:"Archivo",system-ui,sans-serif;--r:5px}
+*{box-sizing:border-box;margin:0}
+body{background:var(--bg);color:var(--ink);font:400 14px/1.55 var(--sans);font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased}
+a{color:var(--accent)}a:hover{color:#a6bf80}
+.app{display:grid;grid-template-columns:250px 1fr;grid-template-rows:auto 1fr;height:100vh;min-height:760px}
+header{grid-column:1/-1;display:flex;align-items:center;gap:16px;padding:0 26px;height:62px;border-bottom:1px solid var(--line)}
+.mark{font:700 16px/1 var(--sans);letter-spacing:-.01em}
+.mark span{font-weight:400;color:var(--ink-3)}
+.syncs{margin-left:auto;display:flex;gap:8px;align-items:center}
+.chip{display:flex;gap:7px;align-items:center;font:500 12px/1 var(--sans);color:var(--ink-2);border:1px solid var(--line);border-radius:99px;padding:6px 11px}
+.dot{width:6px;height:6px;border-radius:50%;background:var(--accent)}
+.me{width:28px;height:28px;border-radius:50%;background:var(--raised);border:1px solid var(--line);font:600 11px/26px var(--sans);text-align:center;color:var(--ink-2);margin-left:6px}
+nav{border-right:1px solid var(--line);padding:22px 14px;overflow:auto}
+.navhead{font:600 11px/1 var(--sans);letter-spacing:.09em;text-transform:uppercase;color:var(--ink-3);padding:0 10px 10px}
+.camp{display:flex;gap:10px;align-items:center;padding:9px 10px;border-radius:var(--r);cursor:pointer}
+.camp:hover{background:var(--raised)}
+.camp[aria-current]{background:var(--accent-dim);color:#c3d6a3}
+.dotc{width:8px;height:8px;border-radius:50%;flex:none}
+.cn{font:500 13.5px/1.3 var(--sans);flex:1}
+.cm{font:400 12px/1 var(--sans);color:var(--ink-3)}
+.gap{height:20px}
+main{overflow:auto;padding:30px 34px 48px;max-width:1000px}
+h1{font:600 24px/1.25 var(--sans);letter-spacing:-.015em}
+.lede{color:var(--ink-2);margin-top:6px;max-width:58ch}
+.tools{display:flex;gap:8px;margin:24px 0 6px;align-items:center}
+.seg{display:flex;gap:4px}
+.seg button{background:transparent;border:1px solid var(--line);border-radius:99px;color:var(--ink-2);font:500 12.5px/1 var(--sans);padding:8px 13px;cursor:pointer}
+.seg button:hover{background:var(--raised)}
+.seg button[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:#141a0f}
+.btn{background:var(--accent);color:#141a0f;border:0;border-radius:var(--r);font:600 13px/1 var(--sans);padding:10px 15px;cursor:pointer;margin-left:auto}
+.btn:hover{background:#a6bf80}
+.daygroup{margin-top:26px}
+.dayhead{display:flex;align-items:baseline;gap:10px;padding-bottom:10px;border-bottom:1px solid var(--line)}
+.dayhead b{font:600 13px/1 var(--sans);letter-spacing:.03em}
+.dayhead span{font:400 12.5px/1 var(--sans);color:var(--ink-3)}
+.item{display:grid;grid-template-columns:78px 1fr auto;gap:18px;align-items:start;padding:16px 12px 16px 0;border-bottom:1px solid var(--hair);cursor:pointer;border-radius:var(--r)}
+.item:hover{background:var(--raised)}
+.time{font:500 13px/1.4 var(--sans);color:var(--ink-2);padding-left:12px}
+.time span{display:block;font-size:12px;color:var(--ink-3)}
+.body h3{font:600 15px/1.35 var(--sans)}
+.body p{font:400 13px/1.5 var(--sans);color:var(--ink-3);margin-top:3px}
+.faces{display:flex;margin-top:10px}
+.f{width:24px;height:24px;border-radius:50%;border:2px solid var(--surface);background:var(--raised);font:600 10px/20px var(--sans);text-align:center;color:var(--ink-2);margin-right:-6px}
+.f.y{background:#2b3a22;color:#b9cf96;border-color:var(--bg)}
+.f.n{background:#3a2624;color:#d09a94;border-color:var(--bg)}
+.fcount{align-self:center;margin-left:14px;font:500 12.5px/1 var(--sans);color:var(--ink-3)}
+.right{text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:8px}
+.pill{display:inline-block;font:600 11.5px/1 var(--sans);padding:6px 10px;border-radius:99px;border:1px solid var(--line);color:var(--ink-2)}
+.pill.go{background:var(--accent-dim);border-color:#33402a;color:#b9cf96}
+.pill.risk{background:#251d12;border-color:#413219;color:#d7a95c}
+.pill.idle{color:var(--ink-3)}
+.mini{font:400 12px/1 var(--sans);color:var(--ink-3)}
+.panel{margin-top:34px;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.ph{display:flex;align-items:center;gap:12px;padding:14px 18px;border-bottom:1px solid var(--line);background:var(--surface)}
+.ph b{font:600 14px/1 var(--sans)}
+.ph span{font:400 12.5px/1 var(--sans);color:var(--ink-3)}
+.pb{display:grid;grid-template-columns:1fr 1fr;gap:0}
+.pcol{padding:16px 18px}
+.pcol+.pcol{border-left:1px solid var(--line)}
+.k{font:600 11px/1 var(--sans);letter-spacing:.09em;text-transform:uppercase;color:var(--ink-3);margin-bottom:10px}
+.row{display:flex;align-items:center;gap:10px;padding:6px 0}
+.who{font-size:13.5px}
+.state{margin-left:auto;font:500 12.5px/1 var(--sans)}
+.state.y{color:var(--accent)}.state.n{color:var(--off)}.state.w{color:var(--ink-3)}
+.ghost{background:transparent;border:1px solid var(--line);color:var(--ink);border-radius:var(--r);font:500 13px/1 var(--sans);padding:10px 13px;cursor:pointer;width:100%;text-align:left;margin-bottom:6px}
+.ghost:hover{background:var(--raised);border-color:var(--ink-3)}
+.note{font:400 12.5px/1.6 var(--sans);color:var(--ink-3);margin-top:10px}
+</style></head><body>
+<div class="app">
+<header><div class="mark">The Orrey <span>of Worlds</span></div>
+<div class="syncs"><div class="chip"><i class="dot"></i>Discord connected</div><div class="chip"><i class="dot"></i>Calendar synced 4m ago</div><div class="me">RW</div></div></header>
+<nav>
+<div class="navhead">Campaigns</div>
+<div class="camp" aria-current="true"><i class="dotc" style="background:#8fa86b"></i><span class="cn">Ashes of the Verge</span><span class="cm">2d</span></div>
+<div class="camp"><i class="dotc" style="background:#6f8fb0"></i><span class="cn">The Salt Road</span><span class="cm">5d</span></div>
+<div class="camp"><i class="dotc" style="background:#a07fb0"></i><span class="cn">Hollowmere</span><span class="cm">9d</span></div>
+<div class="camp"><i class="dotc" style="background:#4f5b64"></i><span class="cn">Iron &amp; Ivy</span><span class="cm">paused</span></div>
+<div class="gap"></div>
+<div class="navhead">One-offs</div>
+<div class="camp"><i class="dotc" style="background:#c2924c"></i><span class="cn">Game Day · Oct 12</span><span class="cm">11</span></div>
+<div class="gap"></div>
+<div class="navhead">Manage</div>
+<div class="camp"><span class="cn">Players</span><span class="cm">17</span></div>
+<div class="camp"><span class="cn">Bot posts</span><span class="cm">6</span></div>
+<div class="camp"><span class="cn">Settings</span></div>
+</nav>
+<main>
+<h1>Next fourteen days</h1>
+<p class="lede">Everything the bot is currently holding a poll for. Responses come from the buttons on its posts; the calendar updates whenever a session confirms or moves.</p>
+<div class="tools"><div class="seg"><button aria-pressed="true">All</button><button>Needs attention</button><button>Confirmed</button></div><button class="btn">Schedule session</button></div>
+
+<div class="daygroup"><div class="dayhead"><b>Thursday 2 October</b><span>in 2 days</span></div>
+<div class="item"><div class="time">19:30<span>3h 30m</span></div>
+<div class="body"><h3>Ashes of the Verge · Session 14</h3><p>The gate under Callow Hill · GM Rowan · The Foundry</p>
+<div class="faces"><i class="f y">RW</i><i class="f y">TK</i><i class="f y">JD</i><i class="f y">PS</i><i class="f n">MC</i><i class="f">EL</i><span class="fcount">4 in · 1 out · 1 waiting</span></div></div>
+<div class="right"><span class="pill go">Confirmed</span><span class="mini">posted 11m ago</span></div></div></div>
+
+<div class="daygroup"><div class="dayhead"><b>Sunday 5 October</b><span>in 5 days</span></div>
+<div class="item"><div class="time">14:00<span>4h</span></div>
+<div class="body"><h3>The Salt Road · Session 7</h3><p>Caravan to Meret · GM Priya</p>
+<div class="faces"><i class="f y">PS</i><i class="f y">TK</i><i class="f">DV</i><i class="f">AN</i><i class="f">LO</i><span class="fcount">2 in · 3 waiting · needs 3</span></div></div>
+<div class="right"><span class="pill risk">Short of quorum</span><span class="mini">closes Sat 20:00</span></div></div></div>
+
+<div class="daygroup"><div class="dayhead"><b>Tuesday 7 October</b><span>in 7 days</span></div>
+<div class="item"><div class="time">20:00<span>3h</span></div>
+<div class="body"><h3>Hollowmere · Session 22</h3><p>Session zero for the second arc · GM Dev</p>
+<div class="faces"><i class="f y">DV</i><i class="f y">EL</i><i class="f y">JD</i><i class="f y">AN</i><i class="f y">MC</i><span class="fcount">5 in · full table</span></div></div>
+<div class="right"><span class="pill go">Confirmed</span><span class="mini">calendar updated</span></div></div></div>
+
+<div class="daygroup"><div class="dayhead"><b>Saturday 11 October</b><span>in 11 days</span></div>
+<div class="item"><div class="time">12:00<span>all day</span></div>
+<div class="body"><h3>Game Day · three tables</h3><p>Signups close Friday 18:00 · 11 of 12 seats taken</p>
+<div class="faces"><i class="f y">RW</i><i class="f y">TK</i><i class="f y">JD</i><i class="f y">PS</i><i class="f y">MC</i><i class="f y">EL</i><span class="fcount">11 signed up · 1 seat left</span></div></div>
+<div class="right"><span class="pill go">Confirmed</span><span class="mini">3 GMs</span></div></div></div>
+
+<div class="panel"><div class="ph"><b>Ashes of the Verge · Session 14</b><span>Thursday 2 October, 19:30</span></div>
+<div class="pb"><div class="pcol"><div class="k">Who answered</div>
+<div class="row"><span class="who">Rowan <span style="color:var(--ink-3)">(GM)</span></span><span class="state y">In</span></div>
+<div class="row"><span class="who">Tam</span><span class="state y">In</span></div>
+<div class="row"><span class="who">Jodie</span><span class="state y">In</span></div>
+<div class="row"><span class="who">Priya</span><span class="state y">In</span></div>
+<div class="row"><span class="who">Marco</span><span class="state n">Out</span></div>
+<div class="row"><span class="who">Elle</span><span class="state w">No reply</span></div></div>
+<div class="pcol"><div class="k">Actions</div>
+<button class="ghost">Nudge the one who hasn't replied</button>
+<button class="ghost">Propose a different time</button>
+<button class="ghost">Repost to #session-planning</button>
+<p class="note">The calendar event reflects the confirmed time. Changing it here updates Discord and Google Calendar together.</p></div></div></div>
+</main></div></body></html>

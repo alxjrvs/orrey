@@ -1,0 +1,44 @@
+:root{
+  --font-ui:"Space Grotesk",system-ui,-apple-system,sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  /* Discord's real UI face is "gg sans", which is proprietary and not redistributable,
+     so no @font-face for it ships here. Discord mockups render in the nearest stack. */
+  --font-discord:"Noto Sans","Helvetica Neue",system-ui,sans-serif;
+
+  --weight-regular:400;
+  --weight-medium:500;
+  --weight-bold:700;
+
+  /* Sizes. The console runs small on purpose: 13px is body, not 16px. */
+  --size-display:26px;
+  --size-title:17px;
+  --size-heading:15px;
+  --size-body:13px;
+  --size-small:12px;
+  --size-data:11px;
+  --size-label:10px;
+  --size-micro:9px;
+
+  --leading-tight:1.2;
+  --leading-snug:1.35;
+  --leading-body:1.5;
+  --leading-log:1.7;
+
+  --tracking-display:-0.01em;
+  --tracking-body:0;
+  --tracking-data:0.05em;
+  --tracking-label:0.16em;
+  --tracking-wordmark:0.14em;
+
+  /* Composed roles */
+  --type-display:var(--weight-bold) var(--size-display)/var(--leading-tight) var(--font-ui);
+  --type-title:var(--weight-bold) var(--size-title)/var(--leading-tight) var(--font-ui);
+  --type-heading:var(--weight-bold) var(--size-heading)/var(--leading-snug) var(--font-ui);
+  --type-body:var(--weight-regular) var(--size-body)/var(--leading-body) var(--font-ui);
+  --type-body-medium:var(--weight-medium) var(--size-body)/var(--leading-body) var(--font-ui);
+  --type-small:var(--weight-regular) var(--size-small)/var(--leading-body) var(--font-ui);
+  --type-data:var(--weight-medium) var(--size-data)/var(--leading-snug) var(--font-mono);
+  --type-label:var(--weight-bold) var(--size-label)/1 var(--font-mono);
+  --type-micro:var(--weight-bold) var(--size-micro)/1 var(--font-mono);
+  --type-log:var(--weight-regular) var(--size-label)/var(--leading-log) var(--font-mono);
+}

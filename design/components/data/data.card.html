@@ -1,0 +1,36 @@
+<!-- @dsCard group="Components" viewport="700x340" name="Data" subtitle="DataTable, DayHeader, SessionRow, QuorumMeter, RosterRow, SyncLog" -->
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Data</title>
+<link rel="stylesheet" href="../../styles.css">
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script>
+<style>body{margin:0;padding:18px;background:var(--surface-page)}.grid{display:flex;flex-wrap:wrap;gap:14px 18px;align-items:center}.stack{display:flex;flex-direction:column;gap:10px}.k{font:var(--type-micro);letter-spacing:var(--tracking-label);text-transform:uppercase;color:var(--text-muted);width:100%;margin-top:4px}</style></head><body><div id="root"></div>
+<script type="text/babel">
+const {DataTable,DayHeader,SessionRow,QuorumMeter,RosterRow,SyncLog}=window.OrreyDesignSystem_4c8cbd;
+const cols=[{label:'Session'},{label:'Responses',width:180},{label:'Status',width:112}];
+function Card(){const [sel,setSel]=React.useState(0);return (<div className="stack">
+<DataTable columns={cols}>
+<DayHeader lead="02" gutter={62} day="Thursday, October" relative="in 2 days" colSpan={3}/>
+<SessionRow inlineTime time="19:30" title="Age of Umbra · S14" subtitle="the gate under callow hill"
+ attendance={{inCount:4,outCount:1,total:6,quorum:4}} state="confirmed" selected={sel===0} onClick={()=>setSel(0)}/>
+<DayHeader lead="05" gutter={62} day="Sunday, October" relative="in 5 days" colSpan={3}/>
+<SessionRow inlineTime time="14:00" title="The Salt Road · S07" subtitle="caravan to meret"
+ attendance={{inCount:2,maybeCount:1,total:5,quorum:5}} state="jeopardy" selected={sel===1} onClick={()=>setSel(1)}/>
+<SessionRow inlineTime time="20:00" title="Game day · Twilight Imperium" subtitle="signups close fri 18:00"
+ attendance={{inCount:5,total:6,quorum:6}} state="open" selected={sel===2} onClick={()=>setSel(2)}/>
+</DataTable>
+<div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:24}}>
+<div><div className="k">Roster</div>
+<RosterRow name="Rowan" initials="RW" role="GM" intent="in"/>
+<RosterRow name="Tam" initials="TK" intent="in" attended/>
+<RosterRow name="Marco" initials="MC" intent="out" note="work"/>
+<RosterRow name="Elle" initials="EL" intent="silent"/></div>
+<div><div className="k">Sync log</div>
+<SyncLog entries={[{at:'19:02',text:'gcal event orr_5f2a updated',tone:'write'},
+{at:'18:51',text:'priya → in via button'},{at:'18:44',text:'marco → out via button'},
+{at:'18:40',text:'50007 dm blocked, fell back to channel mention',tone:'error'}]}/>
+<div className="k">Quorum</div><QuorumMeter inCount={2} maybeCount={1} total={5} quorum={5}/></div>
+</div></div>);}
+ReactDOM.createRoot(document.getElementById('root')).render(<Card/>);
+</script></body></html>
