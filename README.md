@@ -52,6 +52,7 @@ src/
   do/                 Per-guild rate-limit governor; per-session click lock
 scripts/
   register-commands.ts  Bulk overwrite of the guild command set
+  stack.ts              Status, restack and push for a stacked PR train
 public/               The console (static, same origin)
 ```
 
@@ -70,6 +71,19 @@ npm run dev
 
 `npm run dev` serves `/interactions` locally; point a tunnel at it to exercise real
 interactions, or POST a signed request yourself.
+
+## How the work is cut
+
+A phase lands as a **stack** of small PRs — each based on the one before it, all open
+at once, merged bottom-first and restacked after each merge. The workflow is
+`.claude/skills/stack/SKILL.md`; phase 1's eight slices are planned in
+[`docs/PHASE-1-STACK.md`](docs/PHASE-1-STACK.md).
+
+```sh
+npm run stack -- status p1 --prs      # the chain, its drift, and each PR's state
+npm run stack -- restack p1 --apply   # replay the stack after the bottom PR merges
+npm run stack -- push p1 --apply      # --force-with-lease, in order
+```
 
 ## Cutover, when it comes
 

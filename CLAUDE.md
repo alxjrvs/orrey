@@ -28,3 +28,9 @@ One Worker, three entry points: HTTP (interactions + console + ICS), a queue con
 not in a queue, so it can be inspected and re-run.
 
 Domain tables arrive with the phase that uses them — don't add schema ahead of the phase.
+
+## How work lands
+
+A phase is cut as a stack of small PRs, reviewed and merged bottom-first:
+`.claude/skills/stack/SKILL.md` is the workflow, `docs/PHASE-1-STACK.md` is phase 1's
+slicing, and `npm run stack -- status p1` is where the chain's state lives.
