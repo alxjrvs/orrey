@@ -59,12 +59,23 @@ if (scan) {
     let before: string | undefined;
     let seen = 0;
     for (;;) {
-      const page = await paced(() =>
-        discordFetch<Message[]>(
-          auth,
-          `/channels/${channel}/messages?limit=100${before ? `&before=${before}` : ""}`,
-        ),
-      );
+      let page: Message[];
+      try {
+        page = await paced(() =>
+          discordFetch<Message[]>(
+            auth,
+            `/channels/${channel}/messages?limit=100${before ? `&before=${before}` : ""}`,
+          ),
+        );
+      } catch (error) {
+        // 50001 Missing Access — a role-gated channel the bot cannot read. It
+        // cannot have posted there either, so there is nothing to strip.
+        if (error instanceof DiscordError && error.code === 50001) {
+          console.error(`no access to ${channel}; skipped`);
+          break;
+        }
+        throw error;
+      }
       if (page.length === 0) break;
       seen += page.length;
       for (const m of page) {
