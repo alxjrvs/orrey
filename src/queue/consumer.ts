@@ -1,5 +1,6 @@
 import type { Env, OutboxMessage } from "../env.ts";
 import { projectDiscordEvent } from "../discord/events.ts";
+import { projectGoogleEvent } from "../google/calendar.ts";
 import { isProjectable, loadProjectionTarget } from "../projection/target.ts";
 
 /**
@@ -50,15 +51,6 @@ export async function project(body: OutboxMessage, env: Env): Promise<void> {
 
     case "gcal.upsert":
     case "gcal.delete":
-      return notYet(body.kind, "the Google Calendar projector — #19");
+      return projectGoogleEvent(env, target, body.kind);
   }
-}
-
-/**
- * A kind whose projector has not landed yet acks rather than throwing: a
- * poisoned queue is a worse failure mode than a projection that has not been
- * written, and the stack lands these two within the phase.
- */
-function notYet(kind: OutboxMessage["kind"], what: string): void {
-  console.log(`outbox: ${kind} is waiting on ${what}`);
 }
