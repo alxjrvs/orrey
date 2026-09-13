@@ -16,16 +16,25 @@ function hexToBytes(hex: string): Uint8Array {
   return bytes;
 }
 
-let cachedKey: CryptoKey | undefined;
+// Keyed by the hex public key so a rotated key takes effect without a restart.
+const keys = new Map<string, Promise<CryptoKey>>();
 
-async function importPublicKey(publicKey: string): Promise<CryptoKey> {
-  if (cachedKey) return cachedKey;
-  const raw = hexToBytes(publicKey);
+function importPublicKey(publicKey: string): Promise<CryptoKey> {
+  let key = keys.get(publicKey);
+  if (!key) {
+    key = importRaw(hexToBytes(publicKey));
+    keys.set(publicKey, key);
+    key.catch(() => keys.delete(publicKey));
+  }
+  return key;
+}
+
+async function importRaw(raw: Uint8Array): Promise<CryptoKey> {
   // Workers accepts "Ed25519"; older runtimes only know "NODE-ED25519".
   try {
-    cachedKey = await crypto.subtle.importKey("raw", raw, { name: "Ed25519" }, false, ["verify"]);
+    return await crypto.subtle.importKey("raw", raw, { name: "Ed25519" }, false, ["verify"]);
   } catch {
-    cachedKey = await crypto.subtle.importKey(
+    return await crypto.subtle.importKey(
       "raw",
       raw,
       { name: "NODE-ED25519", namedCurve: "NODE-ED25519" } as unknown as Parameters<
@@ -35,7 +44,6 @@ async function importPublicKey(publicKey: string): Promise<CryptoKey> {
       ["verify"],
     );
   }
-  return cachedKey;
 }
 
 /** Verifies the signature over `timestamp + body`. Returns false on any malformed input. */

@@ -2,7 +2,8 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "orrey",
   "main": "src/index.ts",
-  "compatibility_date": "2026-09-13",
+  // Newest date the test pool's workerd accepts; bump when @cloudflare/vitest-pool-workers does.
+  "compatibility_date": "2026-08-22",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
 
