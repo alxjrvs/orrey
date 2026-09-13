@@ -83,19 +83,23 @@ describe("seeding the one hardcoded campaign", () => {
     expect(campaignAfter?.state).toBe("HIATUS");
   });
 
-  it("arms one standing projection job, and re-arms it rather than piling up", async () => {
+it("arms one standing job per surface, and re-arms rather than piling up", async () => {
     await seed();
-    expect(await env.DB.prepare("SELECT id, kind, state FROM jobs").first()).toMatchObject({
-      id: "session.project:age-of-umbra-s12",
-      kind: "session.project",
-      state: "pending",
-    });
+    const jobs = await env.DB.prepare("SELECT id, kind, state FROM jobs ORDER BY id").all();
+    expect(jobs.results).toEqual([
+      {
+        id: "session.post-attendance:age-of-umbra-s12",
+        kind: "session.post-attendance",
+        state: "pending",
+      },
+      { id: "session.project:age-of-umbra-s12", kind: "session.project", state: "pending" },
+    ]);
 
     await env.DB.prepare("UPDATE jobs SET state = 'done', attempts = 3").run();
     await seed({ startsAt: session.startsAt + 3600 });
 
     const rows = await env.DB.prepare("SELECT COUNT(*) AS n FROM jobs").first<{ n: number }>();
-    expect(rows?.n).toBe(1);
+    expect(rows?.n).toBe(2);
     expect(await env.DB.prepare("SELECT state, attempts FROM jobs").first()).toMatchObject({
       state: "pending",
       attempts: 0,

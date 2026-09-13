@@ -100,14 +100,24 @@ export function seedStatements(campaign: CampaignSeed, session: SessionSeed): st
     // outbox messages for Discord and Google. A job rather than a direct send
     // because the seed reaches D1 through wrangler and has no queue binding —
     // and because time-based work Orrey can inspect and re-run lives in D1.
-    `INSERT INTO jobs (id, kind, payload, idempotency_key, run_at)
-     VALUES (${lit(`session.project:${sessionId}`)}, 'session.project', ${lit(JSON.stringify({ sessionId }))}, ${lit(`session.project:${sessionId}`)}, unixepoch())
+    projectionJob("session.project", sessionId),
+
+    // And post the attendance post. Guarded by the recorded message id rather
+    // than by the job, so re-arming this one cannot produce a second post.
+    projectionJob("session.post-attendance", sessionId),
+  ];
+}
+
+/** One standing job row per session per kind, re-armed rather than duplicated. */
+function projectionJob(kind: string, sessionId: string): string {
+  const id = `${kind}:${sessionId}`;
+  return `INSERT INTO jobs (id, kind, payload, idempotency_key, run_at)
+     VALUES (${lit(id)}, ${lit(kind)}, ${lit(JSON.stringify({ sessionId }))}, ${lit(id)}, unixepoch())
      ON CONFLICT(id) DO UPDATE SET
        state = 'pending',
        attempts = 0,
        last_error = NULL,
-       run_at = unixepoch()`,
-  ];
+       run_at = unixepoch()`;
 }
 
 /** The seed's values come from an operator's shell, so quote everything. */

@@ -2,6 +2,7 @@ import { and, eq, lte } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
 import { enqueueProjection } from "../projection/outbox.ts";
+import { postAttendancePost } from "../attendance/post.ts";
 
 const CLAIM_SECONDS = 60;
 const BATCH = 25;
@@ -55,6 +56,18 @@ async function runJob(job: typeof schema.jobs.$inferSelect, env: Env): Promise<v
       const { sessionId } = job.payload as { sessionId?: string };
       if (!sessionId) throw new Error(`session.project job ${job.id} has no sessionId`);
       await enqueueProjection(env, sessionId);
+      return;
+    }
+
+    /**
+     * The attendance post, sent once. Send-only: this job records the message
+     * id and never touches the message again — a re-run finds the id and does
+     * nothing rather than posting a second one.
+     */
+    case "session.post-attendance": {
+      const { sessionId } = job.payload as { sessionId?: string };
+      if (!sessionId) throw new Error(`session.post-attendance job ${job.id} has no sessionId`);
+      await postAttendancePost(env, sessionId);
       return;
     }
 

@@ -51,6 +51,11 @@ const session = {
 
 const SESSION_ID = "age-of-umbra-s12";
 
+/** This file is about the outbox; the seed's other job is the post, not this. */
+async function onlyProjectionJobs(): Promise<void> {
+  await env.DB.prepare("DELETE FROM jobs WHERE kind <> 'session.project'").run();
+}
+
 async function seed(over: Partial<typeof session> = {}): Promise<void> {
   for (const statement of seedStatements(campaign, { ...session, ...over })) {
     await env.DB.prepare(statement).run();
@@ -96,6 +101,8 @@ describe("the producer", () => {
 describe("the job that arms it", () => {
   it("turns the seed's standing job into outbox messages, once", async () => {
     await seed();
+    // The seed also arms the attendance post; that one has its own test file.
+    await onlyProjectionJobs();
     const { sent, env: testEnv } = outbox();
 
     expect(await drainJobs(testEnv)).toBe(1);
@@ -109,10 +116,12 @@ describe("the job that arms it", () => {
 
   it("is re-armed by a re-seed, so a moved session projects again", async () => {
     await seed();
+    await onlyProjectionJobs();
     const { sent, env: testEnv } = outbox();
     await drainJobs(testEnv);
 
     await seed({ startsAt: session.startsAt + 86_400, endsAt: session.endsAt + 86_400 });
+    await onlyProjectionJobs();
     sent.length = 0;
 
     expect(await drainJobs(testEnv)).toBe(1);
