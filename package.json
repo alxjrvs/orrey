@@ -19,6 +19,7 @@
     "db:migrate:local": "wrangler d1 migrations apply orrey --local",
     "db:migrate:remote": "wrangler d1 migrations apply orrey --remote",
     "db:studio": "drizzle-kit studio",
+    "stack": "node --experimental-strip-types scripts/stack.ts",
     "commands:register": "node --experimental-strip-types scripts/register-commands.ts",
     "commands:clear": "node --experimental-strip-types scripts/register-commands.ts --clear"
   },
