@@ -80,9 +80,14 @@ export const campaigns = sqliteTable("campaigns", {
     .default("external"),
   /** Voice channel id when location_type is `voice`; otherwise unused. */
   discordVoiceChannelId: text("discord_voice_channel_id"),
+  /**
+   * FORMING, not RUNNING: `isProjectable` publishes only what is RUNNING, so
+   * the default decides which way an insert that forgets to say fails. A
+   * campaign nobody has started is the safe side of that.
+   */
   state: text("state", { enum: ["FORMING", "RUNNING", "HIATUS", "CONCLUDED"] })
     .notNull()
-    .default("RUNNING"),
+    .default("FORMING"),
   createdAt: integer("created_at").notNull().default(now),
   updatedAt: integer("updated_at").notNull().default(now),
 });

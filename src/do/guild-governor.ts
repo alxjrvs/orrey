@@ -1,5 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../env.ts";
+import { asDiscordFailure } from "../discord/rest.ts";
 
 /**
  * One per guild. Serialises outbound Discord writes so nothing piles up against
@@ -14,7 +15,16 @@ export class GuildGovernor extends DurableObject<Env> {
     const next = this.queue.then(async () => {
       const wait = this.notBefore - Date.now();
       if (wait > 0) await scheduler.wait(wait);
-      return work();
+      try {
+        return await work();
+      } catch (error) {
+        // A 429 is the guild's problem, not this call's, and the hold has to be
+        // in place before the next queued call reads the clock — so it is taken
+        // here, inside the chain, rather than by the caller a round trip later.
+        const retryAfterMs = asDiscordFailure(error)?.retryAfterMs;
+        if (retryAfterMs !== undefined) this.notBefore = Math.max(this.notBefore, Date.now() + retryAfterMs);
+        throw error;
+      }
     });
     this.queue = next.catch(() => undefined);
     return next as Promise<T>;

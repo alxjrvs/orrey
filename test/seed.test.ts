@@ -106,6 +106,15 @@ it("arms one standing job per surface, and re-arms rather than piling up", async
     });
   });
 
+  it("leaves a campaign nobody has started out of the projector's reach", async () => {
+    await env.DB.prepare("INSERT INTO campaigns (id, name, kind) VALUES ('half-entered', 'Half Entered', 'run')").run();
+
+    const row = await env.DB.prepare("SELECT state FROM campaigns WHERE id = 'half-entered'").first<{ state: string }>();
+    // The seed says RUNNING out loud; an insert that forgets gets FORMING, and
+    // `isProjectable` publishes only what is RUNNING.
+    expect(row?.state).toBe("FORMING");
+  });
+
   it("survives a name with an apostrophe in it", async () => {
     for (const statement of seedStatements(
       { ...campaign, name: "Ada's Game", id: "adas-game" },

@@ -2,7 +2,7 @@ import { eq, sql } from "drizzle-orm";
 import type { Env, OutboxMessage } from "../env.ts";
 import { db, schema } from "../db/index.ts";
 import { requireGuildId } from "../db/settings.ts";
-import { contentFingerprint, sessionTitle, type ProjectionTarget } from "../projection/target.ts";
+import { discordFingerprint, sessionTitle, type ProjectionTarget } from "../projection/target.ts";
 import { throughGovernor } from "./governor.ts";
 import {
   createScheduledEvent,
@@ -34,7 +34,15 @@ export function scheduledEventBody(target: ProjectionTarget): Record<string, unk
   // A VOICE event lives in a channel and needs no location; an EXTERNAL one is
   // the opposite, and Discord rejects it without both an end time and a place.
   if (campaign?.locationType === "voice" && campaign.discordVoiceChannelId) {
-    return { ...base, entity_type: EntityType.VOICE, channel_id: campaign.discordVoiceChannelId };
+    // entity_metadata: null for the same reason the other branch sends
+    // channel_id: null — converting an existing event between the two types is
+    // a PATCH, and Discord rejects one that still carries the old type's field.
+    return {
+      ...base,
+      entity_type: EntityType.VOICE,
+      channel_id: campaign.discordVoiceChannelId,
+      entity_metadata: null,
+    };
   }
   return {
     ...base,
@@ -57,7 +65,7 @@ export async function projectDiscordEvent(
 
 async function upsert(env: Env, target: ProjectionTarget, guildId: string): Promise<void> {
   const { session } = target;
-  const fingerprint = await contentFingerprint(target);
+  const fingerprint = await discordFingerprint(target);
 
   // The redelivery case, and the "nothing actually changed" case: a write that
   // would set what is already set is a rate-limit slot spent for nothing.

@@ -4,7 +4,12 @@ import type { Env, OutboxMessage } from "../src/env.ts";
 import { drainJobs } from "../src/jobs/drain.ts";
 import { handleQueueBatch, project } from "../src/queue/consumer.ts";
 import { enqueueProjection, enqueueUnprojection } from "../src/projection/outbox.ts";
-import { contentFingerprint, loadProjectionTarget, sessionTitle } from "../src/projection/target.ts";
+import {
+  discordFingerprint,
+  googleFingerprint,
+  loadProjectionTarget,
+  sessionTitle,
+} from "../src/projection/target.ts";
 import { seedStatements } from "../src/db/seed-sql.ts";
 
 /** A queue binding that records instead of sending. */
@@ -172,6 +177,21 @@ describe("the consumer spine", () => {
     expect(messages[1]?.retry).not.toHaveBeenCalled();
   });
 
+  it("still retracts what a concluded campaign already published", async () => {
+    await seed();
+    await env.DB.prepare("UPDATE campaigns SET state = 'CONCLUDED'").run();
+
+    // The upsert is gated — nothing new gets published. The delete is not, or a
+    // concluded campaign's events would stay up forever with an ack saying the
+    // work was done. Neither projector can run here (no guild id, no calendar),
+    // so reaching them at all is what the throw proves.
+    await expect(project({ kind: "gcal.upsert", sessionId: SESSION_ID }, env)).resolves.toBeUndefined();
+    await expect(project({ kind: "gcal.delete", sessionId: SESSION_ID }, env)).rejects.toThrow();
+    await expect(
+      project({ kind: "discord.event.delete", sessionId: SESSION_ID }, env),
+    ).rejects.toThrow(/discord.guild_id/);
+  });
+
   it("does not project a campaign that is no longer running", async () => {
     await seed();
     await env.DB.prepare("UPDATE campaigns SET state = 'CONCLUDED'").run();
@@ -196,21 +216,38 @@ describe("the consumer spine", () => {
 describe("the fingerprint", () => {
   it("is stable for equal content and moves when the session moves", async () => {
     await seed();
-    const first = await contentFingerprint((await loadProjectionTarget(env, SESSION_ID))!);
-    const again = await contentFingerprint((await loadProjectionTarget(env, SESSION_ID))!);
+    const first = await googleFingerprint((await loadProjectionTarget(env, SESSION_ID))!);
+    const again = await googleFingerprint((await loadProjectionTarget(env, SESSION_ID))!);
     expect(again).toBe(first);
 
     await seed({ startsAt: session.startsAt + 3600 });
-    const moved = await contentFingerprint((await loadProjectionTarget(env, SESSION_ID))!);
+    const moved = await googleFingerprint((await loadProjectionTarget(env, SESSION_ID))!);
     expect(moved).not.toBe(first);
   });
 
   it("covers the location, which is what an EXTERNAL event shows", async () => {
     await seed();
-    const before = await contentFingerprint((await loadProjectionTarget(env, SESSION_ID))!);
+    const before = await googleFingerprint((await loadProjectionTarget(env, SESSION_ID))!);
 
     await seed({ location: "Somewhere else" });
-    expect(await contentFingerprint((await loadProjectionTarget(env, SESSION_ID))!)).not.toBe(before);
+    expect(await googleFingerprint((await loadProjectionTarget(env, SESSION_ID))!)).not.toBe(before);
+  });
+
+  it("is per surface: a voice-channel change is Discord's business alone", async () => {
+    await seed();
+    const before = await loadProjectionTarget(env, SESSION_ID);
+    const google = await googleFingerprint(before!);
+    const discord = await discordFingerprint(before!);
+
+    await env.DB.prepare(
+      "UPDATE campaigns SET location_type = 'voice', discord_voice_channel_id = '900'",
+    ).run();
+    const after = (await loadProjectionTarget(env, SESSION_ID))!;
+
+    // Discord renders it, so Discord rewrites. Google never showed it, and a
+    // pointless write there moves `updated` for phase 7 to explain away.
+    expect(await discordFingerprint(after)).not.toBe(discord);
+    expect(await googleFingerprint(after)).toBe(google);
   });
 
   it("titles a numbered session after its campaign", async () => {

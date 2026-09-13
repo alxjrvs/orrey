@@ -42,7 +42,12 @@ export async function project(body: OutboxMessage, env: Env): Promise<void> {
   // retrying would only fill the DLQ with work that can never succeed.
   if (!target) return;
 
-  if (!isProjectable(target)) return;
+  // `isProjectable` guards what Orrey *publishes*. A delete is the opposite —
+  // it is how something published comes down — so gating it on the campaign
+  // still running would strand a concluded campaign's events out there forever,
+  // with an ack saying the work was done.
+  const retracting = body.kind === "discord.event.delete" || body.kind === "gcal.delete";
+  if (!retracting && !isProjectable(target)) return;
 
   switch (body.kind) {
     case "discord.event.upsert":

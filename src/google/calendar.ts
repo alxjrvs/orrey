@@ -1,7 +1,7 @@
 import { eq, sql } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
-import { contentFingerprint, sessionTitle, type ProjectionTarget } from "../projection/target.ts";
+import { googleFingerprint, sessionTitle, type ProjectionTarget } from "../projection/target.ts";
 import { serviceAccountToken, type AccessToken } from "./auth.ts";
 import { eventIdFor } from "./event-id.ts";
 
@@ -61,15 +61,21 @@ export async function projectGoogleEvent(
     return await upsert(env, target, eventId);
   } catch (error) {
     // The row is the record of what went wrong, next to the id it went wrong
-    // on. The throw still stands, so the queue retries and the DLQ catches it.
-    await recordFailure(env, target.session.id, eventId, String(error));
+    // on. The throw still stands, so the queue retries and the DLQ catches it —
+    // and recording must never replace it, or the DLQ ends up naming D1 for a
+    // failure that happened at Google.
+    try {
+      await recordFailure(env, target.session.id, eventId, String(error));
+    } catch (recordingFailed) {
+      console.error("could not record the projection failure", recordingFailed);
+    }
     throw error;
   }
 }
 
 async function upsert(env: Env, target: ProjectionTarget, eventId: string): Promise<void> {
   const { session } = target;
-  const fingerprint = await contentFingerprint(target);
+  const fingerprint = await googleFingerprint(target);
 
   const link = await db(env)
     .select()
