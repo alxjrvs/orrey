@@ -6,7 +6,7 @@ import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
  *
  * The domain proper (campaigns, sessions, signups, attendance, date_polls,
  * calendar_links, games, campaign_members, session_logs, audit_log) lands in
- * phases 1–4, as each one is actually used. See docs/build-plan.md.
+ * phases 1–4, as each one is actually used. See https://github.com/alxjrvs/orrey/issues/1.
  */
 
 const now = sql`(unixepoch())`;

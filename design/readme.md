@@ -16,8 +16,8 @@ design system is downstream of that sentence.
 
 | Source | What it gave |
 |---|---|
-| `https://github.com/alxjrvs/orrey` (branch `main`) | The specification. `docs/build-plan.md` rev 5, `README.md`, `CLAUDE.md`, `src/db/schema.ts`, `src/discord/commands.ts` |
-| `https://claude.ai/code/artifact/fa328d17-dff9-4ce9-84a3-4860b9270733` | The live build-plan document (same content as `docs/build-plan.md`). Not readable without the author's account |
+| `https://github.com/alxjrvs/orrey` (branch `main`) | The specification. The build plan rev 5 (then `docs/build-plan.md`, now issue #1), `README.md`, `CLAUDE.md`, `src/db/schema.ts`, `src/discord/commands.ts` |
+| `https://claude.ai/code/artifact/fa328d17-dff9-4ce9-84a3-4860b9270733` | The live build-plan document (same content, now issue #1). Not readable without the author's account |
 | Hermuz (archived, read-only) | The predecessor: ~14,500 lines of TypeScript, last commit 2026-08-20. Read as a specification, never ported. Not accessible from here |
 
 **There was no visual source.** The repo is at phase 0 and ships exactly one page —
