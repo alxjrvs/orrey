@@ -1,8 +1,8 @@
 # Working in this repo
 
-Read [issue #1](https://github.com/alxjrvs/orrey/issues/1) first. It is the specification, and the roadmap below it is the
-ordered work. This file is the short version of
-the rules that are easy to violate by accident.
+Read [issue #1](https://github.com/alxjrvs/orrey/issues/1) first. It is the specification,
+and the phase epics below it are the ordered work. This file is the short version of the
+rules that are easy to violate by accident.
 
 ## Invariants
 

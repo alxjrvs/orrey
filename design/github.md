@@ -7,7 +7,7 @@ date: 2026-09-13T02:38:00Z
 commit: (unknown — tree hash 1cb85c1dc9c3; no commit sha resolved)
 
 ### Updated in this project
-- Read the full specification (issue #1), README and CLAUDE.md as the specification behind this design system.
+- Read the full build plan (issue #1), README and CLAUDE.md as the specification behind this design system.
 - Confirmed the repo is at phase 0: the only shipped UI is `public/index.html`, a holding page.
 - Lifted the product's vocabulary, command surface and voice directly from the repo prose.
 
