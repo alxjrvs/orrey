@@ -42,11 +42,12 @@
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["GuildGovernor", "SessionLock"] }],
 
-  // minute: drain jobs | hourly: materialise horizon
-  // 04:00 UTC: renew Google watch channels | 05:30 UTC: full reconcile
-  "triggers": { "crons": ["* * * * *", "0 * * * *", "0 4 * * *", "30 5 * * *"] },
+  // One trigger; src/cron/scheduled.ts derives the hourly and daily work from
+  // the time. Workers Free allows five cron triggers per *account*.
+  "triggers": { "crons": ["* * * * *"] },
 
+  // The deployed value. `wrangler dev` overrides it from .dev.vars.
   "vars": {
-    "ENVIRONMENT": "development"
+    "ENVIRONMENT": "production"
   }
 }
