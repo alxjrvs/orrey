@@ -46,8 +46,10 @@ every one open and reviewable now, landing bottom-first.
    against `p1/1-…`. Repeat.
 4. Anything that depends only on a lower branch may **fork** rather than extend:
    the Google projection hangs off the outbox PR, not off the attendance chain.
-   Same numbering, base set to the branch it forked from. `stack.ts` assumes one
-   line, so restack a fork by hand (`git rebase --onto <its base> …`).
+   Same numbering, base set to the branch it forked from — on the PR, and in the
+   stack: `npm run stack -- base p1/8-gcal p1/3-outbox`. Record it when you cut
+   the branch, because a fork the tooling has not been told about is a fork the
+   next restack flattens back into the line.
 
 ## The review gate
 
@@ -105,6 +107,7 @@ npm run stack -- status p1 --prs      # chain order, drift, remote state, PR sta
 npm run stack -- restack p1           # print the rebase plan
 npm run stack -- restack p1 --apply   # run it, in order, returning you to the branch you were on
 npm run stack -- push p1 --apply      # force-with-lease the whole stack
+npm run stack -- base p1/8-gcal p1/3-outbox   # this one forks off that one
 ```
 
 `status` says `NEEDS RESTACK` when a branch no longer sits on its parent's head —

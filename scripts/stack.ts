@@ -10,6 +10,7 @@
  *   node --experimental-strip-types scripts/stack.ts status p1 [--prs]
  *   node --experimental-strip-types scripts/stack.ts restack p1 [--onto main] [--apply]
  *   node --experimental-strip-types scripts/stack.ts push p1 [--apply]
+ *   node --experimental-strip-types scripts/stack.ts base p1/8-gcal p1/3-outbox
  *
  *   status    the chain in order: parent, commits, whether it still sits on
  *             its parent's head, and how it stands against its remote
@@ -18,6 +19,14 @@
  *             runs it
  *   push      `--force-with-lease` every branch in the stack, which is what a
  *             restack needs afterwards. Prints the plan; `--apply` runs it
+ *   base      record that a branch forks off some branch other than the one
+ *             before it, so status and restack stop treating the stack as one
+ *             line. Stored as `branch.<name>.stackBase` in the local git config
+ *
+ * A stack is not always a line: a slice that depends only on something further
+ * down forks off it and reviews in parallel. Left to guess, `restack` would
+ * quietly flatten that fork into the line — so a recorded base wins over the
+ * ordinal, always.
  *
  * Restacking rewrites history on your own stack branches — fine, they are
  * yours and nobody else builds on them. Never point it at a branch someone
@@ -50,6 +59,36 @@ function gitOk(...args: string[]): boolean {
 }
 
 /** Local branches `<prefix>/<n>-<slug>`, in `n` order. */
+/** A fork's recorded parent, set by `stack.ts base`. */
+function recordedBase(branch: string): string | undefined {
+  try {
+    const base = execFileSync("git", ["config", "--get", `branch.${branch}.stackBase`], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return base || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Who each branch sits on: its recorded base if it has one, otherwise the
+ * branch before it, and `onto` for the bottom of the stack.
+ */
+function parentsOf(branches: string[]): Map<string, string> {
+  const parents = new Map<string, string>();
+  branches.forEach((branch, i) => {
+    const base = recordedBase(branch);
+    if (base && !gitOk("rev-parse", "--verify", "--quiet", base)) {
+      console.error(`${branch} records a base (${base}) that no longer exists — check it out or re-record it.`);
+      process.exit(1);
+    }
+    parents.set(branch, base ?? (i === 0 ? onto : (branches[i - 1] as string)));
+  });
+  return parents;
+}
+
 function stackBranches(prefix: string): string[] {
   const refs = git("for-each-ref", "--format=%(refname:short)", `refs/heads/${prefix}/*`)
     .split("\n")
@@ -101,9 +140,11 @@ function status(prefix: string): void {
     console.log(`No ${prefix}/* branches.`);
     return;
   }
+  const parents = parentsOf(branches);
   let needsRestack = false;
-  let parent = onto;
   for (const branch of branches) {
+    const parent = parents.get(branch) as string;
+    const forked = recordedBase(branch) !== undefined;
     const stacked = gitOk("merge-base", "--is-ancestor", parent, branch);
     needsRestack ||= !stacked;
     const commits = git("rev-list", "--count", `${parent}..${branch}`);
@@ -115,14 +156,13 @@ function status(prefix: string): void {
       sync = ahead === "0" && behind === "0" ? "pushed" : `ahead ${ahead}, behind ${behind}`;
     }
     const parts = [
-      `on ${parent}`,
+      `on ${parent}${forked ? " (fork)" : ""}`,
       `${commits} commit${commits === "1" ? "" : "s"}`,
       stacked ? "stacked" : "NEEDS RESTACK",
       sync,
     ];
     if (withPrs) parts.push(prState(branch));
     console.log(`${branch}\n    ${parts.join(" · ")}`);
-    parent = branch;
   }
   if (needsRestack) {
     console.log(`\nRun: node --experimental-strip-types scripts/stack.ts restack ${prefix} --apply`);
@@ -139,15 +179,25 @@ function restack(prefix: string): void {
     console.log(`No ${prefix}/* branches.`);
     return;
   }
+  const parents = parentsOf(branches);
   const plan: { branch: string; args: string[] }[] = [];
-  const bottom = branches[0];
-  if (!bottom) return;
-  let parent = onto;
-  let oldBase = git("merge-base", onto, bottom);
+
+  // Each branch is replayed onto its parent's *new* head, from where its
+  // parent's head was before anything moved — so the heads are all recorded
+  // up front, and a branch is only planned after the parent it sits on.
+  const oldHeads = new Map<string, string>(branches.map((b) => [b, git("rev-parse", b)]));
+  const newParents = new Map<string, string>();
+
   for (const branch of branches) {
-    plan.push({ branch, args: ["rebase", "--onto", parent, oldBase, branch] });
-    oldBase = git("rev-parse", branch);
-    parent = branch;
+    const parent = parents.get(branch) as string;
+    const parentMoved = oldHeads.has(parent);
+    if (parentMoved && !newParents.has(parent)) {
+      console.error(`${branch} sits on ${parent}, which comes after it. Renumber, or re-record its base.`);
+      process.exit(1);
+    }
+    const from = parentMoved ? (oldHeads.get(parent) as string) : git("merge-base", parent, branch);
+    plan.push({ branch, args: ["rebase", "--onto", parent, from, branch] });
+    newParents.set(branch, branch);
   }
 
   if (!apply) {
@@ -190,8 +240,25 @@ function push(prefix: string): void {
   if (!apply) console.log("\n(add --apply to run)");
 }
 
+/** Record that a branch forks off something other than the branch before it. */
+function setBase(branch: string, base: string): void {
+  if (!gitOk("rev-parse", "--verify", "--quiet", branch)) {
+    console.error(`no branch ${branch}.`);
+    process.exit(1);
+  }
+  if (!gitOk("rev-parse", "--verify", "--quiet", base)) {
+    console.error(`no branch ${base}.`);
+    process.exit(1);
+  }
+  git("config", `branch.${branch}.stackBase`, base);
+  console.log(`${branch} forks off ${base}.`);
+}
+
 if (!command || !prefixArg) {
-  console.error("usage: stack.ts <status|restack|push> <prefix> [--onto main] [--apply] [--prs]");
+  console.error(
+    "usage: stack.ts <status|restack|push> <prefix> [--onto main] [--apply] [--prs]\n" +
+      "       stack.ts base <branch> <base-branch>",
+  );
   process.exit(1);
 }
 switch (command) {
@@ -204,6 +271,15 @@ switch (command) {
   case "push":
     push(prefixArg);
     break;
+  case "base": {
+    const base = rest[0];
+    if (!base) {
+      console.error("usage: stack.ts base <branch> <base-branch>");
+      process.exit(1);
+    }
+    setBase(prefixArg, base);
+    break;
+  }
   default:
     console.error(`Unknown command ${command}.`);
     process.exit(1);
