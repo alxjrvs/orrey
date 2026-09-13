@@ -8,25 +8,31 @@
  * runs the statements against a real migrated database.
  */
 
+/**
+ * A field left `undefined` is a field this run says nothing about, and a
+ * re-seed leaves it exactly as it was. That distinction is the whole point:
+ * the normal re-run is a short one — new date, same campaign — and it must not
+ * quietly blank the ids the operator pasted in the first time.
+ */
 export interface CampaignSeed {
   /** Defaults to the slug of the name — Orrey's own id, not a snowflake. */
-  id?: string;
+  id?: string | undefined;
   name: string;
-  kind: "run" | "play" | "tracked";
-  discordChannelId?: string | null;
-  discordRoleId?: string | null;
-  colour?: number | null;
-  locationType?: "external" | "voice";
-  discordVoiceChannelId?: string | null;
+  kind?: "run" | "play" | "tracked" | undefined;
+  discordChannelId?: string | null | undefined;
+  discordRoleId?: string | null | undefined;
+  colour?: number | null | undefined;
+  locationType?: "external" | "voice" | undefined;
+  discordVoiceChannelId?: string | null | undefined;
 }
 
 export interface SessionSeed {
-  id?: string;
-  number?: number | null;
+  id?: string | undefined;
+  number?: number | null | undefined;
   /** Unix seconds, UTC. */
   startsAt: number;
   endsAt: number;
-  location?: string | null;
+  location?: string | null | undefined;
 }
 
 export function slugify(name: string): string {
@@ -38,11 +44,19 @@ export function slugify(name: string): string {
   return slug;
 }
 
-/** Numbered when the campaign numbers its sessions, dated when it does not. */
+/**
+ * The id is the identity, so it must not be made of anything a re-seed can
+ * move. A number is stable when the date changes; a date is not — keying on it
+ * meant moving the session inserted a *second* SCHEDULED row and left the first
+ * one holding the Discord event and the posted message.
+ */
 export function sessionIdFor(campaignId: string, session: SessionSeed): string {
   if (session.id) return session.id;
   if (session.number != null) return `${campaignId}-s${session.number}`;
-  return `${campaignId}-${new Date(session.startsAt * 1000).toISOString().slice(0, 10)}`;
+  throw new Error(
+    "an un-numbered session needs an explicit id (--id): its date cannot be its identity, " +
+      "because moving the date would seed a second session rather than move this one",
+  );
 }
 
 /**
@@ -71,23 +85,36 @@ export function seedStatements(campaign: CampaignSeed, session: SessionSeed): st
 
   const sessionId = sessionIdFor(campaignId, session);
 
+  /**
+   * Insert every column; overwrite only the ones this run actually spoke
+   * about. `state` is never overwritten — it belongs to the lifecycle, not to
+   * the seed — and neither is an id the operator did not repeat, because the
+   * normal re-run is a short one (new date, same campaign) and it must not
+   * blank the channel and role they pasted in the first time.
+   */
+  const columns: { column: string; value: string; spoken: boolean }[] = [
+    { column: "name", value: lit(campaign.name), spoken: true },
+    { column: "kind", value: lit(campaign.kind ?? "run"), spoken: campaign.kind !== undefined },
+    {
+      column: "location_type",
+      value: lit(locationType),
+      spoken: campaign.locationType !== undefined,
+    },
+    ...optionalColumns(campaign),
+  ];
+
+  const overwritten = columns.filter((c) => c.spoken);
+
   return [
-    `INSERT INTO campaigns
-       (id, name, kind, discord_channel_id, discord_role_id, colour, location_type, discord_voice_channel_id, state)
-     VALUES (${lit(campaignId)}, ${lit(campaign.name)}, ${lit(campaign.kind)}, ${lit(campaign.discordChannelId)}, ${lit(campaign.discordRoleId)}, ${lit(campaign.colour)}, ${lit(locationType)}, ${lit(campaign.discordVoiceChannelId)}, 'RUNNING')
+    `INSERT INTO campaigns (id, ${columns.map((c) => c.column).join(", ")}, state)
+     VALUES (${lit(campaignId)}, ${columns.map((c) => c.value).join(", ")}, 'RUNNING')
      ON CONFLICT(id) DO UPDATE SET
-       name = excluded.name,
-       kind = excluded.kind,
-       discord_channel_id = excluded.discord_channel_id,
-       discord_role_id = excluded.discord_role_id,
-       colour = excluded.colour,
-       location_type = excluded.location_type,
-       discord_voice_channel_id = excluded.discord_voice_channel_id,
+       ${overwritten.map((c) => `${c.column} = excluded.${c.column}`).join(",\n       ")},
        updated_at = unixepoch()`,
 
     `INSERT INTO sessions
        (id, kind, campaign_id, number, starts_at, ends_at, location, state)
-     VALUES (${lit(sessionId)}, 'campaign_session', ${lit(campaignId)}, ${lit(session.number ?? null)}, ${lit(session.startsAt)}, ${lit(session.endsAt)}, ${lit(session.location)}, 'SCHEDULED')
+     VALUES (${lit(sessionId)}, 'campaign_session', ${lit(campaignId)}, ${lit(session.number ?? null)}, ${lit(session.startsAt)}, ${lit(session.endsAt)}, ${lit(session.location ?? null)}, 'SCHEDULED')
      ON CONFLICT(id) DO UPDATE SET
        number = excluded.number,
        starts_at = excluded.starts_at,
@@ -106,6 +133,21 @@ export function seedStatements(campaign: CampaignSeed, session: SessionSeed): st
     // than by the job, so re-arming this one cannot produce a second post.
     projectionJob("session.post-attendance", sessionId),
   ];
+}
+
+/** The ids and the colour: written when given, left alone when not. */
+function optionalColumns(campaign: CampaignSeed) {
+  const fields: [string, string | number | null | undefined][] = [
+    ["discord_channel_id", campaign.discordChannelId],
+    ["discord_role_id", campaign.discordRoleId],
+    ["colour", campaign.colour],
+    ["discord_voice_channel_id", campaign.discordVoiceChannelId],
+  ];
+  return fields.map(([column, value]) => ({
+    column,
+    value: lit(value ?? null),
+    spoken: value !== undefined,
+  }));
 }
 
 /** One standing job row per session per kind, re-armed rather than duplicated. */
