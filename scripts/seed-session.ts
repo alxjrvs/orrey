@@ -26,9 +26,21 @@ import { readFileSync } from "node:fs";
 import { seedStatements, slugify, type CampaignSeed, type SessionSeed } from "../src/db/seed-sql.ts";
 
 const args = process.argv.slice(2);
+
+/**
+ * A flag's value, refusing the next flag as one. Without that, a dropped
+ * argument seeds garbage and exits 0: `--location --number 12` writes a session
+ * whose location is the literal text `--number`.
+ */
 const value = (name: string): string | undefined => {
   const i = args.indexOf(`--${name}`);
-  return i >= 0 ? args[i + 1] : undefined;
+  if (i < 0) return undefined;
+  const next = args[i + 1];
+  if (next === undefined || next.startsWith("--")) {
+    console.error(`--${name} needs a value.`);
+    process.exit(1);
+  }
+  return next;
 };
 
 interface Adopted {
@@ -42,8 +54,10 @@ function fail(message: string): never {
 }
 
 const name = value("name") ?? fail("--name is the campaign's name, as it reads in Discord.");
-const kind = (value("kind") ?? "run") as CampaignSeed["kind"];
-if (!["run", "play", "tracked"].includes(kind)) fail("--kind is run, play or tracked.");
+const kind = value("kind") as CampaignSeed["kind"];
+if (kind !== undefined && !["run", "play", "tracked"].includes(kind)) {
+  fail("--kind is run, play or tracked.");
+}
 
 const startsIso = value("starts") ?? fail("--starts is an ISO time, e.g. 2026-09-20T19:00:00Z.");
 const startsAt = Math.floor(Date.parse(startsIso) / 1000);
@@ -51,6 +65,7 @@ if (Number.isNaN(startsAt)) fail(`--starts ${startsIso} is not a time.`);
 
 const endsIso = value("ends");
 const hours = Number(value("hours") ?? 4);
+if (!endsIso && !Number.isFinite(hours)) fail(`--hours ${value("hours")} is not a number.`);
 const endsAt = endsIso ? Math.floor(Date.parse(endsIso) / 1000) : startsAt + Math.round(hours * 3600);
 if (Number.isNaN(endsAt)) fail(`--ends ${endsIso} is not a time.`);
 
@@ -58,7 +73,20 @@ if (Number.isNaN(endsAt)) fail(`--ends ${endsIso} is not a time.`);
 // they already read in that listing rather than re-copying snowflakes.
 let adopted: Adopted | undefined;
 const from = value("from");
-if (from) adopted = JSON.parse(readFileSync(from, "utf8")) as Adopted;
+if (from) {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(from, "utf8"));
+  } catch (error) {
+    fail(`could not read ${from}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  // Say which file is wrong rather than dying on a TypeError three lines later.
+  const shape = parsed as Partial<Adopted>;
+  if (!Array.isArray(shape?.roles) || !Array.isArray(shape?.channels)) {
+    fail(`${from} does not look like an adopt-ids capture — it needs roles[] and channels[].`);
+  }
+  adopted = shape as Adopted;
+}
 
 function findChannel(named: string | undefined, kinds: ("text" | "voice")[]): string | undefined {
   if (!named) return undefined;
@@ -73,18 +101,28 @@ const role = roleName
     fail(`no role called ${roleName} in that capture.`)
   : undefined;
 
+/**
+ * Anything this run does not mention stays undefined, and a re-seed leaves it
+ * as it was. A short re-run — new date, same campaign — must not blank the ids
+ * the operator pasted the first time.
+ */
+const voiceChannelId = value("voice") ?? findChannel(value("voice-name"), ["voice"]);
 const campaign: CampaignSeed = {
   id: value("id") ?? slugify(name),
   name,
-  kind,
-  discordChannelId: value("channel") ?? findChannel(value("channel-name"), ["text"]) ?? null,
-  discordRoleId: value("role") ?? role?.id ?? null,
-  colour: parseColour(value("colour") ?? role?.colour ?? null),
-  locationType: value("voice") || value("voice-name") ? "voice" : "external",
-  discordVoiceChannelId: value("voice") ?? findChannel(value("voice-name"), ["voice"]) ?? null,
+  ...(kind === undefined ? {} : { kind }),
+  ...(value("channel") ?? findChannel(value("channel-name"), ["text"])
+    ? { discordChannelId: value("channel") ?? findChannel(value("channel-name"), ["text"]) }
+    : {}),
+  ...(value("role") ?? role?.id ? { discordRoleId: value("role") ?? role?.id } : {}),
+  ...(parseColour(value("colour") ?? role?.colour) === null
+    ? {}
+    : { colour: parseColour(value("colour") ?? role?.colour) }),
+  ...(voiceChannelId ? { locationType: "voice", discordVoiceChannelId: voiceChannelId } : {}),
 };
 
 const session: SessionSeed = {
+  ...(value("id") ? { id: value("id") } : {}),
   number: value("number") === undefined ? null : Number(value("number")),
   startsAt,
   endsAt,
@@ -92,8 +130,8 @@ const session: SessionSeed = {
 };
 
 /** adopt-ids.ts writes `#rrggbb`; Discord itself stores the integer. */
-function parseColour(colour: string | number | null): number | null {
-  if (colour === null) return null;
+function parseColour(colour: string | number | null | undefined): number | null {
+  if (colour === null || colour === undefined) return null;
   if (typeof colour === "number") return colour;
   const parsed = Number.parseInt(colour.replace(/^#/, ""), 16);
   return Number.isNaN(parsed) ? null : parsed;

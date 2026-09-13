@@ -228,16 +228,43 @@ function restack(prefix: string): void {
 
 function push(prefix: string): void {
   const branches = stackBranches(prefix);
-  for (const branch of branches) {
+  const parents = parentsOf(branches);
+
+  // A branch with nothing left on it has landed — its commits are in the base
+  // now — so there is nothing to push and a lease against a stale tracking ref
+  // would only fail. Delete it instead of arguing with it.
+  const live = branches.filter((branch) => {
+    const empty = git("rev-list", "--count", `${parents.get(branch) as string}..${branch}`) === "0";
+    if (empty) console.log(`${branch}: merged (0 commits) — skipping; \`git branch -D ${branch}\` when you like`);
+    return !empty;
+  });
+
+  if (apply && live.length > 0) {
+    // --force-with-lease compares against the remote-tracking ref, which is
+    // stale the moment anything else has fetched for you. Refresh it first, or
+    // every push is rejected for "stale info" on a branch nobody else touched.
+    execFileSync("git", ["fetch", "origin", ...live], { stdio: "inherit" });
+  }
+
+  let failed = 0;
+  for (const branch of live) {
     const args = ["push", "--force-with-lease", "-u", "origin", branch];
     if (!apply) {
       console.log(`  git ${args.join(" ")}`);
       continue;
     }
     console.log(`git ${args.join(" ")}`);
-    execFileSync("git", args, { stdio: "inherit" });
+    try {
+      execFileSync("git", args, { stdio: "inherit" });
+    } catch {
+      // One branch failing is not the others' business, and a Node stack trace
+      // is not an error message.
+      console.error(`${branch}: push refused — re-run restack, then push again.`);
+      failed++;
+    }
   }
   if (!apply) console.log("\n(add --apply to run)");
+  if (failed > 0) process.exit(1);
 }
 
 /** Record that a branch forks off something other than the branch before it. */

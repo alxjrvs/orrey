@@ -59,6 +59,46 @@ describe("seeding the one hardcoded campaign", () => {
     });
   });
 
+  it("a short re-run keeps the ids it was not given again", async () => {
+    await seed();
+
+    // The normal re-seed: new date, same campaign, none of the ids repeated.
+    for (const statement of seedStatements({ name: "Age of Umbra" }, { ...session, startsAt: session.startsAt + 604_800, endsAt: session.endsAt + 604_800 })) {
+      await env.DB.prepare(statement).run();
+    }
+
+    expect(await env.DB.prepare("SELECT * FROM campaigns").first()).toMatchObject({
+      discord_channel_id: "100",
+      discord_role_id: "200",
+      colour: 0x8b0000,
+      kind: "run",
+      location_type: "external",
+    });
+  });
+
+  it("still writes what it is given again", async () => {
+    await seed();
+    for (const statement of seedStatements(
+      { ...campaign, discordChannelId: "999", discordRoleId: null },
+      session,
+    )) {
+      await env.DB.prepare(statement).run();
+    }
+
+    expect(await env.DB.prepare("SELECT * FROM campaigns").first()).toMatchObject({
+      discord_channel_id: "999",
+      discord_role_id: null,
+    });
+  });
+
+  it("refuses to let a date be a session's identity", () => {
+    // The id has to survive the one thing a re-seed exists to do: move the date.
+    expect(() => seedStatements(campaign, { ...session, number: null })).toThrow(/un-numbered/);
+    expect(() =>
+      seedStatements(campaign, { ...session, number: null, id: "age-of-umbra-one-off" }),
+    ).not.toThrow();
+  });
+
   it("re-seeds in place: the time moves, the projections do not", async () => {
     await seed();
     await env.DB.prepare(
@@ -140,6 +180,6 @@ it("arms one standing job per surface, and re-arms rather than piling up", async
   it("mints an id from the name, and a session id from the number or the date", () => {
     expect(slugify("Age of Umbra")).toBe("age-of-umbra");
     expect(sessionIdFor("age-of-umbra", session)).toBe("age-of-umbra-s12");
-    expect(sessionIdFor("age-of-umbra", { ...session, number: null })).toBe("age-of-umbra-2026-09-20");
+    expect(sessionIdFor("age-of-umbra", { ...session, number: null, id: "one-off" })).toBe("one-off");
   });
 });
