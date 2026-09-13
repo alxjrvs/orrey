@@ -1,0 +1,31 @@
+{
+  "name": "orrey",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Campaign and game-day scheduling for the Orrey of Worlds.",
+  "license": "MIT",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "types": "wrangler types",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate:local": "wrangler d1 migrations apply orrey --local",
+    "db:migrate:remote": "wrangler d1 migrations apply orrey --remote",
+    "db:studio": "drizzle-kit studio",
+    "commands:register": "node --experimental-strip-types scripts/register-commands.ts",
+    "commands:clear": "node --experimental-strip-types scripts/register-commands.ts --clear"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.45.2",
+    "hono": "^4.13.7"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260911.1",
+    "drizzle-kit": "^0.31.10",
+    "typescript": "^5.9.0",
+    "wrangler": "^4.131.1"
+  }
+}

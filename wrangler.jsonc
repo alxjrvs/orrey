@@ -1,0 +1,51 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "orrey",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-13",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+
+  // The console is a static SPA served from the same origin as the API.
+  "assets": { "directory": "./public", "binding": "ASSETS", "not_found_handling": "single-page-application" },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "orrey",
+      "database_id": "REPLACE_ME_AFTER_wrangler_d1_create_orrey",
+      "migrations_dir": "drizzle"
+    }
+  ],
+
+  // Outbound projection only: Google Calendar and Discord *scheduled events*.
+  // Discord messages are send-only and never queued for reconciliation.
+  "queues": {
+    "producers": [{ "binding": "OUTBOX", "queue": "orrey-outbox" }],
+    "consumers": [
+      {
+        "queue": "orrey-outbox",
+        "max_batch_size": 10,
+        "max_batch_timeout": 10,
+        "max_retries": 5,
+        "dead_letter_queue": "orrey-outbox-dlq"
+      }
+    ]
+  },
+
+  "durable_objects": {
+    "bindings": [
+      { "name": "GUILD", "class_name": "GuildGovernor" },
+      { "name": "SESSION_LOCK", "class_name": "SessionLock" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["GuildGovernor", "SessionLock"] }],
+
+  // minute: drain jobs | hourly: materialise horizon
+  // 04:00 UTC: renew Google watch channels | 05:30 UTC: full reconcile
+  "triggers": { "crons": ["* * * * *", "0 * * * *", "0 4 * * *", "30 5 * * *"] },
+
+  "vars": {
+    "ENVIRONMENT": "development"
+  }
+}
