@@ -110,7 +110,9 @@ describe("the event body", () => {
 
     const body = scheduledEventBody((await loadProjectionTarget(env, SESSION_ID))!);
     expect(body).toMatchObject({ entity_type: EntityType.VOICE, channel_id: "900" });
-    expect(body.entity_metadata).toBeUndefined();
+    // Explicitly null, not absent: converting an existing EXTERNAL event to
+    // VOICE is a PATCH, and Discord rejects one still carrying a location.
+    expect(body.entity_metadata).toBeNull();
   });
 });
 
@@ -171,6 +173,20 @@ describe("projecting a session to Discord", () => {
 
     expect(calls.map((c) => c.method)).toEqual(["PATCH", "POST"]);
     expect((await storedSession())?.discordEventId).toBe("evt-2");
+  });
+
+  it("converts between EXTERNAL and VOICE by clearing the other type's field", async () => {
+    await seed();
+    const external = scheduledEventBody((await loadProjectionTarget(env, SESSION_ID))!);
+    expect(external.channel_id).toBeNull();
+    expect(external.entity_metadata).toEqual({ location: "The Wreck" });
+
+    await env.DB.prepare(
+      "UPDATE campaigns SET location_type = 'voice', discord_voice_channel_id = '900'",
+    ).run();
+    const voice = scheduledEventBody((await loadProjectionTarget(env, SESSION_ID))!);
+    expect(voice.entity_metadata).toBeNull();
+    expect(voice.channel_id).toBe("900");
   });
 
   it("holds the whole guild on a 429 and lets the queue retry", async () => {

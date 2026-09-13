@@ -36,25 +36,39 @@ export function sessionTitle({ session, campaign }: ProjectionTarget): string {
 }
 
 /**
- * The fields both surfaces show. One fingerprint covers both because both
- * project the same handful of facts: when it is, what it is called, and where.
- * If one surface ever shows something the other does not, this splits in two.
+ * A fingerprint per surface, over exactly what that surface renders — because
+ * the whole point of a fingerprint is to skip a write that would change
+ * nothing. A shared one made moving the voice channel rewrite the *Google*
+ * event, moving its `updated` for a field Google never showed, which is the
+ * one thing phase 7's return path must not have to explain.
  */
-export function projectedContent(target: ProjectionTarget) {
+export function discordProjectedContent(target: ProjectionTarget) {
   const { session, campaign } = target;
+  return {
+    ...googleProjectedContent(target),
+    // Decides EXTERNAL vs VOICE, and which of the two fields the event carries.
+    locationType: campaign?.locationType ?? "external",
+    voiceChannelId: campaign?.discordVoiceChannelId ?? null,
+  };
+}
+
+export function googleProjectedContent(target: ProjectionTarget) {
+  const { session } = target;
   return {
     title: sessionTitle(target),
     startsAt: session.startsAt,
     endsAt: session.endsAt,
     location: session.location,
-    locationType: campaign?.locationType ?? "external",
-    voiceChannelId: campaign?.discordVoiceChannelId ?? null,
     state: session.state,
   };
 }
 
-export function contentFingerprint(target: ProjectionTarget): Promise<string> {
-  return fingerprint(projectedContent(target));
+export function discordFingerprint(target: ProjectionTarget): Promise<string> {
+  return fingerprint(discordProjectedContent(target));
+}
+
+export function googleFingerprint(target: ProjectionTarget): Promise<string> {
+  return fingerprint(googleProjectedContent(target));
 }
 
 /**

@@ -22,6 +22,13 @@
       "when": 1789308802082,
       "tag": "0002_discord_event_fingerprint",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1789313300056,
+      "tag": "0003_campaign_state_fails_closed",
+      "breakpoints": true
     }
   ]
 }
