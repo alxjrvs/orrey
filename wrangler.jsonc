@@ -13,7 +13,7 @@
     {
       "binding": "DB",
       "database_name": "orrey",
-      "database_id": "REPLACE_ME_AFTER_wrangler_d1_create_orrey",
+      "database_id": "6d2002e5-7c34-48ee-8177-7d29422160ce",
       "migrations_dir": "drizzle"
     }
   ],

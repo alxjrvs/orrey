@@ -16,3 +16,14 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
+
+  # The single required status check for main. Requiring this instead of every
+  # job keeps path-filtered jobs from stranding a PR in "pending".
+  quality-checks:
+    if: always()
+    needs: [check]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail if any dependency failed
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
