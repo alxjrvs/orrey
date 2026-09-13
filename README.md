@@ -52,6 +52,7 @@ src/
   do/                 Per-guild rate-limit governor; per-session click lock
 scripts/
   register-commands.ts  Bulk overwrite of the guild command set
+  seed-session.ts       SQL for the one hardcoded campaign and its next session
   stack.ts              Status, restack and push for a stacked PR train
 public/               The console (static, same origin)
 ```
