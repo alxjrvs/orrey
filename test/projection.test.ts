@@ -1,0 +1,207 @@
+import { env } from "cloudflare:test";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Env, OutboxMessage } from "../src/env.ts";
+import { drainJobs } from "../src/jobs/drain.ts";
+import { handleQueueBatch, project } from "../src/queue/consumer.ts";
+import { enqueueProjection, enqueueUnprojection } from "../src/projection/outbox.ts";
+import { contentFingerprint, loadProjectionTarget, sessionTitle } from "../src/projection/target.ts";
+import { seedStatements } from "../src/db/seed-sql.ts";
+
+/** A queue binding that records instead of sending. */
+function outbox() {
+  const sent: OutboxMessage[] = [];
+  const queue = {
+    send: async (body: OutboxMessage) => void sent.push(body),
+    sendBatch: async (batch: Iterable<{ body: OutboxMessage }>) => {
+      for (const { body } of batch) sent.push(body);
+    },
+  };
+  return { sent, env: { ...env, OUTBOX: queue as unknown as Env["OUTBOX"] } as Env };
+}
+
+/** A batch shaped the way the runtime hands one over, with ack/retry watched. */
+function batchOf(...bodies: OutboxMessage[]) {
+  const messages = bodies.map((body, i) => ({
+    id: `m${i}`,
+    timestamp: new Date(),
+    body,
+    attempts: 1,
+    ack: vi.fn(),
+    retry: vi.fn(),
+  }));
+  return {
+    batch: { queue: "orrey-outbox", messages } as unknown as MessageBatch<OutboxMessage>,
+    messages,
+  };
+}
+
+const campaign = {
+  name: "Age of Umbra",
+  kind: "run",
+  discordChannelId: "100",
+  discordRoleId: "200",
+} as const;
+
+const session = {
+  number: 12,
+  startsAt: Date.parse("2026-09-20T19:00:00Z") / 1000,
+  endsAt: Date.parse("2026-09-20T23:00:00Z") / 1000,
+  location: "The Wreck",
+};
+
+const SESSION_ID = "age-of-umbra-s12";
+
+async function seed(over: Partial<typeof session> = {}): Promise<void> {
+  for (const statement of seedStatements(campaign, { ...session, ...over })) {
+    await env.DB.prepare(statement).run();
+  }
+}
+
+beforeEach(async () => {
+  await env.DB.prepare("DELETE FROM jobs").run();
+  await env.DB.prepare("DELETE FROM sessions").run();
+  await env.DB.prepare("DELETE FROM campaigns").run();
+});
+
+describe("the producer", () => {
+  it("asks both surfaces at once — neither is downstream of the other", async () => {
+    const { sent, env: testEnv } = outbox();
+    await enqueueProjection(testEnv, SESSION_ID);
+
+    expect(sent).toEqual([
+      { kind: "discord.event.upsert", sessionId: SESSION_ID },
+      { kind: "gcal.upsert", sessionId: SESSION_ID },
+    ]);
+  });
+
+  it("can ask one surface alone, and can ask for an unprojection", async () => {
+    const { sent, env: testEnv } = outbox();
+    await enqueueProjection(testEnv, SESSION_ID, ["google"]);
+    await enqueueUnprojection(testEnv, SESSION_ID, ["discord"]);
+
+    expect(sent).toEqual([
+      { kind: "gcal.upsert", sessionId: SESSION_ID },
+      { kind: "discord.event.delete", sessionId: SESSION_ID },
+    ]);
+  });
+
+  it("carries an id and nothing else, so a projector always reads current state", async () => {
+    const { sent, env: testEnv } = outbox();
+    await enqueueProjection(testEnv, SESSION_ID, ["discord"]);
+
+    expect(Object.keys(sent[0] ?? {}).sort()).toEqual(["kind", "sessionId"]);
+  });
+});
+
+describe("the job that arms it", () => {
+  it("turns the seed's standing job into outbox messages, once", async () => {
+    await seed();
+    const { sent, env: testEnv } = outbox();
+
+    expect(await drainJobs(testEnv)).toBe(1);
+    expect(sent.map((m) => m.kind)).toEqual(["discord.event.upsert", "gcal.upsert"]);
+
+    // The job is done; the next minute's drain does not re-project.
+    sent.length = 0;
+    expect(await drainJobs(testEnv)).toBe(0);
+    expect(sent).toEqual([]);
+  });
+
+  it("is re-armed by a re-seed, so a moved session projects again", async () => {
+    await seed();
+    const { sent, env: testEnv } = outbox();
+    await drainJobs(testEnv);
+
+    await seed({ startsAt: session.startsAt + 86_400, endsAt: session.endsAt + 86_400 });
+    sent.length = 0;
+
+    expect(await drainJobs(testEnv)).toBe(1);
+    expect(sent).toHaveLength(2);
+    // Still one job row — re-armed in place, not a second one piling up.
+    const rows = await env.DB.prepare("SELECT COUNT(*) AS n FROM jobs").first<{ n: number }>();
+    expect(rows?.n).toBe(1);
+  });
+});
+
+describe("the consumer spine", () => {
+  it("acks a message whose session is gone rather than filling the DLQ", async () => {
+    const { batch, messages } = batchOf({ kind: "gcal.upsert", sessionId: "no-such-session" });
+    await handleQueueBatch(batch, env, {} as ExecutionContext);
+
+    expect(messages[0]?.ack).toHaveBeenCalledOnce();
+    expect(messages[0]?.retry).not.toHaveBeenCalled();
+  });
+
+  it("retries when a projection throws, and does not ack it", async () => {
+    await seed();
+    const broken = {
+      ...env,
+      DB: { prepare: () => { throw new Error("D1 is having a moment"); } },
+    } as unknown as Env;
+
+    const { batch, messages } = batchOf({ kind: "discord.event.upsert", sessionId: SESSION_ID });
+    await handleQueueBatch(batch, broken, {} as ExecutionContext);
+
+    expect(messages[0]?.retry).toHaveBeenCalledOnce();
+    expect(messages[0]?.ack).not.toHaveBeenCalled();
+  });
+
+  it("handles every message in a batch independently", async () => {
+    await seed();
+    const { batch, messages } = batchOf(
+      { kind: "discord.event.upsert", sessionId: SESSION_ID },
+      { kind: "gcal.upsert", sessionId: "no-such-session" },
+    );
+    await handleQueueBatch(batch, env, {} as ExecutionContext);
+
+    expect(messages.every((m) => m.ack.mock.calls.length === 1)).toBe(true);
+  });
+
+  it("does not project a campaign that is no longer running", async () => {
+    await seed();
+    await env.DB.prepare("UPDATE campaigns SET state = 'CONCLUDED'").run();
+
+    const target = await loadProjectionTarget(env, SESSION_ID);
+    expect(target?.campaign?.state).toBe("CONCLUDED");
+    // Nothing throws, nothing is written: a redelivered message for a concluded
+    // campaign must not put its old sessions back on a calendar.
+    await expect(project({ kind: "gcal.upsert", sessionId: SESSION_ID }, env)).resolves.toBeUndefined();
+  });
+
+  it("reads the session from D1 every time, not from the message", async () => {
+    await seed();
+    const before = await loadProjectionTarget(env, SESSION_ID);
+    await env.DB.prepare("UPDATE sessions SET starts_at = starts_at + 3600").run();
+    const after = await loadProjectionTarget(env, SESSION_ID);
+
+    expect(after?.session.startsAt).toBe((before?.session.startsAt ?? 0) + 3600);
+  });
+});
+
+describe("the fingerprint", () => {
+  it("is stable for equal content and moves when the session moves", async () => {
+    await seed();
+    const first = await contentFingerprint((await loadProjectionTarget(env, SESSION_ID))!);
+    const again = await contentFingerprint((await loadProjectionTarget(env, SESSION_ID))!);
+    expect(again).toBe(first);
+
+    await seed({ startsAt: session.startsAt + 3600 });
+    const moved = await contentFingerprint((await loadProjectionTarget(env, SESSION_ID))!);
+    expect(moved).not.toBe(first);
+  });
+
+  it("covers the location, which is what an EXTERNAL event shows", async () => {
+    await seed();
+    const before = await contentFingerprint((await loadProjectionTarget(env, SESSION_ID))!);
+
+    await seed({ location: "Somewhere else" });
+    expect(await contentFingerprint((await loadProjectionTarget(env, SESSION_ID))!)).not.toBe(before);
+  });
+
+  it("titles a numbered session after its campaign", async () => {
+    await seed();
+    const target = (await loadProjectionTarget(env, SESSION_ID))!;
+    expect(sessionTitle(target)).toBe("Age of Umbra — Session 12");
+    expect(sessionTitle({ ...target, campaign: null })).toBe("Session — The Wreck");
+  });
+});

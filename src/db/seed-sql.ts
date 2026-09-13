@@ -94,6 +94,19 @@ export function seedStatements(campaign: CampaignSeed, session: SessionSeed): st
        ends_at = excluded.ends_at,
        location = excluded.location,
        updated_at = unixepoch()`,
+
+    // And ask for the projection. One standing job row per session, re-armed by
+    // every re-seed: the clock picks it up within the minute and it becomes the
+    // outbox messages for Discord and Google. A job rather than a direct send
+    // because the seed reaches D1 through wrangler and has no queue binding —
+    // and because time-based work Orrey can inspect and re-run lives in D1.
+    `INSERT INTO jobs (id, kind, payload, idempotency_key, run_at)
+     VALUES (${lit(`session.project:${sessionId}`)}, 'session.project', ${lit(JSON.stringify({ sessionId }))}, ${lit(`session.project:${sessionId}`)}, unixepoch())
+     ON CONFLICT(id) DO UPDATE SET
+       state = 'pending',
+       attempts = 0,
+       last_error = NULL,
+       run_at = unixepoch()`,
   ];
 }
 

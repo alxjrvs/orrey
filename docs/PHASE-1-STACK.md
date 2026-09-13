@@ -53,17 +53,24 @@ it twice does not make a second campaign.
 ### 3. `p1/3-outbox` — the projection spine · #17
 
 The part both projections share, and the reason this is one PR and not two: the
-producer (`enqueueProjection(sessionId)`, called wherever a session is created or
-changed), the content fingerprint, and the real body of `handleQueueBatch` —
-load the session, dispatch on `kind`, compare the stored fingerprint, record
-`last_error`, retry, and let the DLQ take what keeps failing. Neither projection
-writes anything outward yet.
+producer (`enqueueProjection`, asking both surfaces at once), the content
+fingerprint, the load-from-D1 that every projector starts with, and the real body
+of `handleQueueBatch` — dispatch on `kind`, let a throw become a retry, and let
+the DLQ take what keeps failing. Neither projection writes anything outward yet.
 
-*Tests*: redelivering the same message twice does one unit of work; a message for
-a deleted session acks rather than poisons; a thrown projector records the error
-and retries.
+What reaches the producer in phase 1 is a `session.project` job: the seed writes
+D1 through wrangler and has no queue binding, so the row that says "this needs
+projecting" is a job the clock picks up — inspectable and re-runnable, which a
+queue message is not.
 
-*Review focus*: the fingerprint covers exactly the fields the remote object shows.
+*Tests*: a message for a deleted session acks rather than poisons the queue; a
+campaign that is not running is not projected; a thrown projector retries rather
+than acking; the fingerprint is stable across equal content and moves when the
+content does.
+
+*Review focus*: the fingerprint covers exactly the fields the remote object
+shows. Where a failure is *recorded* is per-surface and arrives with each
+projector (`calendar_links.last_error` in #19); the DLQ is the spine's record.
 
 ### 4. `p1/4-discord-event` — the scheduled event · closes #17
 

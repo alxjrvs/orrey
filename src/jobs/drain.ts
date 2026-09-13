@@ -1,6 +1,7 @@
 import { and, eq, lte } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
+import { enqueueProjection } from "../projection/outbox.ts";
 
 const CLAIM_SECONDS = 60;
 const BATCH = 25;
@@ -42,8 +43,21 @@ export async function drainJobs(env: Env): Promise<number> {
   return ran;
 }
 
-async function runJob(job: typeof schema.jobs.$inferSelect, _env: Env): Promise<void> {
+async function runJob(job: typeof schema.jobs.$inferSelect, env: Env): Promise<void> {
   switch (job.kind) {
+    /**
+     * The bridge from D1 to the outbox. A session is created or changed in the
+     * database — by the seed in phase 1, by the console and the materialiser
+     * later — and the row that says "this needs projecting" is a job, not a
+     * queue message, so it can be seen, re-armed and re-run.
+     */
+    case "session.project": {
+      const { sessionId } = job.payload as { sessionId?: string };
+      if (!sessionId) throw new Error(`session.project job ${job.id} has no sessionId`);
+      await enqueueProjection(env, sessionId);
+      return;
+    }
+
     // reminder.t-48h, reminder.t-24h, jeopardy.check, attendance.assume,
     // poll.close, horizon.extend — each added in the phase that needs it.
     default:
