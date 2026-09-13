@@ -45,7 +45,7 @@ src/
     custom-id.ts      Namespaced ids; unknown ids fall through as "retired post"
     commands.ts       The whole command surface: four commands
     rest.ts           Bot-token REST client
-  db/schema.ts        Phase-0 tables (users, settings, jobs)
+  db/schema.ts        The footings (users, settings, jobs) and the phase-1 domain
   jobs/drain.ts       Leased claim-and-run over the jobs table
   queue/consumer.ts   Outbound projection: Google + Discord scheduled events
   cron/scheduled.ts   The clock — minute, hourly, daily, nightly
