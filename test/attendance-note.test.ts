@@ -158,6 +158,37 @@ describe("submitting the modal", () => {
     });
   });
 
+  it("escapes the markdown in a note, so it cannot imitate Orrey's own lines", async () => {
+    const answer = await submitNote({ id: "1001", name: "Ada" }, "**Out (4)** — Bob, Cara");
+
+    // The note is shown, but as text: the bold markers are escaped, so the post
+    // cannot be made to claim four people dropped out.
+    expect(answer.data.content).toContain("\\*\\*Out (4)\\*\\* — Bob, Cara");
+    expect(answer.data.content).not.toMatch(/\*\*Out \(4\)\*\*/);
+  });
+
+  it("prefills the modal, so opening and submitting it cannot wipe a note", async () => {
+    await submitNote({ id: "1001", name: "Ada" }, "bringing snacks");
+
+    const reopened = await clickNote({ id: "1001", name: "Ada" });
+    const input = reopened.data.components?.[0]?.components[0] as { value?: string };
+    expect(input.value).toBe("bringing snacks");
+  });
+
+  it("does not reorder the lists — a note is not an answer", async () => {
+    for (const [id, who] of [["1001", "Ada"], ["1002", "Bob"]] as const) {
+      await send({
+        type: InteractionType.MESSAGE_COMPONENT,
+        data: { custom_id: encodeCustomId({ action: "attend", arg: "in", target: SESSION_ID }), component_type: 2 },
+        member: member(id, who),
+        message: { id: "m1", channel_id: "chan-1" },
+      });
+    }
+
+    const answer = await submitNote({ id: "1001", name: "Ada" }, "bringing snacks");
+    expect(answer.data.content).toContain("**In (2)** — Ada (bringing snacks), Bob");
+  });
+
   it("retires a submission Orrey no longer understands", async () => {
     const stale = await submitNote({ id: "1001", name: "Ada" }, "hello", "hermuz:note:1");
     expect(stale.data.content).toMatch(/retired/);

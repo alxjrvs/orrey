@@ -51,6 +51,11 @@ export class SessionLock extends DurableObject<Env> {
    * The text is normalised on the way in rather than on the way out: it is
    * rendered inline on a post Orrey can never edit, so a newline would break
    * that post's layout permanently.
+   *
+   * `updated_at` is deliberately left alone on an existing row. The post lists
+   * people in the order they answered, and adding a note is not answering —
+   * bumping it would shuffle someone to the end of their own list for saying
+   * "running late".
    */
   async setNote({ sessionId, actor, note }: AttendanceNote): Promise<AttendanceRow[]> {
     return this.serialise(async () => {
@@ -59,10 +64,10 @@ export class SessionLock extends DurableObject<Env> {
 
       await db(this.env)
         .insert(schema.attendance)
-        .values({ sessionId, userId: actor.id, note: cleaned, updatedAt: sql`(unixepoch())` })
+        .values({ sessionId, userId: actor.id, note: cleaned })
         .onConflictDoUpdate({
           target: [schema.attendance.sessionId, schema.attendance.userId],
-          set: { note: cleaned, updatedAt: sql`(unixepoch())` },
+          set: { note: cleaned },
         });
 
       return attendanceRows(this.env, sessionId);

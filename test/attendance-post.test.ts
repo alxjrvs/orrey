@@ -127,6 +127,35 @@ describe("rendering the post", () => {
   });
 });
 
+describe("staying inside Discord's message ceiling", () => {
+  it("drops the notes, then the names, rather than growing past the limit", async () => {
+    const crowd = (n: number, note: string | null) =>
+      Array.from({ length: n }, (_, i) => row(String(i), `Person Number ${i}`, "in", note));
+
+    const small = await render(crowd(4, "a short note"))();
+    expect(small.content).toContain("a short note");
+
+    // Notes go first...
+    const many = await render(crowd(40, "x".repeat(140)))();
+    expect(many.content.length).toBeLessThanOrEqual(1900);
+    expect(many.content).toContain("**In (40)** — Person Number 0");
+    expect(many.content).not.toContain("xxx");
+
+    // ...then the names, leaving the count, which is the actual answer.
+    const crowded = await render(crowd(400, null))();
+    expect(crowded.content.length).toBeLessThanOrEqual(1900);
+    expect(crowded.content).toContain("**In (400)**");
+    expect(crowded.content).not.toContain("Person Number 399");
+    // Whatever is dropped, the as-of line and its promise survive.
+    expect(crowded.content).toMatch(/As of <t:\d+:R>/);
+  });
+
+  it("escapes a name as well as a note", async () => {
+    const payload = await render([row("1", "**Ada**", "in")])();
+    expect(payload.content).toContain("\\*\\*Ada\\*\\*");
+  });
+});
+
 describe("posting it", () => {
   it("posts to the campaign channel and records the message id", async () => {
     const id = await postAttendancePost(env, SESSION_ID);
