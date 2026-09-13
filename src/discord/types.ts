@@ -17,6 +17,16 @@ export const InteractionResponseType = {
   MODAL: 9,
 } as const;
 
+export const ComponentType = { ACTION_ROW: 1, BUTTON: 2, STRING_SELECT: 3 } as const;
+
+export const ButtonStyle = {
+  PRIMARY: 1,
+  SECONDARY: 2,
+  SUCCESS: 3,
+  DANGER: 4,
+  LINK: 5,
+} as const;
+
 export const MessageFlags = { EPHEMERAL: 1 << 6, IS_COMPONENTS_V2: 1 << 15 } as const;
 
 export interface InteractionUser {
