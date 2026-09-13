@@ -1,5 +1,6 @@
 import type { Env } from "../env.ts";
 
+
 const API = "https://discord.com/api/v10";
 
 export class DiscordError extends Error {
@@ -24,8 +25,11 @@ interface DiscordRequest {
   body?: unknown;
 }
 
+/** Only the bot token is needed, so scripts can call this without a full Env. */
+export type BotAuth = Pick<Env, "DISCORD_BOT_TOKEN">;
+
 export async function discordFetch<T>(
-  env: Env,
+  env: BotAuth,
   path: string,
   init: DiscordRequest = {},
 ): Promise<T> {
@@ -52,7 +56,7 @@ export async function discordFetch<T>(
 }
 
 /** Fire-and-forget. Record the id if you want it; never reconcile it. */
-export function postMessage(env: Env, channelId: string, body: unknown) {
+export function postMessage(env: BotAuth, channelId: string, body: unknown) {
   return discordFetch<{ id: string; channel_id: string }>(env, `/channels/${channelId}/messages`, {
     method: "POST",
     body,
@@ -63,7 +67,7 @@ export function postMessage(env: Env, channelId: string, body: unknown) {
  * Strips components from a message. Used exactly once, at cutover, to neutralise
  * Hermuz's old interactive posts. Not a general-purpose edit.
  */
-export function stripComponents(env: Env, channelId: string, messageId: string) {
+export function stripComponents(env: BotAuth, channelId: string, messageId: string) {
   return discordFetch(env, `/channels/${channelId}/messages/${messageId}`, {
     method: "PATCH",
     body: { components: [] },

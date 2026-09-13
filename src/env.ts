@@ -1,10 +1,13 @@
+import type { GuildGovernor } from "./do/guild-governor.ts";
+import type { SessionLock } from "./do/session-lock.ts";
+
 export interface Env {
   // Bindings
   DB: D1Database;
   OUTBOX: Queue<OutboxMessage>;
   ASSETS: Fetcher;
-  GUILD: DurableObjectNamespace;
-  SESSION_LOCK: DurableObjectNamespace;
+  GUILD: DurableObjectNamespace<GuildGovernor>;
+  SESSION_LOCK: DurableObjectNamespace<SessionLock>;
 
   // Vars
   ENVIRONMENT: "development" | "production";
