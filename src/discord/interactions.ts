@@ -1,6 +1,7 @@
 import type { Env } from "../env.ts";
 import { decodeCustomId, encodeCustomId } from "./custom-id.ts";
 import { deleteUserData, describeReceipt } from "../privacy/delete.ts";
+import type { SmokeTally } from "../do/session-lock.ts";
 import {
   ButtonStyle,
   ComponentType,
@@ -122,12 +123,42 @@ async function handleComponent(
 
   switch (id.action) {
     case "ping":
-      return rewrite(`Pong — round-tripped at ${new Date().toISOString()}.`);
+      return handlePing(interaction, env, id.target ?? "default");
     case "privacy":
       return handlePrivacy(interaction, env, ctx, id.arg);
     default:
       return retiredPost();
   }
+}
+
+/**
+ * The phase-0 exit criterion, and the shape every later button follows: route
+ * through the session's Durable Object so concurrent clicks serialise, write to
+ * D1, then render what was just written as this interaction's own response.
+ *
+ * The button survives the rewrite. A post is a snapshot, so it carries an
+ * as-of line and stays clickable — which is also how the 15-minute interaction
+ * token stops mattering: the next click is a fresh interaction.
+ */
+async function handlePing(interaction: Interaction, env: Env, target: string): Promise<Json> {
+  const actor = actorOf(interaction);
+  if (!actor) return ephemeral("Orrey could not tell who clicked that.");
+
+  const lock = env.SESSION_LOCK.get(env.SESSION_LOCK.idFromName(target));
+  const tally = await lock.click(target, actor);
+
+  return rewrite(renderTally(target, tally), [
+    row(button("Ping", encodeCustomId({ action: "ping", target }), ButtonStyle.PRIMARY)),
+  ]);
+}
+
+function renderTally(target: string, tally: SmokeTally): string {
+  const clicks = `${tally.clicks} ${tally.clicks === 1 ? "click" : "clicks"}`;
+  return [
+    `**Smoke test — \`${target}\`**`,
+    `${clicks}, last by ${tally.lastBy ?? "someone"}.`,
+    `-# As of ${tally.asOf ?? new Date().toISOString()}. Click again for a fresh reading.`,
+  ].join("\n");
 }
 
 async function handlePrivacy(
