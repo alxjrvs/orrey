@@ -15,6 +15,13 @@
       "when": 1789308216208,
       "tag": "0001_phase1_domain",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1789308802082,
+      "tag": "0002_discord_event_fingerprint",
+      "breakpoints": true
     }
   ]
 }

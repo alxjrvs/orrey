@@ -1,0 +1,1 @@
+ALTER TABLE `sessions` ADD `discord_event_fingerprint` text;

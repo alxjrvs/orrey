@@ -23,4 +23,9 @@ export class GuildGovernor extends DurableObject<Env> {
   async holdUntil(timestampMs: number): Promise<void> {
     this.notBefore = Math.max(this.notBefore, timestampMs);
   }
+
+  /** What the guild is currently held until, as unix ms. 0 when it is free. */
+  async heldUntil(): Promise<number> {
+    return this.notBefore;
+  }
 }
