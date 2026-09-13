@@ -17,7 +17,14 @@ export const InteractionResponseType = {
   MODAL: 9,
 } as const;
 
-export const ComponentType = { ACTION_ROW: 1, BUTTON: 2, STRING_SELECT: 3 } as const;
+export const ComponentType = {
+  ACTION_ROW: 1,
+  BUTTON: 2,
+  STRING_SELECT: 3,
+  TEXT_INPUT: 4,
+} as const;
+
+export const TextInputStyle = { SHORT: 1, PARAGRAPH: 2 } as const;
 
 export const ButtonStyle = {
   PRIMARY: 1,
@@ -52,6 +59,8 @@ export interface Interaction {
     component_type?: number;
     values?: string[];
     options?: { name: string; value: string | number | boolean; focused?: boolean }[];
+    /** MODAL_SUBMIT: one row per input, each holding the id it was minted with. */
+    components?: { type: number; components: { custom_id?: string; value?: string }[] }[];
   };
 }
 

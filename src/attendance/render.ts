@@ -48,7 +48,13 @@ export function renderAttendancePost({ target, rows, asOf }: AttendanceView): Me
     const named = rows.filter((row) => row.intent === intent);
     if (named.length > 0) lines.push(`**${label} (${named.length})** — ${named.map(name).join(", ")}`);
   }
-  if (rows.every((row) => row.intent === null)) lines.push("*Nobody has said yet.*");
+  // A note without an answer is still something the others should see.
+  const unanswered = rows.filter((row) => row.intent === null && row.note);
+  if (unanswered.length > 0) lines.push(`**Notes** — ${unanswered.map(name).join(", ")}`);
+
+  if (rows.every((row) => row.intent === null) && unanswered.length === 0) {
+    lines.push("*Nobody has said yet.*");
+  }
 
   lines.push("", `-# As of <t:${unix(asOf)}:R>. Refresh for a fresh reading.`);
 
