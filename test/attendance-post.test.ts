@@ -4,7 +4,8 @@ import { db, schema } from "../src/db/index.ts";
 import { SETTING_KEYS, setSetting } from "../src/db/settings.ts";
 import { seedStatements } from "../src/db/seed-sql.ts";
 import { decodeCustomId } from "../src/discord/custom-id.ts";
-import { attendanceRows, postAttendancePost } from "../src/attendance/post.ts";
+import { postAttendancePost } from "../src/attendance/post.ts";
+import { attendanceRows } from "../src/attendance/rows.ts";
 import { renderAttendancePost, type AttendanceRow } from "../src/attendance/render.ts";
 import { loadProjectionTarget, type ProjectionTarget } from "../src/projection/target.ts";
 
