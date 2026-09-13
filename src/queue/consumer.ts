@@ -1,4 +1,5 @@
 import type { Env, OutboxMessage } from "../env.ts";
+import { projectDiscordEvent } from "../discord/events.ts";
 import { isProjectable, loadProjectionTarget } from "../projection/target.ts";
 
 /**
@@ -45,7 +46,7 @@ export async function project(body: OutboxMessage, env: Env): Promise<void> {
   switch (body.kind) {
     case "discord.event.upsert":
     case "discord.event.delete":
-      return notYet(body.kind, "the Discord scheduled-event projector — #17");
+      return projectDiscordEvent(env, target, body.kind);
 
     case "gcal.upsert":
     case "gcal.delete":

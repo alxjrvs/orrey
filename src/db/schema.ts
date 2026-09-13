@@ -112,6 +112,8 @@ export const sessions = sqliteTable(
       .default("SCHEDULED"),
     /** Reconciled. May be replaced: Discord's terminal statuses are not undoable. */
     discordEventId: text("discord_event_id"),
+    /** The content hash last written to that event; what makes a re-write skippable. */
+    discordEventFingerprint: text("discord_event_fingerprint"),
     /** The attendance post. Recorded, then forgotten — messages are send-only. */
     discordMessageId: text("discord_message_id"),
     threadId: text("thread_id"),

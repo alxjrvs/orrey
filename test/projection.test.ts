@@ -148,13 +148,19 @@ describe("the consumer spine", () => {
 
   it("handles every message in a batch independently", async () => {
     await seed();
+    // The first cannot be projected — no guild id has been seeded, so the
+    // Discord projector throws. The second has no session at all. One retries,
+    // one acks, and neither decides anything for the other.
     const { batch, messages } = batchOf(
       { kind: "discord.event.upsert", sessionId: SESSION_ID },
       { kind: "gcal.upsert", sessionId: "no-such-session" },
     );
     await handleQueueBatch(batch, env, {} as ExecutionContext);
 
-    expect(messages.every((m) => m.ack.mock.calls.length === 1)).toBe(true);
+    expect(messages[0]?.retry).toHaveBeenCalledOnce();
+    expect(messages[0]?.ack).not.toHaveBeenCalled();
+    expect(messages[1]?.ack).toHaveBeenCalledOnce();
+    expect(messages[1]?.retry).not.toHaveBeenCalled();
   });
 
   it("does not project a campaign that is no longer running", async () => {
