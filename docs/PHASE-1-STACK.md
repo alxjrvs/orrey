@@ -131,8 +131,13 @@ Social calendar. Redelivery lands on the same event id.
 ## Landing order
 
 Bottom-first: 1 → 2 → 3, then 4 and 8 in either order, then 5 → 6 → 7. After each
-merge, `npm run stack -- restack p1 --apply` and push; `p1/8-gcal` forked, so
-restack it by hand against its own base.
+merge, `npm run stack -- restack p1 --apply` and push.
+
+`p1/8-gcal` forks off `p1/3-outbox`, so tell the tooling once —
+`npm run stack -- base p1/8-gcal p1/3-outbox` — and the restack keeps it a fork
+instead of flattening it onto the attendance line. It and `p1/4-discord-event`
+both fill in the same `switch` in `src/queue/consumer.ts`, so expect one small
+conflict there, resolved by keeping both cases.
 
 The phase gate, #20, is not a PR: run a real Age of Umbra session on it once the
 stack is in `main`, and close #20 with what happened on the day.
