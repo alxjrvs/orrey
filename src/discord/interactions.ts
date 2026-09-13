@@ -10,6 +10,7 @@ import {
   InteractionResponseType,
   InteractionType,
   MessageFlags,
+  TextInputStyle,
   actorOf,
   type Interaction,
 } from "./types.ts";
@@ -68,7 +69,7 @@ export async function handleInteraction(
       return handleComponent(interaction, env, ctx);
 
     case InteractionType.MODAL_SUBMIT:
-      return ephemeral("Not wired up yet.");
+      return handleModal(interaction, env);
 
     default:
       return ephemeral("Orrey does not know what to do with that.");
@@ -168,9 +169,74 @@ async function handleAttend(
     case "refresh":
       rows = await lock.readIntents(sessionId);
       break;
+    case "note":
+      return noteModal(sessionId);
     default:
       return retiredPost();
   }
+
+  return {
+    type: InteractionResponseType.UPDATE_MESSAGE,
+    data: renderAttendancePost({ target, rows, asOf: new Date() }),
+  };
+}
+
+/**
+ * Note opens a modal. Its id is minted the same way every other component id
+ * is, so the submission that comes back minutes later is recognised — or, if it
+ * comes back after a schema change, degrades to the retired-post response like
+ * any other id Orrey no longer understands.
+ */
+function noteModal(sessionId: string): Json {
+  return {
+    type: InteractionResponseType.MODAL,
+    data: {
+      custom_id: encodeCustomId({ action: "attend-note", target: sessionId }),
+      title: "Add a note",
+      components: [
+        {
+          type: ComponentType.ACTION_ROW,
+          components: [
+            {
+              type: ComponentType.TEXT_INPUT,
+              custom_id: NOTE_INPUT,
+              style: TextInputStyle.SHORT,
+              label: "Anything the others should know?",
+              placeholder: "Running 30 late",
+              max_length: 140,
+              required: false,
+            },
+          ],
+        },
+      ],
+    },
+  };
+}
+
+const NOTE_INPUT = "note";
+
+/**
+ * A modal launched from a message component may answer with UPDATE_MESSAGE, so
+ * the note lands and the post it came from rewrites itself — the same single
+ * exception to send-only that a button click uses.
+ */
+async function handleModal(interaction: Interaction, env: Env): Promise<Json> {
+  const id = decodeCustomId(interaction.data?.custom_id ?? "");
+  if (!id || id.action !== "attend-note" || !id.target) return retiredPost();
+
+  const actor = actorOf(interaction);
+  if (!actor) return ephemeral("Orrey could not tell who submitted that.");
+
+  const target = await loadProjectionTarget(env, id.target);
+  if (!target) return retiredPost();
+
+  const note =
+    interaction.data?.components
+      ?.flatMap((row) => row.components)
+      .find((input) => input.custom_id === NOTE_INPUT)?.value ?? "";
+
+  const lock = env.SESSION_LOCK.get(env.SESSION_LOCK.idFromName(id.target));
+  const rows = await lock.setNote({ sessionId: id.target, actor, note });
 
   return {
     type: InteractionResponseType.UPDATE_MESSAGE,

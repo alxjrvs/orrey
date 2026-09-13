@@ -45,6 +45,31 @@ export class SessionLock extends DurableObject<Env> {
   }
 
   /**
+   * A free-text note against this person's row, whether or not they have said
+   * whether they are coming. An empty note clears it.
+   *
+   * The text is normalised on the way in rather than on the way out: it is
+   * rendered inline on a post Orrey can never edit, so a newline would break
+   * that post's layout permanently.
+   */
+  async setNote({ sessionId, actor, note }: AttendanceNote): Promise<AttendanceRow[]> {
+    return this.serialise(async () => {
+      await rememberUser(this.env, actor);
+      const cleaned = normaliseNote(note);
+
+      await db(this.env)
+        .insert(schema.attendance)
+        .values({ sessionId, userId: actor.id, note: cleaned, updatedAt: sql`(unixepoch())` })
+        .onConflictDoUpdate({
+          target: [schema.attendance.sessionId, schema.attendance.userId],
+          set: { note: cleaned, updatedAt: sql`(unixepoch())` },
+        });
+
+      return attendanceRows(this.env, sessionId);
+    });
+  }
+
+  /**
    * Refresh: no write, but the same queue, so a refresh landing between two
    * clicks reads a settled state rather than a half-written one.
    */
@@ -92,6 +117,18 @@ export interface AttendanceIntent {
   sessionId: string;
   actor: InteractionUser;
   intent: "in" | "out" | "maybe";
+}
+
+export interface AttendanceNote {
+  sessionId: string;
+  actor: InteractionUser;
+  note: string;
+}
+
+/** One line, no surprises, short enough to sit beside a name. */
+export function normaliseNote(note: string): string | null {
+  const cleaned = note.replace(/\s+/g, " ").trim().slice(0, 140);
+  return cleaned.length > 0 ? cleaned : null;
 }
 
 export interface SmokeTally {
