@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>The Orrey — privacy</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        margin: 0; min-height: 100vh; display: grid; place-items: start center;
+        font: 16px/1.6 ui-sans-serif, system-ui, -apple-system, sans-serif;
+        background: #0f1014; color: #e8e6e3;
+      }
+      main { max-width: 42rem; padding: 3rem 2rem 5rem; }
+      h1 { font-size: 1.5rem; margin: 0 0 .25rem; letter-spacing: -0.01em; }
+      h2 { font-size: 1rem; margin: 2rem 0 .5rem; letter-spacing: .02em; text-transform: uppercase; color: #cfcbc7; }
+      p, li { color: #a5a2a0; }
+      p { margin: 0 0 1rem; }
+      ul { margin: 0 0 1rem; padding-left: 1.2rem; }
+      li { margin: 0 0 .35rem; }
+      strong { color: #e8e6e3; font-weight: 600; }
+      code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9em; color: #e8e6e3; }
+      .as-of { color: #6f6c6a; font-size: .85rem; margin: 0 0 2rem; }
+      a { color: #9ec1ff; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>What the Orrey knows about you</h1>
+      <p class="as-of">Last updated 13 September 2026.</p>
+
+      <p>
+        The Orrey schedules games for one Discord server. It is run by the server's own
+        organiser, for that server, and for nothing else. There is no analytics, no
+        advertising, and nothing is sold or shared.
+      </p>
+
+      <h2>What it stores</h2>
+      <ul>
+        <li><strong>Your Discord user id.</strong> This is how Orrey knows who you are. It is the only identity Orrey uses.</li>
+        <li><strong>Your username and display name</strong>, cached so posts can name you without asking Discord every time. Orrey treats these as a copy, never as the truth.</li>
+        <li><strong>What you said about sessions</strong> — in, out, maybe, any note you attached, and afterwards whether you came.</li>
+        <li><strong>A calendar feed token</strong>, a random string that lets a calendar app subscribe to your games. Anyone holding it can read that feed, which is why it is not shown publicly.</li>
+        <li><strong>Whether Orrey can DM you.</strong> Discord only reveals this by refusing, so Orrey records the refusal and uses the channel instead.</li>
+      </ul>
+
+      <h2>What it does not store</h2>
+      <ul>
+        <li>No message content, beyond what you type into Orrey's own buttons and forms.</li>
+        <li>No email address, no password. Sign-in is Discord's <code>identify</code> scope alone — Orrey never asks Discord for the list of servers you are in.</li>
+        <li>No payment details. Orrey takes no money.</li>
+      </ul>
+
+      <h2>Where it lives</h2>
+      <p>
+        In a Cloudflare D1 database owned by the server's organiser. Orrey's database is the
+        source of truth for scheduling: what you see in Discord and in Google Calendar are
+        copies Orrey writes outward. Orrey writes to its own Google calendar only, never to
+        a personal one.
+      </p>
+
+      <h2>Deleting it</h2>
+      <p>
+        Run <code>/console</code> in the server and choose <strong>Delete my data</strong>. It asks once
+        to confirm, then removes your row and everything keyed to your Discord id, and tells
+        you what it removed. Nothing is retained afterwards, and your calendar feed token
+        stops working immediately.
+      </p>
+      <p>
+        Deleting your data does not remove you from the Discord server, and it does not undo
+        posts Orrey already sent — those are ordinary Discord messages and can be deleted by
+        a moderator. If you use Orrey again afterwards, it starts over knowing nothing.
+      </p>
+
+      <h2>Asking a person</h2>
+      <p>
+        Orrey is small enough that the answer to anything not covered here is: ask the server's
+        organiser. They run it and hold the database.
+      </p>
+    </main>
+  </body>
+</html>

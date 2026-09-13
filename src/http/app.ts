@@ -24,7 +24,9 @@ export function createApp() {
     );
     if (!valid) return c.text("invalid request signature", 401);
 
-    const response = await handleInteraction(JSON.parse(body) as Interaction, c.env);
+    const response = await handleInteraction(JSON.parse(body) as Interaction, c.env, {
+      origin: new URL(c.req.url).origin,
+    });
     return c.json(response);
   });
 
@@ -32,9 +34,16 @@ export function createApp() {
   // the path is the only credential — it must be unguessable.
   app.get("/ics/:token.ics", (c) => c.text("Not implemented until phase 6.", 501));
 
-  // Discord's terms require a stated privacy policy and a delete-my-data path.
-  app.get("/privacy", (c) => c.env.ASSETS.fetch(c.req.raw));
-  app.delete("/me", (c) => c.text("Not implemented.", 501));
+  /**
+   * Discord's terms require a stated privacy policy and a delete-my-data path.
+   * The policy is a page; the delete path is a button on `/console`, because
+   * Discord is the only identity Orrey has — an unauthenticated HTTP DELETE
+   * would be a way to erase someone else's data.
+   */
+  app.get("/privacy", (c) => c.env.ASSETS.fetch(new Request(new URL("/privacy.html", c.req.url), c.req.raw)));
+  app.delete("/me", (c) =>
+    c.json({ error: "Run /console in Discord and choose “Delete my data”." }, 405),
+  );
 
   // Console SPA and anything else static.
   app.all("*", (c) => c.env.ASSETS.fetch(c.req.raw));
