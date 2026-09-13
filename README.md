@@ -45,13 +45,14 @@ src/
     custom-id.ts      Namespaced ids; unknown ids fall through as "retired post"
     commands.ts       The whole command surface: four commands
     rest.ts           Bot-token REST client
-  db/schema.ts        Phase-0 tables (users, settings, jobs)
+  db/schema.ts        The footings (users, settings, jobs) and the phase-1 domain
   jobs/drain.ts       Leased claim-and-run over the jobs table
   queue/consumer.ts   Outbound projection: Google + Discord scheduled events
   cron/scheduled.ts   The clock — minute, hourly, daily, nightly
   do/                 Per-guild rate-limit governor; per-session click lock
 scripts/
   register-commands.ts  Bulk overwrite of the guild command set
+  seed-session.ts       SQL for the one hardcoded campaign and its next session
   stack.ts              Status, restack and push for a stacked PR train
 public/               The console (static, same origin)
 ```
