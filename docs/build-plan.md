@@ -1,6 +1,6 @@
 # The Orrey — Build Plan (rev 5, 13 Sept 2026)
 
-**Status: planning only. No implementation has started.** Agreed real-world action, not yet done: archive the Hermuz repo read-only (keep a copy of its SQLite file as a Discord-id lookup, not for import).
+**Status: phase 0, footings.** The repo exists and the Worker/Hono/D1/Drizzle skeleton is in place, with Ed25519 verification and the four-command surface defined. Nothing has been cut over. Still to do before cutover: copy Hermuz's SQLite as an id lookup and archive that repo read-only; prove the Google service-account calendar pattern by hand; deploy the Worker.
 
 ## All settled decisions
 
