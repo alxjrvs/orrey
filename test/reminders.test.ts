@@ -229,3 +229,81 @@ describe("the drain", () => {
     expect(dms().length).toBeGreaterThan(0);
   });
 });
+
+describe("a rung that has to be retried", () => {
+  /** The thread post is the only thing here that can throw, and the drain retries it. */
+  function refuseThread() {
+    const inner = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(
+        typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+      );
+      if (url.pathname.endsWith("/channels/thread-1/messages")) {
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        calls.push({ path: "/channels/thread-1/messages", body });
+        return Response.json({ code: 50001, message: "Missing Access" }, { status: 403 });
+      }
+      return inner(input, init);
+    }) as typeof fetch;
+  }
+
+  it("does not DM anybody a second time", async () => {
+    await member("a", null);
+    await member("b", null);
+    await member("c", null);
+    closedDms.add("c");
+    refuseThread();
+
+    await expect(sendReminder(env, await target(), 72)).rejects.toThrow();
+    expect(dms()).toHaveLength(3);
+    calls = [];
+
+    // The drain answers a throw by running the whole thing again from the top.
+    // Without a record of who has already been asked, everybody gets it twice —
+    // and on a 4xx the thread claim is released, so this repeats every minute
+    // until the session is played.
+    await expect(sendReminder(env, await target(), 72)).rejects.toThrow();
+    expect(dms()).toEqual([]);
+  });
+
+  it("still names the unreachable people in the thread on the retry", async () => {
+    await member("a", null);
+    await member("c", null);
+    closedDms.add("c");
+    refuseThread();
+    await expect(sendReminder(env, await target(), 72)).rejects.toThrow();
+    calls = [];
+
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(
+        typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+      );
+      calls.push({
+        path: url.pathname.replace("/api/v10", ""),
+        body: JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>,
+      });
+      return Response.json({ id: "msg-1", channel_id: "chan-1" });
+    }) as typeof fetch;
+
+    const outcome = await sendReminder(env, await target(), 72);
+
+    // Their outcome was recorded, so the retry knows who was reachable without
+    // asking Discord again.
+    expect(outcome).toMatchObject({ dmed: ["a"], mentioned: ["c"] });
+    expect(threadPosts()).toHaveLength(1);
+    expect(String(threadPosts()[0]?.body.content)).toContain("<@c>");
+  });
+
+  it("keeps each rung's record separate, so the next step still asks", async () => {
+    await member("a", null);
+
+    await sendReminder(env, await target(), 72);
+    expect(dms()).toHaveLength(1);
+    calls = [];
+
+    await sendReminder(env, await target(), 24);
+
+    // Three nudges is three nudges. The record is per rung, not per session.
+    expect(dms()).toHaveLength(1);
+  });
+});

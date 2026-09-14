@@ -5,6 +5,7 @@ import { SETTING_DEFAULTS, SETTING_KEYS, settingOr } from "../db/settings.ts";
 import { attendanceRows } from "./rows.ts";
 import { tryDm } from "./dm.ts";
 import { postNoticeOnce } from "./notice.ts";
+import { claim, record } from "../projection/publications.ts";
 import { remindDm, remindInThread } from "./render.ts";
 import type { ProjectionTarget } from "../projection/target.ts";
 
@@ -79,12 +80,47 @@ export async function sendReminder(
   const dmed: string[] = [];
   const mentioned: string[] = [];
 
+  /**
+   * One claim per person per rung, and that is not belt and braces.
+   *
+   * The only thing in this function that can throw is the thread post at the
+   * bottom, and the drain answers a throw by re-running the whole thing from the
+   * top. Without a record of who has already been asked, every retry re-DMs
+   * everybody — and on a 4xx the thread claim is *released*, so the next run
+   * fails the same way, releases again, and keeps going until the session is
+   * marked played. `users.dm_state` does not help: it remembers a *closed* DM,
+   * never a delivered one.
+   *
+   * So each person's rung gets a row of its own. The id it records is the
+   * outcome, because for a DM there is nothing else worth remembering.
+   */
   for (const row of silent) {
+    const ref = {
+      surface: "discord",
+      kind: "message",
+      targetId: session.id,
+      label: `${label(hours)}:${row.userId}`,
+    } as const;
+
+    const { mine, publication } = await claim(env, ref);
+    if (!mine) {
+      // Settled on an earlier run of this rung.
+      if (publication.remoteId === CLOSED) mentioned.push(row.userId);
+      else if (publication.remoteId) dmed.push(row.userId);
+      // A claim with no outcome is a run that died mid-DM. Whether it landed is
+      // unknowable, and a duplicate DM is the thing this whole structure exists
+      // to prevent — so this person is neither asked again nor named in the
+      // thread. Silence beats saying it twice.
+      continue;
+    }
+
     // One person's shut DMs must not stop the rest being asked.
     const outcome = await tryDm(env, row.userId, remindDm(target, hours)).catch((error) => {
       console.error("reminder DM failed", session.id, row.userId, error);
       return "closed" as const;
     });
+
+    await record(env, ref, outcome === "sent" ? SENT : CLOSED);
 
     if (outcome === "sent") dmed.push(row.userId);
     else mentioned.push(row.userId);
@@ -94,13 +130,21 @@ export async function sendReminder(
   // and three separate mentions of three people is three notifications for all
   // of them.
   if (mentioned.length > 0) {
-    await postNoticeOnce(
-      env,
-      target,
-      `reminder-${hours}`,
-      remindInThread(target, hours, mentioned),
-    );
+    await postNoticeOnce(env, target, label(hours), remindInThread(target, hours, mentioned));
   }
 
   return { dmed, mentioned };
 }
+
+/** This rung's label in the ledger. The person's id is appended for their DM. */
+function label(hours: number): string {
+  return `reminder-${hours}`;
+}
+
+/**
+ * What a settled DM records. A DM has no id worth keeping — Orrey will never go
+ * back to one — so the row remembers the *outcome*, which is the thing a retry
+ * needs to know.
+ */
+const SENT = "sent";
+const CLOSED = "closed";
