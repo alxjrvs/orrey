@@ -93,11 +93,23 @@ function campaignsTable(campaigns) {
   for (const campaign of campaigns) {
     const row = document.createElement("tr");
 
-    const name = cell(row, campaign.name);
+    const name = cell(row, "");
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "link";
+    open.textContent = campaign.name;
+    open.addEventListener("click", () => {
+      // Toggling rather than only opening: a second click on the name you just
+      // opened is the obvious way back out of a long page.
+      campaignState.selected = campaignState.selected === campaign.id ? null : campaign.id;
+      load();
+    });
+    name.append(open);
     const id = document.createElement("div");
     id.className = "muted";
     id.textContent = campaign.id;
     name.append(id);
+    if (campaignState.selected === campaign.id) row.setAttribute("aria-selected", "true");
 
     const state = cell(row, campaign.state);
     state.className = "state";
@@ -585,9 +597,9 @@ function dayLifecycleCell(row, day) {
         }),
       );
     });
-    td.append(button);
+    buttons.push(button);
   }
-  row.append(td);
+  return buttons;
 }
 
 /** What a campaign in this state may do next. The map that says so lives in
@@ -607,6 +619,19 @@ const NEXT = {
 
 function lifecycleCell(row, campaign) {
   const td = document.createElement("td");
+  td.append(...lifecycleButtons(campaign));
+  row.append(td);
+}
+
+/**
+ * The edges a campaign may take, as buttons.
+ *
+ * Split out of the cell so the campaign page offers exactly the same ones. Two
+ * places offering different transitions for one campaign is how a console grows
+ * a second, wrong copy of the lifecycle.
+ */
+function lifecycleButtons(campaign) {
+  const buttons = [];
   for (const [to, label] of NEXT[campaign.state] ?? []) {
     const button = document.createElement("button");
     button.type = "button";
@@ -702,6 +727,166 @@ async function act(work) {
   }
 }
 
+/** Which campaign's page is open, if any. None, until a name is clicked. */
+const campaignState = { selected: null };
+
+/**
+ * One campaign's plan.
+ *
+ * Where it is and where it may go, what it runs on, who is on it, and what is
+ * coming — and, when nothing is coming, the sentence saying which of several
+ * reasons that is. An empty table under a heading is the one thing this must
+ * never render.
+ */
+function campaignPageSection(plan) {
+  const section = document.createElement("section");
+  section.className = "campaign-page";
+
+  const title = document.createElement("h3");
+  title.textContent = plan.name;
+  const state = document.createElement("span");
+  state.className = "state";
+  state.dataset.state = plan.state;
+  state.textContent = plan.state;
+  title.append(" ", state);
+  section.append(title);
+
+  const actions = document.createElement("p");
+  actions.append(...lifecycleButtons(plan));
+  if (actions.childElementCount > 0) section.append(actions);
+
+  section.append(campaignFacts(plan), subheading("Roster"), memberList(plan.roster));
+  section.append(subheading("Coming up"));
+
+  if (plan.upcoming.length === 0) {
+    const note = document.createElement("p");
+    note.className = "note";
+    note.textContent = plan.upcomingNote;
+    section.append(note);
+  } else {
+    section.append(upcomingTable(plan.upcoming));
+  }
+
+  return section;
+}
+
+function campaignFacts(plan) {
+  const list = document.createElement("dl");
+  list.className = "facts";
+  const facts = [
+    ["Game", text(plan.gameName ?? plan.gameId)],
+    ["Cadence", cadence({ intervalWeeks: plan.cadence.intervalWeeks, recurrenceAnchor: plan.cadence.anchor })],
+    ["Quorum", text(plan.quorum)],
+    ["Capacity", text(plan.capacity)],
+    ["Sessions left", plan.maxSessions === null ? "open-ended" : String(plan.remaining)],
+    ["Numbering from", String(plan.firstSessionNumber)],
+  ];
+  for (const [label, value] of facts) {
+    const term = document.createElement("dt");
+    term.textContent = label;
+    const said = document.createElement("dd");
+    said.textContent = value;
+    list.append(term, said);
+  }
+  if (plan.channelUrl) {
+    const term = document.createElement("dt");
+    term.textContent = "Channel";
+    const said = document.createElement("dd");
+    const link = document.createElement("a");
+    link.href = plan.channelUrl;
+    link.rel = "noreferrer";
+    link.target = "_blank";
+    link.textContent = "Open in Discord";
+    said.append(link);
+    list.append(term, said);
+  }
+  return list;
+}
+
+/**
+ * Who is on it.
+ *
+ * Not `rosterList`: that one is a *session's* roster and its second column is
+ * what each person said about that session. A campaign's roster has no intent to
+ * show, and reusing the shape would print "not heard from" beside people who
+ * were never asked anything.
+ */
+function memberList(roster) {
+  if (roster.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "note";
+    empty.textContent = "Nobody on it yet.";
+    return empty;
+  }
+  const list = document.createElement("dl");
+  list.className = "roster";
+  for (const member of roster) {
+    const name = document.createElement("dt");
+    name.textContent = member.name;
+    const said = document.createElement("dd");
+    // Null role means a claimant: nobody is GM of a campaign that has not started.
+    said.textContent = [member.role ?? "claimed a place", member.characterName]
+      .filter(Boolean)
+      .join(" · ");
+    list.append(name, said);
+  }
+  return list;
+}
+
+function upcomingTable(rows) {
+  const table = document.createElement("table");
+  const head = document.createElement("tr");
+  for (const label of ["When", "Session", "Responses", "Status", "Calendar"]) {
+    const th = document.createElement("th");
+    th.textContent = label;
+    head.append(th);
+  }
+  const thead = document.createElement("thead");
+  thead.append(head);
+  table.append(thead);
+
+  const body = document.createElement("tbody");
+  for (const row of rows) {
+    const tr = document.createElement("tr");
+    tr.tabIndex = 0;
+    // The rail is the one place a session is read in full, wherever it was
+    // clicked from.
+    tr.addEventListener("click", () => {
+      agendaState.selected = row.sessionId;
+      load();
+    });
+
+    // The day label comes from the server, in the guild's zone: two people in
+    // two zones must not see a session fall on different days.
+    cell(tr, `${row.dayLabel}, ${time(row.startsAt)}`);
+    const title = cell(tr, row.title);
+    const sub = document.createElement("div");
+    sub.className = "muted";
+    sub.textContent = text(row.location);
+    title.append(sub);
+
+    tr.append(quorumMeter(row));
+
+    const state = cell(tr, row.state);
+    state.className = "state";
+    state.dataset.state = row.state;
+
+    const sync = document.createElement("td");
+    sync.append(syncLog(row.sync));
+    tr.append(sync);
+
+    body.append(tr);
+  }
+  table.append(body);
+  return table;
+}
+
+function subheading(label) {
+  const h = document.createElement("h4");
+  h.textContent = label;
+  return h;
+}
+
 function heading(label) {
   const h = document.createElement("h2");
   h.textContent = label;
@@ -725,12 +910,21 @@ async function load() {
       ? await api(`/api/sessions/${encodeURIComponent(agendaState.selected)}`).catch(() => null)
       : null;
 
+    // Likewise the campaign page: the summaries table needs none of it, and a
+    // campaign nobody has opened is a query nobody has asked for.
+    const plan = campaignState.selected
+      ? await api(`/api/campaigns/${encodeURIComponent(campaignState.selected)}/page`).catch(
+          () => null,
+        )
+      : null;
+
     who.textContent = `signed in as ${me.userId}`;
     const split = document.createElement("div");
     split.className = "split";
     split.append(agendaSection(agenda), detailRail(detail));
     main.replaceChildren(split);
     main.append(heading("Campaigns"), campaignsTable(campaigns));
+    if (plan) main.append(campaignPageSection(plan.campaign));
     main.append(heading("Game days"), gameDaysTable(gameDays));
     main.append(heading("Games"), gamesTable(games), createForm());
   } catch (error) {
