@@ -2,6 +2,7 @@ import { and, count, eq, isNotNull, sql } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
 import { SETTING_DEFAULTS, SETTING_KEYS, settingOr } from "../db/settings.ts";
+import { armJeopardyCheck } from "../attendance/jeopardy.ts";
 import { enforceEventCap } from "./event-cap.ts";
 import { occurrencesFrom } from "./recurrence.ts";
 import { remainingSessions } from "./roster.ts";
@@ -180,6 +181,11 @@ async function armJobs(
       },
     ])
     .onConflictDoNothing();
+
+  // And the question this phase is named after, a day before it matters. Armed
+  // separately because it is the one job whose time moves when the session does,
+  // so it upserts its `run_at` rather than being written once and forgotten.
+  await armJeopardyCheck(env, sessionId, startsAt);
 }
 
 function sessionCount(env: Env, campaignId: string): Promise<number> {

@@ -119,3 +119,32 @@ export function isExhausted(
 ): boolean {
   return remainingSessions(campaign, materialised) === 0;
 }
+
+/**
+ * Whoever is running it. The first `gm` on the roster, or nobody — a campaign
+ * can be entered without one, and a notice that invents a name is worse than one
+ * that says "whoever is running it".
+ *
+ * It lives here, below both of phase 3's forks, because both of them want it:
+ * the jeopardy notice names the GM, and the correction post is theirs alone.
+ */
+export async function gmOf(env: Env, campaignId: string): Promise<string | undefined> {
+  const row = await db(env)
+    .select({ userId: schema.campaignMembers.userId })
+    .from(schema.campaignMembers)
+    .where(
+      and(
+        eq(schema.campaignMembers.campaignId, campaignId),
+        eq(schema.campaignMembers.role, "gm"),
+      ),
+    )
+    .orderBy(asc(schema.campaignMembers.joinedAt))
+    .get();
+
+  return row?.userId;
+}
+
+/** Whether this person is the one who decides for this campaign. */
+export async function isGm(env: Env, campaignId: string, userId: string): Promise<boolean> {
+  return (await gmOf(env, campaignId)) === userId;
+}

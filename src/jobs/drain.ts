@@ -6,6 +6,7 @@ import { surfacesFor } from "../campaigns/event-cap.ts";
 import { postAttendancePost } from "../attendance/post.ts";
 import { startSessionThread } from "../attendance/thread.ts";
 import { postNoticeOnce } from "../attendance/notice.ts";
+import { checkJeopardy } from "../attendance/jeopardy.ts";
 import { confirmedNotice } from "../attendance/render.ts";
 import { loadProjectionTarget } from "../projection/target.ts";
 
@@ -108,8 +109,25 @@ async function runJob(job: typeof schema.jobs.$inferSelect, env: Env): Promise<v
       return;
     }
 
-    // reminder.t-48h, reminder.t-24h, jeopardy.check, attendance.assume,
-    // poll.close, horizon.extend — each added in the phase that needs it.
+    /**
+     * A day out: does it still run. It writes `sessions.state` and nothing else
+     * — no notice here, and no cancellation ever. When the answer is no the
+     * response is a date poll, which is phase 4's, so this marks the session and
+     * leaves the deciding to people.
+     */
+    case "jeopardy.check": {
+      const { sessionId } = job.payload as { sessionId?: string };
+      if (!sessionId) throw new Error(`jeopardy.check job ${job.id} has no sessionId`);
+
+      const target = await loadProjectionTarget(env, sessionId);
+      if (!target) return;
+
+      await checkJeopardy(env, target);
+      return;
+    }
+
+    // reminder.t-48h, reminder.t-24h, attendance.assume, poll.close,
+    // horizon.extend — each added in the phase that needs it.
     default:
       throw new Error(`unknown job kind: ${job.kind}`);
   }
