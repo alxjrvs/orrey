@@ -201,3 +201,29 @@ export function renderOverride(view: PollView, proposed: string[]): MessagePaylo
     allowed_mentions: { parse: [], roles: [] },
   };
 }
+
+/**
+ * The notice that goes up when answering closes.
+ *
+ * A **new message** in the poll's channel, not an edit of the poll post: there
+ * is nothing to edit under send-only, and no code path here that could. It says
+ * where the tallies landed and asks the organiser to canonise, because the poll
+ * post itself cannot be disarmed and cannot say so.
+ */
+export function pollClosedNotice(view: PollView): MessagePayload {
+  const { poll, dates } = view;
+  const best = Math.max(0, ...dates.map((date) => date.yes));
+
+  return {
+    content: [
+      `**Answers are in.**${poll.title ? ` ${escapeMarkdown(poll.title)}` : ""}`,
+      ...dates.map((date) => tally(date, view.rosterSize)),
+      "",
+      best > 0
+        ? "Canonise on the poll above to settle it."
+        : "Nobody could make any of these. Canonise on the poll above to close it, or leave it open.",
+    ].join("\n"),
+    components: [],
+    allowed_mentions: { parse: [], roles: [] },
+  };
+}
