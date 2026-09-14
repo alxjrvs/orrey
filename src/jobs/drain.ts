@@ -8,6 +8,10 @@ import { startSessionThread } from "../attendance/thread.ts";
 import { postNoticeOnce } from "../attendance/notice.ts";
 import { checkJeopardy } from "../attendance/jeopardy.ts";
 import { assumeAttendance } from "../attendance/assume.ts";
+import { sendReminder } from "../attendance/reminders.ts";
+import { gmOf } from "../campaigns/roster.ts";
+import { attendanceRows } from "../attendance/rows.ts";
+import { jeopardyNotice } from "../attendance/render.ts";
 import { confirmedNotice } from "../attendance/render.ts";
 import { loadProjectionTarget } from "../projection/target.ts";
 
@@ -123,7 +127,27 @@ async function runJob(job: typeof schema.jobs.$inferSelect, env: Env): Promise<v
       const target = await loadProjectionTarget(env, sessionId);
       if (!target) return;
 
-      await checkJeopardy(env, target);
+      const outcome = await checkJeopardy(env, target);
+      // Only the session that actually fell short gets a notice. The other three
+      // outcomes are "nothing to say", and a notice asking whether a confirmed
+      // session is happening is worse than silence.
+      if (outcome !== "in-jeopardy") return;
+
+      const required = target.campaign?.quorum;
+      if (required == null) return;
+
+      await postNoticeOnce(
+        env,
+        target,
+        "jeopardy",
+        jeopardyNotice({
+          target,
+          rows: await attendanceRows(env, sessionId),
+          gmId: target.campaign ? await gmOf(env, target.campaign.id) : undefined,
+          required,
+          asOf: new Date(),
+        }),
+      );
       return;
     }
 
@@ -143,8 +167,23 @@ async function runJob(job: typeof schema.jobs.$inferSelect, env: Env): Promise<v
       return;
     }
 
-    // reminder.t-48h, reminder.t-24h, poll.close, horizon.extend — each added
-    // in the phase that needs it.
+    /**
+     * One rung of the ladder. A DM to everybody who has not answered, and one
+     * shared message in the thread for everybody whose DMs are shut.
+     */
+    case "reminder.step": {
+      const { sessionId, hours } = job.payload as { sessionId?: string; hours?: number };
+      if (!sessionId) throw new Error(`reminder.step job ${job.id} has no sessionId`);
+      if (hours === undefined) throw new Error(`reminder.step job ${job.id} has no hours`);
+
+      const target = await loadProjectionTarget(env, sessionId);
+      if (!target) return;
+
+      await sendReminder(env, target, hours);
+      return;
+    }
+
+    // poll.close, horizon.extend — each added in the phase that needs it.
     default:
       throw new Error(`unknown job kind: ${job.kind}`);
   }

@@ -31,7 +31,12 @@ export interface AttendanceView {
 export interface MessagePayload {
   content: string;
   components: Record<string, unknown>[];
-  allowed_mentions: { parse: never[]; roles: string[] };
+  /**
+   * `parse: []` is the important half: it turns off @everyone, @here and every
+   * role mention Orrey did not name on purpose. `roles` and `users` are then the
+   * exhaustive list of what may actually fire.
+   */
+  allowed_mentions: { parse: never[]; roles: string[]; users?: string[] };
 }
 
 export function renderAttendancePost({ target, rows, asOf }: AttendanceView): MessagePayload {
@@ -196,4 +201,128 @@ export function confirmedNotice(target: ProjectionTarget): MessagePayload {
     components: [],
     allowed_mentions: { parse: [], roles: campaign?.discordRoleId ? [campaign.discordRoleId] : [] },
   };
+}
+
+/**
+ * The jeopardy notice. A new message in the thread, with its own as-of line,
+ * posted when the clock found the session short a day out.
+ *
+ * It names who has not answered, because "we are two short" is a fact nobody can
+ * act on and "we are two short and it is these three who have not said" is a
+ * fact three people can. It mentions the roster role so the people who can fix it
+ * see it, and it names the GM because the decision is theirs.
+ *
+ * Phase 4 gives it a *Suggest another day* button. Until then it says who to
+ * talk to, which is the honest version of the same thing.
+ */
+export function jeopardyNotice({
+  target,
+  rows,
+  gmId,
+  required,
+  asOf,
+}: {
+  target: ProjectionTarget;
+  rows: AttendanceRow[];
+  gmId: string | undefined;
+  required: number;
+  asOf: Date;
+}): MessagePayload {
+  const { session, campaign } = target;
+  const saidIn = rows.filter((row) => row.intent === "in").length;
+  const silent = rows.filter((row) => row.intent === null);
+
+  const lines = [
+    `**Is this one happening?** ${escapeMarkdown(sessionTitle(target))}`,
+    `<t:${session.startsAt}:F> — ${saidIn} of ${required} in.`,
+  ];
+
+  if (silent.length > 0) {
+    lines.push(
+      "",
+      `Not heard from: ${silent.map((row) => `<@${row.userId}>`).join(", ")}`,
+    );
+  }
+
+  lines.push(
+    "",
+    gmId
+      ? `<@${gmId}> decides whether it runs. Answering on the post above is what changes it.`
+      : "Whoever is running it decides. Answering on the post above is what changes it.",
+    `-# As of <t:${Math.floor(asOf.getTime() / 1000)}:R>.`,
+  );
+
+  return {
+    content: lines.join("\n"),
+    components: [],
+    // The roster, and the people named. Nothing else — a notice that could fire
+    // @everyone because somebody's display name looked like one is a notice
+    // nobody trusts.
+    allowed_mentions: {
+      parse: [],
+      roles: campaign?.discordRoleId ? [campaign.discordRoleId] : [],
+      // Deduplicated: a GM who has not answered is in both lists, and Discord
+      // caps this at 100 ids — a list that repeats people runs out sooner than
+      // the number of people in it suggests.
+      users: [...new Set([...silent.map((row) => row.userId), ...(gmId ? [gmId] : [])])],
+    },
+  };
+}
+
+/**
+ * The nudge, as a DM. It carries no buttons, because a DM is not the attendance
+ * post and every button in this repo sits on the thing it concerns — so it says
+ * where to answer instead, and the link takes them there.
+ */
+export function remindDm(target: ProjectionTarget, hours: number): MessagePayload {
+  const { session, campaign } = target;
+  const where =
+    campaign?.discordChannelId && session.discordMessageId
+      ? `https://discord.com/channels/${GUILD_PLACEHOLDER}/${session.threadId ?? campaign.discordChannelId}/${session.discordMessageId}`
+      : undefined;
+
+  return {
+    content: [
+      `**${escapeMarkdown(sessionTitle(target))}** — ${inWords(hours)}.`,
+      `<t:${session.startsAt}:F>. You have not said whether you are coming.`,
+      ...(where ? [where] : ["Answer on the attendance post."]),
+    ].join("\n"),
+    components: [],
+    allowed_mentions: { parse: [], roles: [] },
+  };
+}
+
+/**
+ * The same nudge for everybody Orrey could not DM, as one message in the thread.
+ * One message and not one each: the thread is shared, so three separate mentions
+ * of three people is three notifications for all of them.
+ */
+export function remindInThread(
+  target: ProjectionTarget,
+  hours: number,
+  userIds: string[],
+): MessagePayload {
+  return {
+    content: [
+      `${userIds.map((id) => `<@${id}>`).join(" ")} — ${inWords(hours)}.`,
+      `**${escapeMarkdown(sessionTitle(target))}**, <t:${target.session.startsAt}:F>.`,
+      "Answering on the post above is what changes it.",
+    ].join("\n"),
+    components: [],
+    allowed_mentions: { parse: [], roles: [], users: [...new Set(userIds)] },
+  };
+}
+
+/**
+ * Discord needs a guild id in a message link and the renderer is pure, so the
+ * link is built with a placeholder Discord accepts: `@me` resolves to whatever
+ * guild the channel is in when somebody clicks it.
+ */
+const GUILD_PLACEHOLDER = "@me";
+
+function inWords(hours: number): string {
+  if (hours >= 48) return `in ${Math.round(hours / 24)} days`;
+  if (hours >= 24) return "tomorrow";
+  if (hours === 1) return "in an hour";
+  return `in ${hours} hours`;
 }
