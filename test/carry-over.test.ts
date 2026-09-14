@@ -106,10 +106,16 @@ function click(arg: string, values?: string[]) {
   });
 }
 
+/**
+ * Canonise, pick, Apply — then the drain. Apply arms `poll.apply` in the same
+ * batch as the close rather than doing the move itself, so that a poll cannot
+ * end up closed with a move nothing can retry.
+ */
 async function canoniseWith(pollDateId: string) {
   await app.fetch(await click("canon"), discord.env(env));
   await app.fetch(await click("pick", [pollDateId]), discord.env(env));
   await app.fetch(await click("apply"), discord.env(env));
+  await drainJobs(env);
 }
 
 function register() {
@@ -243,6 +249,38 @@ describe("the fresh post", () => {
     await drainJobs(env);
 
     expect(calls.filter((call) => call.path === "/channels/chan-1/messages")).toEqual([]);
+    expect((await register()).find((row) => row.userId === "ada")?.intent).toBe("in");
+  });
+});
+
+describe("what a refused notice costs", () => {
+  it("does not lose the carry-over when the Moved notice fails", async () => {
+    await availableOn(dates[0]!, "ada");
+
+    let failed = false;
+    const inner = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(
+        typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+      );
+      if (!failed && url.pathname.includes("/messages")) {
+        failed = true;
+        return Response.json({ message: "boom" }, { status: 500 });
+      }
+      return inner(input as RequestInfo, init);
+    }) as typeof fetch;
+
+    await app.fetch(await click("canon"), discord.env(env));
+    await app.fetch(await click("pick", [dates[0]!]), discord.env(env));
+    await app.fetch(await click("apply"), discord.env(env));
+    await drainJobs(env);
+
+    // Before this, Apply closed the poll and *then* moved — and its own guard
+    // refuses a closed poll, so a refusal here lost the move, the re-projection
+    // and every answer's carry-over for good. Now the drain owns it.
+    await db(env).update(schema.jobs).set({ state: "pending", attempts: 0 });
+    await drainJobs(env);
+
     expect((await register()).find((row) => row.userId === "ada")?.intent).toBe("in");
   });
 });
