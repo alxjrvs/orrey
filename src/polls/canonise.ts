@@ -1,4 +1,4 @@
-import { eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
 import { SETTING_KEYS, getSetting } from "../db/settings.ts";
@@ -169,10 +169,14 @@ export async function applyOutcomes(
   // poll's date as won.
   const won = [...new Set(wonIds)].filter((id) => ids.includes(id));
 
+  // Guarded on the status this read saw, as well as being serialised by
+  // `PollLock`. The lock is what makes the check and the write one unit; this is
+  // what stops a caller that reaches `applyOutcomes` without going through it
+  // from closing a poll twice.
   const closed = d
     .update(schema.datePolls)
     .set({ status: "closed", updatedAt: sql`(unixepoch())` })
-    .where(eq(schema.datePolls.id, pollId));
+    .where(and(eq(schema.datePolls.id, pollId), eq(schema.datePolls.status, "open")));
 
   // Everything that did not win, loses. Written as one statement over the ids
   // this poll actually has, so it cannot reach a date belonging to another.
