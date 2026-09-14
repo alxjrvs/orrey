@@ -338,6 +338,53 @@ export const attendance = sqliteTable(
 );
 
 /**
+ * What was written down about a session after it was played.
+ *
+ * Exactly the four columns #46 names, and **no `kind`**. In this phase a recap
+ * is the only thing that writes here; the day a reschedule notice wants to be
+ * logged too is the day that column is worth arguing about, and adding it now
+ * would be schema ahead of the phase that reads it.
+ *
+ * The index is `(session_id, created_at)` because every read is "this session's
+ * log, oldest first" and there is no other question to ask of it.
+ */
+export const sessionLogs = sqliteTable(
+  "session_logs",
+  {
+    /**
+     * Monotonic, and that is the point rather than a detail.
+     *
+     * `created_at` is `unixepoch()` seconds like every other timestamp in this
+     * file, so two recaps written in the same second are indistinguishable by
+     * it — and a log is the one table where the order things were written *is*
+     * the content. Every other id here is a slug or a UUID; neither sorts by
+     * write order, and `ORDER BY created_at, id` over a UUID returns a stable
+     * arbitrary order rather than the right one.
+     *
+     * So this is the one integer key in the schema. It is declared and ordered
+     * on explicitly — the thing to avoid is leaning on an *implicit* rowid,
+     * which is what an `ORDER BY` with no tie-break would be doing.
+     */
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    /**
+     * Who wrote it. Cascades, and is counted on the delete-my-data receipt: a
+     * recap is somebody's own words about an evening, not a fact about the
+     * campaign the way an `audit_log` row is, so forgetting the person means
+     * removing it rather than anonymising it.
+     */
+    author: text("author")
+      .notNull()
+      .references(() => users.discordId, { onDelete: "cascade" }),
+    body: text("body").notNull(),
+    createdAt: integer("created_at").notNull().default(now),
+  },
+  (t) => [index("session_logs_session_idx").on(t.sessionId, t.createdAt)],
+);
+
+/**
  * One Google event per session, at an id Orrey mints rather than discovers
  * (`src/google/event-id.ts`) — so an upsert is `insert`, and on 409 `update`.
  * The fingerprint is what makes the write skippable, and what phase 7 compares
