@@ -389,10 +389,17 @@ async function handlePoll(
   if (!answer.ok) {
     // Refusal is ephemeral and rewrites nothing. A player clicking Canonise on a
     // post the whole server can see must not change what everybody else is
-    // looking at.
-    return answer.reason === "refused"
-      ? ephemeral("Only the person who opened this poll, or an organiser, can close it.")
-      : retiredPost();
+    // looking at — and the same goes for a late answer: the post stays as it is.
+    switch (answer.reason) {
+      case "refused":
+        return ephemeral("Only the person who opened this poll, or an organiser, can close it.");
+      case "closed":
+        return ephemeral(
+          "This poll has closed — it is not taking answers any more. Ask whoever opened it.",
+        );
+      default:
+        return retiredPost();
+    }
   }
 
   return { type: InteractionResponseType.UPDATE_MESSAGE, data: answer.payload };
