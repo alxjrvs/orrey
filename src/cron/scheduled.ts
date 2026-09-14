@@ -1,5 +1,6 @@
 import type { Env } from "../env.ts";
 import { drainJobs } from "../jobs/drain.ts";
+import { materialiseHorizon } from "../campaigns/materialise.ts";
 
 /**
  * The clock. One cron expression, every minute, and the four logical schedules
@@ -28,7 +29,10 @@ export async function handleScheduled(event: ScheduledController, env: Env): Pro
         break;
 
       case "horizon":
-        // Materialise the horizon: at most two upcoming Discord events per campaign.
+        // Every RUNNING campaign with a cadence, out to the horizon. It inserts
+        // and never updates, and the ids are derived, so running it twice in an
+        // hour is free and running it after an outage catches up by itself.
+        await materialiseHorizon(env, new Date(event.scheduledTime));
         break;
 
       case "watch-renew":
