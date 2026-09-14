@@ -219,8 +219,20 @@ export const sessions = sqliteTable(
     endsAt: integer("ends_at").notNull(),
     /** Free text for an EXTERNAL event; ignored for a VOICE one. */
     location: text("location"),
+    /**
+     * `LOCKED` joins the five in phase 6, and it costs **no migration**: this
+     * column carries no CHECK — `sessions_parent_ck` is about `kind` and
+     * `campaign_id` — so the set of words it holds is a TypeScript fact, the
+     * same way `signups.state` was when phase 5 widened it.
+     *
+     * It means the table has stopped moving: intent changes are refused, the
+     * jeopardy check no longer treats it as waiting, and a click cannot confirm
+     * it. It is not terminal — `attendance.assume` still plays it — and nothing
+     * unlocks, for the reason a locked game day does not: a table that can be
+     * un-stopped by a click never really stopped.
+     */
     state: text("state", {
-      enum: ["SCHEDULED", "CONFIRMED", "JEOPARDY", "CANCELLED", "PLAYED"],
+      enum: ["SCHEDULED", "CONFIRMED", "JEOPARDY", "LOCKED", "CANCELLED", "PLAYED"],
     })
       .notNull()
       .default("SCHEDULED"),
