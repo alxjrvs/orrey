@@ -31,6 +31,8 @@ import { InvalidSetting, putSetting, settingsView } from "../console/settings.ts
 import { auditActors, auditPage } from "../console/audit.ts";
 import { agendaBetween, windowAround } from "../console/agenda.ts";
 import { sessionDetail } from "../console/session-detail.ts";
+import { storedWatch } from "../google/watch.ts";
+import { armSync } from "../google/sync.ts";
 import { cancelSession, lockSession } from "../sessions/lifecycle.ts";
 import { SETTING_DEFAULTS, SETTING_KEYS, settingOr } from "../db/settings.ts";
 import { openPollFromConsole } from "../console/polls.ts";
@@ -582,6 +584,41 @@ export function createApp() {
   app.delete("/me", (c) =>
     c.json({ error: "Run /console in Discord and choose “Delete my data”." }, 405),
   );
+
+  /**
+   * Google's push. **Above the asset fallback**, or it would be a 404 served
+   * from `public/`.
+   *
+   * The body is never read. Google's push has none, and the day it does it is
+   * still a signal rather than data: what changed is whatever the list call
+   * says changed, never whatever arrived in a request anybody can send.
+   *
+   * A push that does not match the stored channel is **404, not 401**. A 401
+   * confirms the channel exists to whoever guessed the URL, and the channel id
+   * and token are the only things standing between a stranger and the ability
+   * to make Orrey call Google.
+   *
+   * Nothing here reaches Google. A flood of pushes costs one D1 insert each and
+   * cannot become a flood of API calls — the insert collapses by minute, so a
+   * single drag in Google, which produces a burst, becomes one sync.
+   */
+  app.post("/google/notifications", async (c) => {
+    const channelId = c.req.header("x-goog-channel-id");
+    const token = c.req.header("x-goog-channel-token");
+    const watch = await storedWatch(c.env);
+
+    if (!watch || !channelId || channelId !== watch.channelId || token !== watch.token) {
+      return c.body(null, 404);
+    }
+
+    // The handshake Google sends when a channel opens. Acked and ignored: there
+    // is nothing to sync yet, and syncing on it would list the whole calendar
+    // every time a channel is renewed.
+    if (c.req.header("x-goog-resource-state") === "sync") return c.body(null, 200);
+
+    await armSync(c.env);
+    return c.body(null, 200);
+  });
 
   // Console SPA and anything else static.
   app.all("*", (c) => c.env.ASSETS.fetch(c.req.raw));
