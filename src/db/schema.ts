@@ -166,6 +166,14 @@ export const campaigns = sqliteTable(
     state: text("state", { enum: ["FORMING", "RUNNING", "HIATUS", "CONCLUDED"] })
       .notNull()
       .default("FORMING"),
+    /**
+     * Whether a date poll for this campaign may close itself.
+     *
+     * Off by default, and read live rather than copied onto a poll when it
+     * opens: an organiser who turns it off expects the *next* click to respect
+     * that, not the next poll.
+     */
+    autoResolvePolls: integer("auto_resolve_polls").notNull().default(0),
     createdAt: integer("created_at").notNull().default(now),
     updatedAt: integer("updated_at").notNull().default(now),
   },
