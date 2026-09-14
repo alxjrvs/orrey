@@ -12,6 +12,7 @@ import { sendReminder } from "../attendance/reminders.ts";
 import { gmOf } from "../campaigns/roster.ts";
 import { attendanceRows } from "../attendance/rows.ts";
 import { confirmedNotice, correctionPost, jeopardyNotice } from "../attendance/render.ts";
+import { isMultiDaySession } from "../attendance/tables.ts";
 import { announceGameDay, postCloseNotice, postPollPost } from "../polls/post.ts";
 import { APPLY_JOB, applyFollowUp } from "../polls/canonise.ts";
 import { loadProjectionTarget } from "../projection/target.ts";
@@ -175,7 +176,12 @@ async function runJob(job: typeof schema.jobs.$inferSelect, env: Env): Promise<v
         env,
         target,
         "correction",
-        correctionPost(target, await registerRows(env, sessionId), new Date()),
+        correctionPost(target, await registerRows(env, sessionId), new Date(), {
+          // The button is a multi day's alone. A campaign session and a single
+          // day both play one thing, and asking what somebody played would be a
+          // question with one answer.
+          multiDay: await isMultiDaySession(env, sessionId),
+        }),
       );
       return;
     }
