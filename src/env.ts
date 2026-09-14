@@ -13,6 +13,14 @@ export interface Env {
 
   // Vars
   ENVIRONMENT: "development" | "production";
+  /**
+   * Where Google should push to.
+   *
+   * A request can be asked for its own origin; the cron cannot — it has no
+   * request — and the cron is what opens and renews the channel. So the public
+   * hostname is configuration rather than something derived at the callsite.
+   */
+  PUBLIC_ORIGIN: string;
 
   // Secrets
   DISCORD_APPLICATION_ID: string;
