@@ -31,6 +31,10 @@ async function person(id: string) {
 }
 
 async function seed({ optedIn }: { optedIn: boolean }, over: Partial<typeof schema.datePolls.$inferInsert> = {}) {
+  await db(env)
+    .insert(schema.games)
+    .values({ id: "blades", name: "Blades in the Dark", minPlayers: 3, maxPlayers: 6 })
+    .onConflictDoNothing();
   await db(env).insert(schema.campaigns).values({
     id: "umbra",
     name: "Age of Umbra",
@@ -54,6 +58,12 @@ async function seed({ optedIn }: { optedIn: boolean }, over: Partial<typeof sche
     openedBy: GM,
     winRule: "min_players",
     winThreshold: 2,
+    // An untargeted poll names its game and its kind, because `openPoll`
+    // refuses one that does not — `needs-game`, `needs-kind`. A fixture
+    // without them is a row the product cannot produce, and it made this
+    // file the only exercise of the mint path.
+    gameId: "blades",
+    gameDayKind: "single" as const,
     ...over,
   });
 
