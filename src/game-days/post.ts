@@ -49,6 +49,12 @@ export async function postSignupPost(env: Env, gameDayId: string): Promise<strin
   const day = await dayOf(env, gameDayId);
   if (!day) return undefined;
   if (day.day.discordMessageId) return day.day.discordMessageId;
+  // The day stopped seating while this job waited its turn — the drain takes 25
+  // a tick and a refused attempt backs off an attempt at a time. Under send-only
+  // a post that goes up cannot be taken down, so a day nobody is running never
+  // gets one. This is before the channel resolution that throws, so a called-off
+  // day with no channel stops rather than retrying for ever.
+  if (day.day.state !== "SEATING") return undefined;
 
   const channelId =
     day.day.discordChannelId ??
