@@ -180,7 +180,7 @@ describe("claiming a place", () => {
     const [user] = await people(1);
     await claimSeat(env, id, user!);
 
-    await claimSeat(env, id, user!, "Arquebus");
+    await claimSeat(env, id, user!, { characterName: "Arquebus" });
 
     expect((await rowOf(id, user!))?.characterName).toBe("Arquebus");
   });
