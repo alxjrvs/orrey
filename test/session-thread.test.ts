@@ -172,3 +172,17 @@ describe("the post job", () => {
     });
   });
 });
+
+describe("the name's date", () => {
+  it("is the guild's day, not the server's", async () => {
+    // 23:30 UTC on 20 September is already the 21st in Auckland. A thread name
+    // is plain text — Discord renders no `<t:…>` in one — so this is one of the
+    // few places Orrey has to pick a zone, and the server's is the wrong one.
+    const late = { ...(await target()) };
+    late.session = { ...late.session, startsAt: Date.parse("2026-09-20T23:30:00Z") / 1000 };
+
+    expect(threadName(late, "Pacific/Auckland")).toContain("21 September");
+    expect(threadName(late, "Europe/London")).toContain("21 September");
+    expect(threadName(late, "America/New_York")).toContain("20 September");
+  });
+});
