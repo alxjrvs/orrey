@@ -50,8 +50,13 @@ export function decide({
      * the one that needs no roster at all: "four people and we play".
      */
     case "min_players": {
-      const required = threshold ?? 0;
-      return { rule, required, won: atOrAbove(tallies, required) };
+      // A rule that needs a number and was given none decides nothing, which is
+      // the same answer `quorum_of_roster` gives an empty roster. Falling back to
+      // zero made *every* date win — including ones nobody said they could make —
+      // and reported `required: 0` as though it were a real bar. A number
+      // computed from nothing is the failure this repo keeps refusing to ship.
+      if (threshold === null || threshold <= 0) return { rule, required: null, won: [] };
+      return { rule, required: threshold, won: atOrAbove(tallies, threshold) };
     }
 
     /**
