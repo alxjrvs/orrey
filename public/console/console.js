@@ -217,7 +217,10 @@ const DAY_NEXT = {
     ["SEATING", "Open seating"],
     ["CANCELLED", "Call it off"],
   ],
-  SEATING: [["CANCELLED", "Call it off"]],
+  SEATING: [
+    ["LOCKED", "Lock now"],
+    ["CANCELLED", "Call it off"],
+  ],
   LOCKED: [["CANCELLED", "Call it off"]],
   PLAYED: [],
   CANCELLED: [],
