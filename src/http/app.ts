@@ -18,6 +18,8 @@ import { sessionFrom } from "../console/session.ts";
 import { NotConfigured, isOrganiser } from "../console/roles.ts";
 import { readLoginToken } from "../console/link.ts";
 import { campaignSummaries, gameSummaries } from "../console/api.ts";
+import { InvalidCampaign, createCampaign, updateCampaign } from "../campaigns/write.ts";
+import { IllegalTransition, transition, type CampaignState } from "../campaigns/lifecycle.ts";
 
 export function createApp() {
   const app = new Hono<{ Bindings: Env; Variables: { userId: string } }>();
@@ -137,6 +139,35 @@ export function createApp() {
   app.get("/api/campaigns", async (c) => c.json({ campaigns: await campaignSummaries(c.env) }));
   app.get("/api/games", async (c) => c.json({ games: await gameSummaries(c.env) }));
 
+  /**
+   * The write half. Each route is a thin wrapper over the domain function that
+   * does the work — the console is a caller, not a second implementation, which
+   * is what keeps "every write lands in audit_log" true rather than hopeful.
+   */
+  app.post("/api/campaigns", async (c) =>
+    refusable(c, async () => {
+      const id = await createCampaign(c.env, await c.req.json(), c.get("userId"));
+      return c.json({ id }, 201);
+    }),
+  );
+
+  app.patch("/api/campaigns/:id", async (c) =>
+    refusable(c, async () => {
+      await updateCampaign(c.env, c.req.param("id"), await c.req.json(), c.get("userId"));
+      return c.json({ ok: true });
+    }),
+  );
+
+  app.post("/api/campaigns/:id/transition", async (c) =>
+    refusable(c, async () => {
+      const { to } = (await c.req.json()) as { to?: CampaignState };
+      if (!to) return c.json({ error: "which state?" }, 400);
+
+      const result = await transition(c.env, c.req.param("id"), to, c.get("userId"));
+      return c.json(result);
+    }),
+  );
+
   /** Logging out is forgetting the cookie. The token pair is dropped with it. */
   app.post("/console/logout", (c) => {
     c.header("set-cookie", clear(SESSION_COOKIE));
@@ -162,4 +193,24 @@ export function createApp() {
   app.all("*", (c) => c.env.ASSETS.fetch(c.req.raw));
 
   return app;
+}
+
+/**
+ * A refused write is a sentence, not a stack trace. `InvalidCampaign` and
+ * `IllegalTransition` are both the domain saying no to something a person asked
+ * for, so they are 400s carrying the reason — anything else is a fault and stays
+ * a 500, because a bug dressed up as a polite refusal is a bug nobody finds.
+ */
+async function refusable(
+  c: { json: (body: unknown, status?: 200 | 201 | 400) => Response },
+  work: () => Promise<Response>,
+): Promise<Response> {
+  try {
+    return await work();
+  } catch (error) {
+    if (error instanceof InvalidCampaign || error instanceof IllegalTransition) {
+      return c.json({ error: error.message }, 400);
+    }
+    throw error;
+  }
 }
