@@ -284,8 +284,6 @@ function agendaTable(rows) {
     tr.tabIndex = 0;
     if (agendaState.selected === row.sessionId) tr.setAttribute("aria-selected", "true");
     tr.addEventListener("click", () => {
-      // Nothing to select into until the detail rail lands. Rather than link to
-      // a page that does not exist, this marks the row and stops.
       agendaState.selected = row.sessionId;
       load();
     });
@@ -319,6 +317,109 @@ function time(seconds) {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+/**
+ * The detail rail.
+ *
+ * The design puts session detail in a 300px rail beside the list rather than on
+ * a page of its own, and the month grid will click through to the same one. It
+ * is read-only: the three writes are the slice above this.
+ *
+ * Projection state sits in it rather than behind a button, because it is
+ * ambient — a thing to glance at. A dead event link is expected rather than
+ * broken: a lapsed Discord event is replaced rather than revived, so the id
+ * going missing is the system working.
+ */
+function detailRail(detail) {
+  const rail = document.createElement("aside");
+  rail.className = "rail";
+
+  if (!detail) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = "Pick a session.";
+    rail.append(empty);
+    return rail;
+  }
+
+  const h2 = document.createElement("h2");
+  h2.textContent = detail.title;
+  rail.append(h2);
+
+  const when_ = document.createElement("p");
+  when_.className = "muted";
+  when_.textContent = [when(detail.startsAt), detail.location].filter(Boolean).join(" · ");
+  rail.append(when_);
+
+  const state = document.createElement("p");
+  state.className = "state";
+  state.dataset.state = detail.state;
+  state.textContent = detail.state;
+  rail.append(state);
+
+  const quorum = document.createElement("p");
+  quorum.className = "muted";
+  quorum.textContent =
+    detail.quorum.required === null
+      ? `${detail.quorum.saidIn} in`
+      : `${detail.quorum.saidIn} of ${detail.quorum.required} in`;
+  rail.append(quorum);
+
+  rail.append(rosterList(detail.roster), syncLog(detail.sync), railLinks(detail));
+  return rail;
+}
+
+/** Intent and attended side by side. No reply is its own answer, never "out". */
+function rosterList(roster) {
+  const list = document.createElement("dl");
+  list.className = "roster";
+  for (const row of roster) {
+    const name = document.createElement("dt");
+    name.textContent = row.name;
+    const said = document.createElement("dd");
+    said.dataset.intent = row.intent ?? "none";
+    said.textContent = [
+      row.intent ?? "not heard from",
+      row.attended === null ? null : row.attended ? "came" : "did not come",
+      row.corrected ? "(corrected)" : null,
+      row.note,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    list.append(name, said);
+  }
+  return list;
+}
+
+function syncLog(sync) {
+  const box = document.createElement("p");
+  box.className = "sync";
+  box.dataset.state = sync.state;
+  box.textContent =
+    sync.state === "not-projected"
+      ? "Not on the calendar yet."
+      : sync.state === "failing"
+        ? `Last sync failed: ${sync.lastError}`
+        : `Synced ${when(sync.syncedAt)}.`;
+  return box;
+}
+
+function railLinks(detail) {
+  const links = document.createElement("p");
+  for (const [label, href] of [
+    ["Thread", detail.threadUrl],
+    ["Event", detail.eventUrl],
+  ]) {
+    if (!href) continue;
+    const a = document.createElement("a");
+    a.href = href;
+    a.rel = "noreferrer";
+    a.target = "_blank";
+    a.textContent = label;
+    links.append(a, document.createTextNode(" "));
+  }
+  return links;
 }
 
 function agendaSection(agenda) {
@@ -617,8 +718,18 @@ async function load() {
       api("/api/game-days"),
     ]);
 
+    // The rail is a second read rather than part of the agenda's: one session's
+    // roster is not something the list needs, and asking for it per row would be
+    // a query per row.
+    const detail = agendaState.selected
+      ? await api(`/api/sessions/${encodeURIComponent(agendaState.selected)}`).catch(() => null)
+      : null;
+
     who.textContent = `signed in as ${me.userId}`;
-    main.replaceChildren(agendaSection(agenda));
+    const split = document.createElement("div");
+    split.className = "split";
+    split.append(agendaSection(agenda), detailRail(detail));
+    main.replaceChildren(split);
     main.append(heading("Campaigns"), campaignsTable(campaigns));
     main.append(heading("Game days"), gameDaysTable(gameDays));
     main.append(heading("Games"), gamesTable(games), createForm());

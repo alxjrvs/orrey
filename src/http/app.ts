@@ -19,6 +19,7 @@ import { NotConfigured, isOrganiser } from "../console/roles.ts";
 import { readLoginToken } from "../console/link.ts";
 import { campaignSummaries, gameDaySummaries, gameSummaries } from "../console/api.ts";
 import { agendaBetween, windowAround } from "../console/agenda.ts";
+import { sessionDetail } from "../console/session-detail.ts";
 import { SETTING_DEFAULTS, SETTING_KEYS, settingOr } from "../db/settings.ts";
 import { openPollFromConsole } from "../console/polls.ts";
 import { InvalidCampaign, createCampaign, updateCampaign } from "../campaigns/write.ts";
@@ -207,6 +208,16 @@ export function createApp() {
       return c.json({ ok: true });
     }),
   );
+
+  /**
+   * One session, for the rail beside the agenda. Read-only, and it calls nothing
+   * outward: the links are URLs assembled from ids and the sync state is what
+   * `calendar_links` says.
+   */
+  app.get("/api/sessions/:id", async (c) => {
+    const detail = await sessionDetail(c.env, c.req.param("id"));
+    return detail ? c.json(detail) : c.json({ error: "Orrey does not know that session." }, 404);
+  });
 
   app.get("/api/campaigns/:id/roster", async (c) =>
     c.json({ roster: await rosterRows(c.env, c.req.param("id")) }),
