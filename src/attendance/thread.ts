@@ -12,6 +12,7 @@ import { throughGovernor } from "../discord/governor.ts";
 import { isThreadAlreadyStarted, postMessage, startThreadFromMessage } from "../discord/rest.ts";
 import { claim, find, record, release } from "../projection/publications.ts";
 import { sessionTitle, type ProjectionTarget } from "../projection/target.ts";
+import type { MessagePayload } from "./render.ts";
 
 /**
  * A thread per session.
@@ -97,7 +98,7 @@ export async function startSessionThread(
 export async function postToSession(
   env: Env,
   target: ProjectionTarget,
-  payload: Record<string, unknown>,
+  payload: MessagePayload,
 ): Promise<string | undefined> {
   const destination = target.session.threadId ?? (await channelOf(env, target));
   if (!destination) return undefined;
@@ -128,6 +129,19 @@ export function threadName(target: ProjectionTarget, timeZone = "UTC"): string {
   // Discord's ceiling is 100 characters, and a truncated name is better than a
   // rejected creation.
   return `${title} — ${when}`.slice(0, 100);
+}
+
+/**
+ * Where a post about this session would go, without posting anything.
+ *
+ * Exported so a caller holding a claim can resolve the destination *before*
+ * taking it — see `postNoticeOnce`.
+ */
+export async function destinationFor(
+  env: Env,
+  target: ProjectionTarget,
+): Promise<string | undefined> {
+  return target.session.threadId ?? (await channelOf(env, target));
 }
 
 async function channelOf(env: Env, target: ProjectionTarget): Promise<string | undefined> {

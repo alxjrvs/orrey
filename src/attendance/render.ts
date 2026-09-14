@@ -177,3 +177,23 @@ export function escapeMarkdown(text: string): string {
 function unix(at: Date): number {
   return Math.floor(at.getTime() / 1000);
 }
+
+/**
+ * The confirmed notice. Short on purpose: the attendance post above it in the
+ * thread carries the detail, and this exists to put the answer in front of
+ * people who are not looking at a post they have already read.
+ *
+ * It carries no buttons. Every button in this repo sits on the thing it
+ * concerns, and the thing this concerns is the attendance post.
+ */
+export function confirmedNotice(target: ProjectionTarget): MessagePayload {
+  const { session, campaign } = target;
+  return {
+    content: [
+      `**It's on.** ${escapeMarkdown(sessionTitle(target))}`,
+      `<t:${session.startsAt}:F>${session.location ? ` — ${escapeMarkdown(session.location)}` : ""}`,
+    ].join("\n"),
+    components: [],
+    allowed_mentions: { parse: [], roles: campaign?.discordRoleId ? [campaign.discordRoleId] : [] },
+  };
+}
