@@ -5,7 +5,12 @@ import { db, schema } from "../src/db/index.ts";
 import { createApp } from "../src/http/app.ts";
 import { InteractionType } from "../src/discord/types.ts";
 import { fakeDiscord } from "./discord.ts";
-import { renderUpcoming, upcomingFor, type UpcomingEntry } from "../src/commands/upcoming.ts";
+import {
+  renderUpcoming,
+  upcomingFor,
+  upcomingWithTotal,
+  type UpcomingEntry,
+} from "../src/commands/upcoming.ts";
 
 /**
  * The agenda. One list across every campaign, read fresh, ephemeral — and the
@@ -35,13 +40,21 @@ async function member(campaignId: string, userId: string) {
   await db(env).insert(schema.campaignMembers).values({ campaignId, userId });
 }
 
+// `inDays` counts from `ASOF`, the frozen date the rest of this file hands to
+// `upcomingFor` and `renderUpcoming` so both sides agree. A test that goes
+// through `app.fetch` gets no such say — the route asks the real clock — so it
+// passes `REAL_NOW` and its session is upcoming today as well as on the day this
+// was written.
+const REAL_NOW = () => Math.floor(Date.now() / 1000);
+
 async function session(
   campaignId: string,
   number: number,
   inDays: number,
   state: "SCHEDULED" | "CONFIRMED" | "JEOPARDY" | "CANCELLED" | "PLAYED" = "SCHEDULED",
+  from: number = NOW,
 ) {
-  const startsAt = NOW + inDays * DAY;
+  const startsAt = from + inDays * DAY;
   await db(env).insert(schema.sessions).values({
     id: `${campaignId}-s${number}`,
     kind: "campaign_session",
@@ -214,7 +227,7 @@ describe("the command", () => {
   it("answers the caller ephemerally with their own agenda", async () => {
     await campaign("umbra", "Age of Umbra", 2);
     await member("umbra", "1001");
-    await session("umbra", 7, 4);
+    await session("umbra", 7, 4, "SCHEDULED", REAL_NOW());
 
     const res = await app.fetch(
       await discord.request({
@@ -251,7 +264,7 @@ describe("the command", () => {
   it("writes nothing — it is a read and an ephemeral answer", async () => {
     await campaign("umbra", "Age of Umbra");
     await member("umbra", "1001");
-    await session("umbra", 1, 2);
+    await session("umbra", 1, 2, "SCHEDULED", REAL_NOW());
 
     await app.fetch(
       await discord.request({
@@ -268,5 +281,32 @@ describe("the command", () => {
     expect(
       await db(env).select().from(schema.sessions).where(eq(schema.sessions.id, "umbra-s1")).get(),
     ).toMatchObject({ state: "SCHEDULED" });
+  });
+});
+
+describe("a list longer than the command shows", () => {
+  it("heads the answer with the real total, not the length of what it cut", async () => {
+    await campaign("umbra", "Age of Umbra");
+    await member("umbra", "ada");
+    for (let n = 1; n <= 14; n++) await session("umbra", n, n);
+
+    const { entries, total } = await upcomingWithTotal(env, "ada", ASOF);
+    const content = renderUpcoming(entries, ASOF, total);
+
+    // "10 sessions" over a list of ten when there are fourteen is a wrong answer
+    // to the question the command asks.
+    expect(entries).toHaveLength(10);
+    expect(total).toBe(14);
+    expect(content).toContain("**Upcoming — 14 sessions**");
+    expect(content).toContain("4 more beyond these");
+  });
+
+  it("says nothing about more when there is no more", async () => {
+    await campaign("umbra", "Age of Umbra");
+    await member("umbra", "ada");
+    await session("umbra", 1, 3);
+
+    const { entries, total } = await upcomingWithTotal(env, "ada", ASOF);
+    expect(renderUpcoming(entries, ASOF, total)).not.toContain("beyond these");
   });
 });

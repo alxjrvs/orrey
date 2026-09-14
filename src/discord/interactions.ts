@@ -6,7 +6,7 @@ import { registerRows } from "../attendance/assume.ts";
 import { isGm } from "../campaigns/roster.ts";
 import { loadProjectionTarget } from "../projection/target.ts";
 import { loginLink } from "../console/link.ts";
-import { renderUpcoming, upcomingFor } from "../commands/upcoming.ts";
+import { renderUpcoming, upcomingWithTotal } from "../commands/upcoming.ts";
 import type { SmokeTally } from "../do/session-lock.ts";
 import {
   ButtonStyle,
@@ -112,7 +112,8 @@ async function upcoming(interaction: Interaction, env: Env): Promise<Json> {
   if (!actor) return ephemeral("Orrey could not tell who asked.");
 
   const asOf = new Date();
-  return ephemeral(renderUpcoming(await upcomingFor(env, actor.id, asOf), asOf));
+  const { entries, total } = await upcomingWithTotal(env, actor.id, asOf);
+  return ephemeral(renderUpcoming(entries, asOf, total));
 }
 
 /**
