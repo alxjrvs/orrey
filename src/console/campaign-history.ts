@@ -1,6 +1,7 @@
 import { and, asc, desc, eq } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
+import { logsForCampaign, type SessionLogs } from "./logs.ts";
 import { ENOUGH, attendanceRate, flakeForRoster, hasHistory } from "../campaigns/flake.ts";
 
 /**
@@ -69,6 +70,11 @@ export interface CampaignHistory {
   sessions: PlayedSession[];
   members: MemberRecord[];
   /**
+   * The written record beside the counted one, grouped under the evening each
+   * entry belongs to. A recap without its session is a paragraph about nothing.
+   */
+  logs: SessionLogs[];
+  /**
    * Why there is nothing to show, in words. History starts empty, and a page
    * that renders a blank table and a column of zeroes instead of saying so is a
    * page that looks broken for the first couple of months.
@@ -89,7 +95,12 @@ export async function campaignHistory(env: Env, campaignId: string): Promise<Cam
     noShowStreak: flake.noShowStreak,
   }));
 
-  return { sessions, members, note: await noteFor(env, campaignId, sessions, members) };
+  return {
+    sessions,
+    members,
+    logs: await logsForCampaign(env, campaignId),
+    note: await noteFor(env, campaignId, sessions, members),
+  };
 }
 
 /**
