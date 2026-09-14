@@ -118,8 +118,23 @@ scheduled events only.
 `games` — name, min/max players, default duration in minutes — and the columns
 `campaigns` is missing: `game_id`, `recurrence_anchor`, `interval_weeks`,
 `quorum`, `capacity`, `max_sessions`, `first_session_number`.
-`src/db/schema.ts` plus the generated migration, which for SQLite is a table
-rebuild in the shape of `drizzle/0003_campaign_state_fails_closed.sql`.
+`src/db/schema.ts` plus the generated migration — seven `ALTER TABLE ADD COLUMN`
+and one `CREATE TABLE`, and **not** a table rebuild.
+
+This is where the plan met reality (`p2/3` is #77). The first version put a CHECK
+on `interval_weeks`, which made drizzle-kit rebuild `campaigns`: `PRAGMA
+foreign_keys=OFF`, copy, `DROP TABLE campaigns`, rename. In D1 that PRAGMA does
+nothing, so the drop fires `ON DELETE CASCADE` on everything referencing the
+table — the migration would have deleted every session, and `attendance` and
+`calendar_links` behind them, and reported success. Proved against the real D1:
+parent rebuilt, child went from one row to zero.
+
+So a referenced table grows only by `ALTER TABLE ADD COLUMN`, the interval rule
+moves to the code that writes the column (`src/campaigns/recurrence.ts` refuses
+it), and `games` keeps its CHECK because it is a new table with nothing pointing
+at it. `docs/GOTCHAS.md` carries this and the two other generator traps the stack
+turned up. `0003_campaign_state_fails_closed.sql`, already in `main`, has the
+same shape and wants checking against a copy of the remote database.
 
 #21's last bullet asks for lifecycle state; `campaigns.state` has carried it
 since `p1/1-schema`, defaulting to FORMING so that an insert which forgets to
@@ -130,9 +145,13 @@ guild's, already at `SETTING_KEYS.timezone`. `first_session_number` defaults to
 1 and exists because history starts empty — the four real campaigns continue
 Hermuz's numbering from a number entered by hand.
 
-*Tests*: the migration applies in the workerd pool with existing campaign rows
-intact; a CHECK rejects `interval_weeks` of zero or less; `games.min_players`
-may not exceed `max_players`; `first_session_number` defaults to 1.
+*Tests*: the migration applies in the workerd pool; an interval of zero is
+*accepted*, on purpose, so that if a future migration makes it throw somebody
+learns a rebuild crept back in; `games.min_players` may not exceed
+`max_players`; deleting a game keeps the campaign and its sessions;
+`first_session_number` defaults to 1; and SQLite hands back the string
+`not_a_column` for an unresolvable quoted name, which is the behaviour behind
+the third generator trap.
 
 *Review focus*: no column phase 2 does not read. `quorum` and `capacity` are
 here because #25's campaign form writes and shows them; nothing in phase 2 acts
@@ -178,10 +197,13 @@ RUNNING → FORMING is absent from the map, and that absence is the enforcement 
 all.
 
 Starting a campaign is what closes the roster: FORMING → RUNNING converts
-accepted `signups` into `campaign_members` in the same batch, and
-`signupComponents(campaign)` returns an empty array for anything that is not
-FORMING — so a post that outlives the transition has no buttons to offer, and
-`addSignup` refuses on the domain side as well.
+accepted `signups` into `campaign_members` in the same batch.
+
+`signupComponents` and `addSignup` were planned here and are **not** in `p2/5`
+(#79). Nothing in phase 2 renders a signup post, so both would have been dead
+code with tests pretending otherwise; the guard they were to provide is already
+structural, because only FORMING → RUNNING converts and there is no edge back to
+FORMING. They arrive with the surface that needs them, in phase 5.
 
 No signup *post* is rendered in phase 2. The four real campaigns are entered as
 RUNNING and skip stages 1 and 2 structurally; the forming-signup surface arrives
