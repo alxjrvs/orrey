@@ -344,25 +344,80 @@ export function correctionPost(
   const shown = register.slice(0, tables ? MAX_TOGGLES_WITH_TABLES : MAX_TOGGLES);
   const dropped = register.length - shown.length;
 
+  // The same three-pass ladder the attendance post and the signup post climb,
+  // and for the same reason: over two thousand characters is not a post that
+  // reads badly, it is a post Discord rejects — and `attendance.assume` would
+  // retry it into the identical 400 for ever. Twenty free-text lines of a
+  // hundred and forty characters each is three and a half thousand on their
+  // own, so this is reachable on any real games day.
+  //
+  // What is shed, in order: the free text somebody typed, then the list of
+  // names. The count and the toggles are what the post is for, and they survive
+  // every pass.
+  let content = correctionBody(target, shown, register, dropped, asOf, tables, {
+    tables: true,
+    names: true,
+  });
+  if (content.length > LIMIT) {
+    content = correctionBody(target, shown, register, dropped, asOf, tables, {
+      tables: false,
+      names: true,
+    });
+  }
+  if (content.length > LIMIT) {
+    content = correctionBody(target, shown, register, dropped, asOf, tables, {
+      tables: false,
+      names: false,
+    });
+  }
+
+  return {
+    content,
+    components: [
+      ...rowsOf(shown.map((row) => toggle(target.session.id, row))),
+      ...(tables ? [tablesRow(target.session.id)] : []),
+    ],
+    allowed_mentions: { parse: [], roles: [] },
+  };
+}
+
+function correctionBody(
+  target: ProjectionTarget,
+  shown: RegisterRow[],
+  register: RegisterRow[],
+  dropped: number,
+  asOf: Date,
+  tables: boolean,
+  detail: { tables: boolean; names: boolean },
+): string {
   const came = register.filter((row) => row.attended);
+  const names =
+    detail.names && came.length > 0
+      ? ` — ${came.map((row) => escapeMarkdown(row.name)).join(", ")}`
+      : "";
   const lines = [
     `**Who came?** ${escapeMarkdown(sessionTitle(target))}`,
-    `${came.length} of ${register.length}${came.length > 0 ? ` — ${came.map((row) => escapeMarkdown(row.name)).join(", ")}` : ""}`,
+    `${came.length} of ${register.length}${names}`,
     "",
     "Orrey guessed this from what people said. Tap anybody it got wrong.",
   ];
 
   // Somebody else's free text on a post Orrey can never edit, so it is escaped
   // exactly like a note is — a stray backtick would break this post's layout
-  // permanently.
-  const played = tables ? register.filter((row) => row.tablesPlayed) : [];
+  // permanently. Only the rows with a toggle on this post: a name in the block
+  // that has no button beside it is a correction nobody can make from here.
+  const played = tables ? shown.filter((row) => row.tablesPlayed) : [];
   if (played.length > 0) {
     lines.push(
       "",
       "**Tables**",
-      ...played.map(
-        (row) => `${escapeMarkdown(row.name)} — ${escapeMarkdown(row.tablesPlayed as string)}`,
-      ),
+      ...(detail.tables
+        ? played.map(
+            (row) => `${escapeMarkdown(row.name)} — ${escapeMarkdown(row.tablesPlayed as string)}`,
+          )
+        : // Shed rather than silently gone: the lines are on the register, and
+          // the console is where a post this long gets read anyway.
+          [`-# ${played.length} recorded — read them in the console.`]),
     );
   }
 
@@ -373,14 +428,7 @@ export function correctionPost(
   }
   lines.push(`-# As of <t:${Math.floor(asOf.getTime() / 1000)}:R>.`);
 
-  return {
-    content: lines.join("\n"),
-    components: [
-      ...rowsOf(shown.map((row) => toggle(target.session.id, row))),
-      ...(tables ? [tablesRow(target.session.id)] : []),
-    ],
-    allowed_mentions: { parse: [], roles: [] },
-  };
+  return lines.join("\n");
 }
 
 /**
@@ -405,6 +453,15 @@ export function tablesRow(sessionId: string): Record<string, unknown> {
         style: ButtonStyle.SECONDARY,
         label: "Tables played",
         custom_id: encodeCustomId({ action: "tables", target: sessionId }),
+      },
+      // What "it will be on the post on its next Refresh" refers to. Without it
+      // there is no next render of this post at all: the correction post has no
+      // other button that rewrites it, and send-only means nothing else can.
+      {
+        type: ComponentType.BUTTON,
+        style: ButtonStyle.SECONDARY,
+        label: "Refresh",
+        custom_id: encodeCustomId({ action: "correction", arg: "refresh", target: sessionId }),
       },
     ],
   };
