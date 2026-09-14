@@ -210,9 +210,15 @@ async function handleAttend(
       return retiredPost();
   }
 
+  // Re-read: the click may have been the one that crossed quorum, and the
+  // session it confirmed is the session this response has to render. Rendering
+  // the target we loaded a moment ago would show the crossing click everything
+  // except the thing it just did.
+  const settled = (await loadProjectionTarget(env, sessionId)) ?? target;
+
   return {
     type: InteractionResponseType.UPDATE_MESSAGE,
-    data: renderAttendancePost({ target, rows, asOf: new Date() }),
+    data: renderAttendancePost({ target: settled, rows, asOf: new Date() }),
   };
 }
 
@@ -273,10 +279,11 @@ async function handleModal(interaction: Interaction, env: Env): Promise<Json> {
 
   const lock = env.SESSION_LOCK.get(env.SESSION_LOCK.idFromName(id.target));
   const rows = await lock.setNote({ sessionId: id.target, actor, note });
+  const settled = (await loadProjectionTarget(env, id.target)) ?? target;
 
   return {
     type: InteractionResponseType.UPDATE_MESSAGE,
-    data: renderAttendancePost({ target, rows, asOf: new Date() }),
+    data: renderAttendancePost({ target: settled, rows, asOf: new Date() }),
   };
 }
 

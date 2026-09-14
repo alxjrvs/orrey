@@ -4,6 +4,8 @@ import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
 import { rememberUser } from "../db/users.ts";
 import { attendanceRows } from "../attendance/rows.ts";
+import { crossesThreshold, quorumOf } from "../attendance/quorum.ts";
+import { loadProjectionTarget } from "../projection/target.ts";
 import type { AttendanceRow } from "../attendance/render.ts";
 import type { InteractionUser } from "../discord/types.ts";
 
@@ -40,7 +42,7 @@ export class SessionLock extends DurableObject<Env> {
           set: { intent, updatedAt: sql`(unixepoch())` },
         });
 
-      return attendanceRows(this.env, sessionId);
+      return this.settle(sessionId);
     });
   }
 
@@ -70,7 +72,7 @@ export class SessionLock extends DurableObject<Env> {
           set: { note: cleaned },
         });
 
-      return attendanceRows(this.env, sessionId);
+      return this.settle(sessionId);
     });
   }
 
@@ -79,7 +81,35 @@ export class SessionLock extends DurableObject<Env> {
    * clicks reads a settled state rather than a half-written one.
    */
   async readIntents(sessionId: string): Promise<AttendanceRow[]> {
-    return this.serialise(() => attendanceRows(this.env, sessionId));
+    return this.serialise(() => this.settle(sessionId));
+  }
+
+  /**
+   * Read the rows back, and confirm the session if this click is the one that
+   * crossed the threshold.
+   *
+   * It happens here, inside the lock, because that is the only place where "the
+   * count after my write" is a real number rather than a guess — six people
+   * clicking In at once must produce one crossing, not six.
+   *
+   * Dropping back below afterwards does **not** un-confirm. #28 is explicit:
+   * whether a confirmed session is still on once somebody drops out is the
+   * organiser's call, so the post says what happened and Orrey decides nothing.
+   */
+  private async settle(sessionId: string): Promise<AttendanceRow[]> {
+    const rows = await attendanceRows(this.env, sessionId);
+
+    const target = await loadProjectionTarget(this.env, sessionId);
+    if (!target) return rows;
+
+    if (crossesThreshold(quorumOf(target, rows), target)) {
+      await db(this.env)
+        .update(schema.sessions)
+        .set({ state: "CONFIRMED", updatedAt: sql`(unixepoch())` })
+        .where(eq(schema.sessions.id, sessionId));
+    }
+
+    return rows;
   }
 
   /**
