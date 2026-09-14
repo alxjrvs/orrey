@@ -194,13 +194,47 @@ describe("the opt-in", () => {
 
 describe("the rule", () => {
   it("waits when the rule proposes more than one date", async () => {
-    await seed({ optedIn: true }, { winRule: "best_available", winThreshold: null });
+    await seed({ optedIn: true }, { winThreshold: 1 });
 
     await app.fetch(await select(GM, [dates[0]!, dates[1]!]), discord.env(env));
 
     // A single click cannot be said to have chosen between a tie. That is the
     // organiser's.
     expect(await pollRow()).toMatchObject({ status: "open" });
+  });
+
+  it("never acts on best_available, whatever the GM ticks", async () => {
+    await seed({ optedIn: true }, { winRule: "best_available", winThreshold: null });
+
+    await app.fetch(await select(GM, [dates[0]!]), discord.env(env));
+
+    // `best_available` means "whatever did best", and one answer is trivially
+    // the best — so it named a winner on the GM's very first click and closed
+    // the poll before anybody else had seen it. It is also the schema default
+    // and what every targeted /reschedule poll gets.
+    expect(await pollRow()).toMatchObject({ status: "open" });
+  });
+
+  it("never acts on organiser_picks either", async () => {
+    await seed({ optedIn: true }, { winRule: "organiser_picks", winThreshold: null });
+
+    await app.fetch(await select(GM, [dates[0]!]), discord.env(env));
+    await app.fetch(await select("ada", [dates[0]!]), discord.env(env));
+
+    expect(await pollRow()).toMatchObject({ status: "open" });
+  });
+
+  it("still acts on a quorum of the roster", async () => {
+    await seed({ optedIn: true }, { winRule: "quorum_of_roster", winThreshold: 0.6 });
+
+    await app.fetch(await select(GM, [dates[0]!]), discord.env(env));
+    expect(await pollRow()).toMatchObject({ status: "open" });
+
+    await app.fetch(await select("ada", [dates[0]!]), discord.env(env));
+
+    // Two of three clears 0.6 of a roster of three. A fixed bar is a real
+    // moment, which is the whole difference.
+    expect(await pollRow()).toMatchObject({ status: "closed" });
   });
 
   it("waits while nothing has won", async () => {
