@@ -12,7 +12,7 @@ import { assumeAttendance, registerRows } from "../attendance/assume.ts";
 import { gmOf } from "../campaigns/roster.ts";
 import { attendanceRows } from "../attendance/rows.ts";
 import { confirmedNotice, correctionPost, jeopardyNotice } from "../attendance/render.ts";
-import { postCloseNotice, postPollPost } from "../polls/post.ts";
+import { announceGameDay, postCloseNotice, postPollPost } from "../polls/post.ts";
 import { APPLY_JOB, applyFollowUp } from "../polls/canonise.ts";
 import { loadProjectionTarget } from "../projection/target.ts";
 
@@ -220,6 +220,18 @@ async function runJob(job: typeof schema.jobs.$inferSelect, env: Env): Promise<v
       if (!pollId) throw new Error(`poll.close job ${job.id} has no pollId`);
 
       await postCloseNotice(env, pollId);
+      return;
+    }
+
+    /**
+     * A day exists. One new message in the scheduling channel saying so — never
+     * an edit, and its id is not stored, because nothing will reconcile it.
+     */
+    case "gameday.announce": {
+      const { gameDayId } = job.payload as { gameDayId?: string };
+      if (!gameDayId) throw new Error(`gameday.announce job ${job.id} has no gameDayId`);
+
+      await announceGameDay(env, gameDayId);
       return;
     }
 

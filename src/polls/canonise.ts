@@ -7,6 +7,7 @@ import { decide } from "./win-rule.ts";
 import { pollView } from "./rows.ts";
 import { moveSession } from "./move.ts";
 import { carryOver } from "./carry-over.ts";
+import { mintGameDays } from "./game-days.ts";
 import type { PollView } from "./render.ts";
 import type { Interaction } from "../discord/types.ts";
 
@@ -250,6 +251,13 @@ export async function applyOutcomes(
   // whose consequences would fire against a record nobody can read. `closed`
   // leads so the tuple is non-empty however the dates fall.
   await d.batch([closed, lost, ...marked, ...follow]);
+
+  // A poll with no target was looking for a day rather than moving one, so what
+  // its winners become is a game day — one per winning date, because a
+  // multi-kind poll can win more than one and then that is genuinely two days.
+  if (!poll.targetSessionId && won.length > 0) {
+    await mintGameDays(env, pollId, won);
+  }
 
   return pollView(env, pollId, new Date());
 }
