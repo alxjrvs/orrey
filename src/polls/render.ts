@@ -161,3 +161,58 @@ function button(
 function unix(at: Date): number {
   return Math.floor(at.getTime() / 1000);
 }
+
+/**
+ * The override view: the rule's answer, preselected, with an Apply button.
+ *
+ * It replaces the poll post as the organiser's own `UPDATE_MESSAGE` response,
+ * which is why it is a rendering of the same message rather than a second one.
+ * Everybody else watching the channel sees it change, and that is honest — the
+ * poll is being decided in the open.
+ *
+ * Preselected rather than applied: `win-rule.ts` returns ties whole and this is
+ * where a person resolves them. A rule that had no opinion (`organiser_picks`,
+ * or nothing reaching a threshold) opens with nothing selected, which reads
+ * correctly as "you decide".
+ */
+export function renderOverride(view: PollView, proposed: string[]): MessagePayload {
+  const { poll, dates } = view;
+
+  const select = {
+    type: ComponentType.STRING_SELECT,
+    custom_id: encodeCustomId({ action: "poll", arg: "pick", target: poll.id }),
+    placeholder: "Which dates won?",
+    min_values: 0,
+    max_values: Math.max(1, Math.min(dates.length, MAX_DATES)),
+    options: dates.slice(0, MAX_DATES).map((date) => ({
+      label: label(date),
+      value: date.id,
+      default: proposed.includes(date.id),
+    })),
+  };
+
+  return {
+    content: [
+      `**Closing the poll.**${poll.title ? ` ${escapeMarkdown(poll.title)}` : ""}`,
+      proposed.length
+        ? "Orrey's rule picked the dates below. Change them if it got it wrong, then Apply."
+        : "The rule picked nothing. Choose the dates that won, then Apply.",
+      "",
+      ...dates.map((date) => tally(date, view.rosterSize)),
+    ].join("\n"),
+    components: [
+      { type: ComponentType.ACTION_ROW, components: [select] },
+      {
+        type: ComponentType.ACTION_ROW,
+        components: [
+          button(
+            "Apply",
+            encodeCustomId({ action: "poll", arg: "apply", target: poll.id }),
+            ButtonStyle.SUCCESS,
+          ),
+        ],
+      },
+    ],
+    allowed_mentions: { parse: [], roles: [] },
+  };
+}
