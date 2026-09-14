@@ -55,3 +55,5 @@ button {
 }
 button + button { margin-left: var(--space-2, 8px); }
 button[disabled] { opacity: .5; cursor: default; }
+form.setting { margin-block: var(--space-4, 16px); }
+form.setting input[disabled] { opacity: 0.6; }
