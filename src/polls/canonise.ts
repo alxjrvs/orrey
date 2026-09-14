@@ -5,6 +5,7 @@ import { SETTING_KEYS, getSetting } from "../db/settings.ts";
 import { rosterOf } from "../campaigns/roster.ts";
 import { decide } from "./win-rule.ts";
 import { pollView } from "./rows.ts";
+import { moveSession } from "./move.ts";
 import type { PollView } from "./render.ts";
 import type { Interaction } from "../discord/types.ts";
 
@@ -197,5 +198,29 @@ export async function applyOutcomes(
   // leads so the tuple is non-empty however the dates fall.
   await d.batch([closed, lost, ...marked]);
 
+  // The consequence. A poll with a target is a poll about moving that session,
+  // so the date it settled on is the date the session takes — and the one date,
+  // because a session is on one day. A rule that returned a tie was resolved in
+  // the override view before this ran; anything still tied here is the
+  // organiser's own pick, and the earliest of it is the session's new date.
+  if (poll.targetSessionId && won.length > 0) {
+    const winner = await earliestOf(env, won);
+    if (winner) await moveSession(env, poll.targetSessionId, winner);
+  }
+
   return pollView(env, pollId, new Date());
+}
+
+async function earliestOf(env: Env, ids: string[]) {
+  const rows = await db(env)
+    .select({
+      id: schema.pollDates.id,
+      startsAt: schema.pollDates.startsAt,
+      endsAt: schema.pollDates.endsAt,
+    })
+    .from(schema.pollDates)
+    .where(inArray(schema.pollDates.id, ids))
+    .all();
+
+  return rows.sort((a, b) => a.startsAt - b.startsAt)[0];
 }
