@@ -158,6 +158,244 @@ function gamesTable(games) {
   return table;
 }
 
+/**
+ * The agenda: the worklist, and the record.
+ *
+ * Two views, and the split is the whole point of the page. **What I'm
+ * scheduling** is sessions still waiting on something, and it is the only place
+ * on the screen with a primary action. **What's confirmed** carries none: it is
+ * the record, not the work, and a button there would invite somebody to do
+ * something to a session that does not need anything done to it.
+ *
+ * It reads `/api/agenda` and nothing else. Nothing on this page is derived here
+ * — not the quorum, not the tally, and not the day a session falls on. Anything
+ * computed in the browser is a thing no test in this repo can reach, and the
+ * day in particular is a fact about the table rather than about the reader's
+ * laptop.
+ */
+const UNSETTLED = new Set(["SCHEDULED", "JEOPARDY"]);
+
+const AGENDA_VIEWS = {
+  scheduling: {
+    title: "What I'm scheduling",
+    lede: "Sessions still waiting on something — an answer, a poll, or a post.",
+    empty: "Nothing outstanding. Every session in the window has an answer.",
+    count: "open",
+    match: (row) => UNSETTLED.has(row.state),
+    filters: {
+      All: () => true,
+      "Quorum short": (row) => row.inJeopardy,
+      "Not yet asked": (row) => row.tally.in + row.tally.out + row.tally.maybe === 0,
+    },
+  },
+  confirmed: {
+    title: "What's confirmed",
+    lede: "Quorum met, Discord posted, calendar written. Nothing here needs you.",
+    empty: "Nothing confirmed in this window yet.",
+    count: "settled",
+    match: (row) => !UNSETTLED.has(row.state),
+    filters: {
+      All: () => true,
+      "Campaign sessions": (row) => row.campaignId !== null,
+      "Game days": (row) => row.gameDayId !== null,
+    },
+  },
+};
+
+const agendaState = { mode: "scheduling", grouped: true, filter: "All", selected: null };
+
+function segmented(options, value, onChange) {
+  const wrap = document.createElement("div");
+  wrap.className = "segmented";
+  for (const option of options) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = option;
+    if (option === value) button.setAttribute("aria-current", "true");
+    button.addEventListener("click", () => onChange(option));
+    wrap.append(button);
+  }
+  return wrap;
+}
+
+/** In / maybe / out against the roster, as a bar and a sentence. */
+function quorumMeter(row) {
+  const cell = document.createElement("td");
+  const bar = document.createElement("div");
+  bar.className = "meter";
+  for (const [kind, n] of [
+    ["in", row.tally.in],
+    ["maybe", row.tally.maybe],
+    ["out", row.tally.out],
+    ["none", row.tally.noReply],
+  ]) {
+    if (n === 0) continue;
+    const part = document.createElement("span");
+    part.dataset.kind = kind;
+    part.style.flexGrow = String(n);
+    bar.append(part);
+  }
+  cell.append(bar);
+
+  const line = document.createElement("div");
+  line.className = "muted";
+  // The quorum line the post carries, or the tally on its own when nothing has
+  // asked for a number.
+  line.textContent =
+    row.quorum.required === null
+      ? `${row.tally.in} in, ${row.tally.noReply} not heard from`
+      : `${row.quorum.saidIn} of ${row.quorum.required} in`;
+  cell.append(line);
+  return cell;
+}
+
+function agendaTable(rows) {
+  const table = document.createElement("table");
+  const head = document.createElement("tr");
+  const columns = agendaState.grouped
+    ? ["Session", "Responses", "Status"]
+    : ["When", "Session", "Responses", "Status"];
+  for (const label of columns) {
+    const th = document.createElement("th");
+    th.textContent = label;
+    head.append(th);
+  }
+  const thead = document.createElement("thead");
+  thead.append(head);
+  table.append(thead);
+
+  const body = document.createElement("tbody");
+  let lastDay = null;
+
+  for (const row of rows) {
+    if (agendaState.grouped && row.day !== lastDay) {
+      const header = document.createElement("tr");
+      header.className = "day";
+      const cell = document.createElement("th");
+      cell.colSpan = columns.length;
+      // The label comes from the server, in the guild's zone.
+      cell.textContent = row.dayLabel;
+      header.append(cell);
+      body.append(header);
+      lastDay = row.day;
+    }
+
+    const tr = document.createElement("tr");
+    tr.tabIndex = 0;
+    if (agendaState.selected === row.sessionId) tr.setAttribute("aria-selected", "true");
+    tr.addEventListener("click", () => {
+      // Nothing to select into until the detail rail lands. Rather than link to
+      // a page that does not exist, this marks the row and stops.
+      agendaState.selected = row.sessionId;
+      load();
+    });
+
+    if (!agendaState.grouped) cell(tr, when(row.startsAt));
+
+    const title = cell(tr, row.title);
+    const sub = document.createElement("div");
+    sub.className = "muted";
+    sub.textContent = agendaState.grouped
+      ? [time(row.startsAt), row.location].filter(Boolean).join(" · ")
+      : text(row.location);
+    title.append(sub);
+
+    tr.append(quorumMeter(row));
+
+    const state = cell(tr, row.state);
+    state.className = "state";
+    state.dataset.state = row.state;
+
+    body.append(tr);
+  }
+
+  table.append(body);
+  return table;
+}
+
+/** Just the time of day, for a row that already sits under its day's header. */
+function time(seconds) {
+  return new Date(seconds * 1000).toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function agendaSection(agenda) {
+  const view = AGENDA_VIEWS[agendaState.mode];
+  const filters = Object.keys(view.filters);
+  if (!filters.includes(agendaState.filter)) agendaState.filter = "All";
+
+  const rows = agenda.rows.filter(view.match).filter(view.filters[agendaState.filter]);
+
+  const section = document.createElement("section");
+
+  const heading = document.createElement("div");
+  heading.className = "bar-inline";
+  const h1 = document.createElement("h1");
+  h1.textContent = view.title;
+  const count = document.createElement("span");
+  count.className = "muted";
+  count.textContent = `${rows.length} ${view.count}`;
+  heading.append(h1, count);
+  section.append(heading);
+
+  const lede = document.createElement("p");
+  lede.className = "note";
+  lede.textContent = view.lede;
+  section.append(lede);
+
+  const controls = document.createElement("div");
+  controls.className = "controls";
+  controls.append(
+    segmented(Object.keys(AGENDA_VIEWS).map(modeLabel), modeLabel(agendaState.mode), (label) => {
+      agendaState.mode = label === modeLabel("scheduling") ? "scheduling" : "confirmed";
+      agendaState.filter = "All";
+      load();
+    }),
+    segmented(filters, agendaState.filter, (value) => {
+      agendaState.filter = value;
+      load();
+    }),
+    segmented(["By day", "Flat"], agendaState.grouped ? "By day" : "Flat", (value) => {
+      agendaState.grouped = value === "By day";
+      load();
+    }),
+  );
+  // The one primary action on the screen, and only on the view that has work in
+  // it. "What's confirmed" is the record, not the work.
+  if (agendaState.mode === "scheduling") {
+    const primary = document.createElement("button");
+    primary.className = "primary";
+    primary.type = "button";
+    primary.textContent = "+ Session";
+    primary.disabled = true;
+    primary.title = "Entering a session by hand is the campaign page's, one slice up.";
+    controls.append(primary);
+  }
+  section.append(controls);
+
+  if (rows.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = view.empty;
+    section.append(empty);
+  } else {
+    section.append(agendaTable(rows));
+  }
+
+  const asOf = document.createElement("p");
+  asOf.className = "muted as-of";
+  asOf.textContent = `As of ${when(agenda.asOf)}.`;
+  section.append(asOf);
+
+  return section;
+}
+
+function modeLabel(mode) {
+  return AGENDA_VIEWS[mode].title;
+}
+
 function gameDaysTable(days) {
   const table = document.createElement("table");
   const caption = document.createElement("caption");
@@ -371,15 +609,17 @@ function heading(label) {
 
 async function load() {
   try {
-    const [me, { campaigns }, { games }, { gameDays }] = await Promise.all([
+    const [me, agenda, { campaigns }, { games }, { gameDays }] = await Promise.all([
       api("/api/me"),
+      api("/api/agenda"),
       api("/api/campaigns"),
       api("/api/games"),
       api("/api/game-days"),
     ]);
 
     who.textContent = `signed in as ${me.userId}`;
-    main.replaceChildren(heading("Campaigns"), campaignsTable(campaigns));
+    main.replaceChildren(agendaSection(agenda));
+    main.append(heading("Campaigns"), campaignsTable(campaigns));
     main.append(heading("Game days"), gameDaysTable(gameDays));
     main.append(heading("Games"), gamesTable(games), createForm());
   } catch (error) {
