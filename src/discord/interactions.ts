@@ -13,7 +13,13 @@ import {
   refreshPoll,
 } from "../polls/respond.ts";
 import { renderUpcoming, upcomingWithTotal } from "../commands/upcoming.ts";
-import { isOnRoster, renderWhosIn, sessionChoices, whosIn } from "../commands/whos-in.ts";
+import {
+  MAX_CHOICES,
+  isOnRoster,
+  renderWhosIn,
+  sessionChoices,
+  whosIn,
+} from "../commands/whos-in.ts";
 import { parseDates } from "../polls/parse-dates.ts";
 import { openPoll } from "../polls/open.ts";
 import { SETTING_KEYS, getSetting } from "../db/settings.ts";
@@ -168,6 +174,22 @@ async function reschedule(interaction: Interaction, env: Env): Promise<Json> {
   const actor = actorOf(interaction);
   if (!actor) return ephemeral("Orrey could not tell who asked.");
 
+  if (sessionId === FIND_A_DAY) {
+    // The sentinel is offered only to organisers, but a person can type any
+    // value they like — so the check is here as well as in the suggestions.
+    if (!(await hasOrganiserRole(env, interaction))) {
+      return ephemeral("Only an organiser can open a poll for a new day.");
+    }
+    return ephemeral(
+      [
+        "A day with no session attached needs to say what is being played and whether",
+        "it is one table or several, which is more than a modal should ask for.",
+        "",
+        "The console has a page for it: **Polls → Find a new day**.",
+      ].join("\n"),
+    );
+  }
+
   const target = await loadProjectionTarget(env, sessionId);
   if (!target) return ephemeral("Orrey does not know that session.");
 
@@ -306,10 +328,37 @@ async function handleAutocomplete(interaction: Interaction, env: Env): Promise<J
       ? await sessionChoices(env, actor.id, String(focused.value ?? ""), new Date())
       : [];
 
+  /**
+   * "Find a new day" is a **synthetic choice**, not a fifth command.
+   *
+   * Opening an untargeted poll from Discord is the same paragraph modal with no
+   * session attached, so it belongs in the same option rather than in a command
+   * of its own — which is what keeps the surface at four.
+   *
+   * Offered only to somebody holding the organiser role, read off the payload
+   * Discord signed. It is a convenience and not the access check: the console
+   * route behind it does its own, and so does everything downstream.
+   */
+  if (actor && focused?.name === "event" && interaction.data?.name === "reschedule") {
+    if (await hasOrganiserRole(env, interaction)) {
+      choices.unshift({ name: "Find a new day — no session", value: FIND_A_DAY });
+    }
+  }
+
   return {
     type: InteractionResponseType.APPLICATION_COMMAND_AUTOCOMPLETE_RESULT,
-    data: { choices },
+    data: { choices: choices.slice(0, MAX_CHOICES) },
   };
+}
+
+/** The sentinel the synthetic choice carries. Not a session id, and never one. */
+export const FIND_A_DAY = "new-day";
+
+async function hasOrganiserRole(env: Env, interaction: Interaction): Promise<boolean> {
+  const roleId = await getSetting<string>(env, SETTING_KEYS.organiserRoleId);
+  // Fail closed: an unseeded role id means nobody, which somebody notices.
+  if (!roleId) return false;
+  return interaction.member?.roles?.includes(roleId) ?? false;
 }
 
 function optionOf(interaction: Interaction, name: string): string | undefined {
