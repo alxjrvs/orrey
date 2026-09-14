@@ -92,7 +92,21 @@ function compose(
     lines.push(`**Notes** — ${unanswered.map((row) => name(row, detail)).join(", ")}`);
   }
 
-  if (rows.every((row) => row.intent === null) && !showNotes) lines.push("*Nobody has said yet.*");
+  // The people on the roster who have not answered. This is the half of the
+  // question "four in" cannot answer on its own, and it is deliberately not a
+  // tally of "out": silence is silence. Anyone whose note is already above is
+  // not repeated here — they have been heard from, just not answered.
+  // Anyone with no intent who is not already named in the Notes line *of this
+  // pass*. The truncation passes drop Notes, and somebody who left a note but no
+  // answer would then appear nowhere at all — which also made the count smaller
+  // than the roster and turned a shortened post into a quietly wrong one.
+  const silent = rows.filter((row) => row.intent === null && !(showNotes && row.note));
+  if (silent.length > 0) {
+    const who = detail.names ? ` — ${silent.map((row) => name(row, detail)).join(", ")}` : "";
+    lines.push(`**Not heard from (${silent.length})**${who}`);
+  }
+
+  if (rows.length === 0) lines.push("*Nobody has said yet.*");
 
   lines.push("", `-# As of <t:${unix(asOf)}:R>. Refresh for a fresh reading.`);
   return lines.join("\n");
