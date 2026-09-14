@@ -430,10 +430,27 @@ else. An endpoint that accepts an id is an endpoint that erases someone else's
 data, which is precisely why phase 0 left `DELETE /me` at 405 instead of
 implementing it.
 
-### 14. `p6/14-ics-serialise` — the calendar text · #45 · second root off `main`
+### 14. `p6/14-ics-serialise` — the calendar text · #45 · off `p6/0-base`
 
-The phase's second root. Nothing in the ICS feed reads the console, so it does
-not sit on it.
+**Planned as a second root off `main`, and that was wrong.** Nothing in the ICS
+feed reads the *console*, which is what the plan was reasoning about — but `main`
+is phase 1, and the feed needs a good deal of what phases 2 to 5 added. Three
+things settle it, and each would have been discovered separately and painfully:
+
+- `signups` does not exist on `main`, and `p6/15`'s `all.ics` is "the campaigns
+  the holder is on **plus the game days they have signed up for**".
+- There is no domain reschedule and no domain cancel on `main` — nothing there
+  writes `sessions.state = 'CANCELLED'` at all — so there is nowhere to put the
+  `SEQUENCE` increment. The plan foresaw the cancel half of this and said to
+  record a divergence rather than write a second increment; the honest fix is
+  the root, not the increment.
+- `game_days` does not exist either, so `STATUS:CANCELLED` for a called-off day
+  has nothing to be derived from.
+
+So the lane roots on `p6/0-base` like everything else in the phase. It still does
+not sit on the console lane, which is what the plan was actually protecting: it
+forks off the base, beside `p6/1`, and 14 → 15 → 16 remains landable start to
+finish without waiting on any console PR.
 
 `src/ics/serialise.ts`: VCALENDAR and VEVENT from the same session-plus-campaign
 shape `src/projection/target.ts` already loads. CRLF endings, 75-**octet** line
@@ -547,8 +564,8 @@ crosses lanes, so any lane can land first.
 The console lane: 1 → 2 → 3, then 4 and 5 in either order, then 6, 7 and 8 in any
 order. The month grid, 9, forks off 1 and can land the moment 1 does. The admin
 lane: 10 → 11, forked off 1; the audit log, 12, and delete-my-data, 13, each fork
-off 1 as well. The ICS lane: 14 → 15 → 16, off `main`, landable start to finish
-without waiting on anything. After each merge, `npm run stack -- restack p6
+off 1 as well. The ICS lane: 14 → 15 → 16, forked off `p6/0-base` beside 1, landable start to
+finish without waiting on any console PR. After each merge, `npm run stack -- restack p6
 --apply` and push.
 
 Seven forks and one second root have to be told to the tooling once, or the next
@@ -564,7 +581,12 @@ npm run stack -- base p6/12-audit-log      p6/1-agenda-model
 npm run stack -- base p6/13-delete-my-data p6/1-agenda-model
 ```
 
-`p6/14-ics-serialise` is the second root: its base is `main`, the same as `p6/1`.
+`p6/14-ics-serialise` forks off `p6/0-base`, beside `p6/1` — see the divergence
+recorded under slice 14. It is not a second root, and it is not off `main`:
+
+```sh
+npm run stack -- base p6/14-ics-serialise p6/0-base
+```
 
 Two conflicts to expect, both small and both resolved by keeping every line.
 `src/http/app.ts`: `p6/15` replaces the `/ics/:token.ics` 501 stub while the
