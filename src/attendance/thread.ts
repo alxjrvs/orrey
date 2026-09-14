@@ -1,7 +1,13 @@
 import { eq, sql } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
-import { SETTING_KEYS, getSetting, requireGuildId } from "../db/settings.ts";
+import {
+  SETTING_DEFAULTS,
+  SETTING_KEYS,
+  getSetting,
+  requireGuildId,
+  settingOr,
+} from "../db/settings.ts";
 import { throughGovernor } from "../discord/governor.ts";
 import { isThreadAlreadyStarted, postMessage, startThreadFromMessage } from "../discord/rest.ts";
 import { claim, find, record, release } from "../projection/publications.ts";
@@ -54,11 +60,16 @@ export async function startSessionThread(
   }
 
   const guildId = await requireGuildId(env);
+  const timeZone = await settingOr<string>(
+    env,
+    SETTING_KEYS.timezone,
+    SETTING_DEFAULTS[SETTING_KEYS.timezone],
+  );
   let threadId: string;
   try {
     const thread = await throughGovernor(env, guildId, () =>
       startThreadFromMessage(env, channelId, session.discordMessageId as string, {
-        name: threadName(target),
+        name: threadName(target, timeZone),
         auto_archive_duration: ARCHIVE_MINUTES,
       }),
     );
@@ -98,12 +109,20 @@ export async function postToSession(
   return message.id;
 }
 
-/** `Session 12 — 20 September`, which is what a channel's thread list reads as. */
-export function threadName(target: ProjectionTarget): string {
+/**
+ * `Session 12 — 20 September`, which is what a channel's thread list reads as.
+ *
+ * The date is rendered in the **guild's** zone, not UTC. A thread name is plain
+ * text — Discord renders no `<t:…>` in one — so this is one of the few places
+ * Orrey has to pick a zone, and picking the server's would name a Friday-evening
+ * session after Saturday for anybody far enough east. The zone arrives as an
+ * argument, like every other ambient value in this repo's pure functions.
+ */
+export function threadName(target: ProjectionTarget, timeZone = "UTC"): string {
   const when = new Date(target.session.startsAt * 1000).toLocaleDateString("en-GB", {
     day: "numeric",
     month: "long",
-    timeZone: "UTC",
+    timeZone,
   });
   const title = sessionTitle(target);
   // Discord's ceiling is 100 characters, and a truncated name is better than a
