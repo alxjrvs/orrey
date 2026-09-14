@@ -61,6 +61,9 @@ beforeEach(async () => {
     return Response.json({ id: `msg-${posts.length}`, channel_id: "chan-1" });
   }) as typeof fetch;
 
+  // The post is guarded by a claim in `publications` now (#73), so a claim left
+  // by the previous case would stop the next one posting at all.
+  await env.DB.prepare("DELETE FROM publications").run();
   await env.DB.prepare("DELETE FROM attendance").run();
   await env.DB.prepare("DELETE FROM jobs").run();
   await env.DB.prepare("DELETE FROM sessions").run();

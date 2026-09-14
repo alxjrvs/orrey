@@ -2,8 +2,9 @@ import { sql } from "drizzle-orm";
 import { check, index, integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 /**
- * The footings (phase 0) and the smallest slice of the domain that can describe
- * one session of one running campaign and who is coming (phase 1).
+ * The footings (phase 0), the smallest slice of the domain that can describe one
+ * session of one running campaign and who is coming (phase 1), and the ledger of
+ * what Orrey has put into the world (#73).
  *
  * The rest — signups, date_polls, games, campaign_members, session_logs,
  * audit_log, game days — lands in the phase that actually reads it. See
@@ -175,3 +176,46 @@ export const calendarLinks = sqliteTable("calendar_links", {
   syncedAt: integer("synced_at"),
   lastError: text("last_error"),
 });
+
+/**
+ * Everything Orrey has put into the world, and whether it is still there.
+ *
+ * Orrey's database is the source of truth, so anything Orrey published must stay
+ * findable from it. Today it is not: `calendar_links` cascades off `sessions`,
+ * so deleting a session destroys the only record that a Google event exists out
+ * there, and `sessions.discord_event_id` goes with it. After that no reconcile
+ * can account for what is still on the calendar. That is #73.
+ *
+ * So this table holds **no foreign key**. `target_id` is a plain string, not a
+ * `references()`, and that absence is the entire point: a row that cascades
+ * cannot be the record of something that does not. The next person to tidy the
+ * schema will want to add the constraint back. Do not.
+ *
+ * The row is also written *before* the remote call, not after it. A `claimed`
+ * row with no `remote_id` is Orrey saying "someone is already publishing this" —
+ * which is what stands between a crash mid-POST and a second scheduled event or
+ * a second attendance post with live buttons.
+ */
+export const publications = sqliteTable(
+  "publications",
+  {
+    /** Derived: `<surface>:<kind>:<target_id>`. Two claims for one thing collide. */
+    id: text("id").primaryKey(),
+    surface: text("surface", { enum: ["discord", "google"] }).notNull(),
+    kind: text("kind", { enum: ["event", "message"] }).notNull(),
+    /** A session id today. Deliberately not a foreign key — see above. */
+    targetId: text("target_id").notNull(),
+    /** Null while claimed; the remote object's own id once it exists. */
+    remoteId: text("remote_id"),
+    /** Where it was put, so a retraction knows where to look without the row. */
+    channelId: text("channel_id"),
+    state: text("state", { enum: ["claimed", "published", "retracted"] })
+      .notNull()
+      .default("claimed"),
+    claimedAt: integer("claimed_at").notNull().default(now),
+    publishedAt: integer("published_at"),
+    retractedAt: integer("retracted_at"),
+    lastError: text("last_error"),
+  },
+  (t) => [index("publications_target_idx").on(t.targetId, t.state)],
+);
