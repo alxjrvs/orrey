@@ -131,3 +131,75 @@ async function sessionCounts(env: Env): Promise<Map<string, number>> {
       .map((row) => [row.key, row.n]),
   );
 }
+
+/**
+ * What the console shows about a game day.
+ *
+ * Seated and waitlisted are counted here rather than being read off the signup
+ * post, for the reason every read in this file exists: Orrey's database is the
+ * source of truth and the post is a projection of it. The post may be an hour
+ * stale; this never is.
+ */
+export interface GameDaySummary {
+  id: string;
+  kind: "single" | "multi";
+  state: "PROPOSED" | "SEATING" | "LOCKED" | "PLAYED" | "CANCELLED";
+  title: string | null;
+  startsAt: number;
+  endsAt: number;
+  venue: string | null;
+  hostUserId: string | null;
+  gameId: string | null;
+  gameName: string | null;
+  /** The day's own number, or the game's, or nothing. */
+  capacity: number | null;
+  seated: number;
+  waitlisted: number;
+  discordMessageId: string | null;
+  threadId: string | null;
+}
+
+export async function gameDaySummaries(env: Env): Promise<GameDaySummary[]> {
+  const rows = await db(env)
+    .select({ day: schema.gameDays, game: schema.games })
+    .from(schema.gameDays)
+    .leftJoin(schema.games, eq(schema.gameDays.gameId, schema.games.id))
+    .orderBy(asc(schema.gameDays.startsAt))
+    .all();
+
+  // One grouped count rather than a query per day.
+  const counts = await signupCounts(env);
+
+  return rows.map(({ day, game }) => ({
+    id: day.id,
+    kind: day.kind,
+    state: day.state,
+    title: day.title,
+    startsAt: day.startsAt,
+    endsAt: day.endsAt,
+    venue: day.venue,
+    hostUserId: day.hostUserId,
+    gameId: day.gameId,
+    gameName: game?.name ?? null,
+    capacity: day.capacity ?? game?.maxPlayers ?? null,
+    seated: counts.get(`${day.id}:in`) ?? 0,
+    waitlisted: counts.get(`${day.id}:waitlisted`) ?? 0,
+    discordMessageId: day.discordMessageId,
+    threadId: day.threadId,
+  }));
+}
+
+async function signupCounts(env: Env): Promise<Map<string, number>> {
+  const rows = await db(env)
+    .select({
+      targetId: schema.signups.targetId,
+      state: schema.signups.state,
+      n: count(),
+    })
+    .from(schema.signups)
+    .where(eq(schema.signups.targetType, "game_day"))
+    .groupBy(schema.signups.targetId, schema.signups.state)
+    .all();
+
+  return new Map(rows.map((row) => [`${row.targetId}:${row.state}`, row.n]));
+}
