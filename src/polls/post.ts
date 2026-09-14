@@ -5,7 +5,7 @@ import { requireGuildId } from "../db/settings.ts";
 import { throughGovernor } from "../discord/governor.ts";
 import { asDiscordFailure, postMessage } from "../discord/rest.ts";
 import { claim, record, recordFailure, release } from "../projection/publications.ts";
-import { renderPollPost } from "./render.ts";
+import { pollClosedNotice, renderPollPost } from "./render.ts";
 import { pollView } from "./rows.ts";
 
 /**
@@ -98,4 +98,53 @@ function rememberMessageId(
 function refused(error: unknown): boolean {
   const failure = asDiscordFailure(error);
   return failure !== undefined && failure.status >= 400 && failure.status < 500;
+}
+
+/**
+ * The close notice: a new message, once.
+ *
+ * It never touches the poll post — there is nothing to edit under send-only and
+ * no code path here that could. Guarded by its own labelled publication row, so
+ * a redelivered `poll.close` job posts nothing further.
+ */
+export async function postCloseNotice(env: Env, pollId: string): Promise<string | undefined> {
+  const poll = await db(env)
+    .select()
+    .from(schema.datePolls)
+    .where(eq(schema.datePolls.id, pollId))
+    .get();
+  if (!poll || !poll.discordChannelId) return undefined;
+
+  // A poll somebody already canonised does not need telling that answering has
+  // stopped.
+  if (poll.status !== "open") return undefined;
+
+  const ref = {
+    surface: "discord",
+    kind: "message",
+    targetId: pollId,
+    label: "poll-closed",
+  } as const;
+
+  const view = await pollView(env, pollId, new Date());
+  if (!view) return undefined;
+  const payload = pollClosedNotice(view);
+  const guildId = await requireGuildId(env);
+
+  const { mine, publication } = await claim(env, ref, poll.discordChannelId);
+  if (!mine) return publication.remoteId ?? undefined;
+
+  let message;
+  try {
+    message = await throughGovernor(env, guildId, () =>
+      postMessage(env, poll.discordChannelId as string, payload),
+    );
+  } catch (error) {
+    if (refused(error)) await release(env, ref);
+    else await recordFailure(env, ref, String(error));
+    throw error;
+  }
+
+  await record(env, ref, message.id);
+  return message.id;
 }
