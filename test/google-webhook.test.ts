@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { db, schema } from "../src/db/index.ts";
 import { SETTING_KEYS, setSetting } from "../src/db/settings.ts";
 import { createApp } from "../src/http/app.ts";
-import { drainJobs } from "../src/jobs/drain.ts";
 import { SYNC_JOB } from "../src/google/sync.ts";
 import type { Watch } from "../src/google/watch.ts";
 
@@ -126,17 +125,8 @@ describe("what it does", () => {
   });
 });
 
-describe("the job it arms", () => {
-  it("drains to done rather than failing on an unknown kind", async () => {
-    await push(good());
-
-    await drainJobs(env);
-
-    const [job] = await jobs();
-    expect(job).toMatchObject({ kind: SYNC_JOB, state: "done", lastError: null });
-  });
-
-  it("makes no call to Google", async () => {
+describe("the route reaches nothing", () => {
+  it("makes no outbound call, however many pushes arrive", async () => {
     const realFetch = globalThis.fetch;
     const calls: string[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL) => {
@@ -145,12 +135,15 @@ describe("the job it arms", () => {
     }) as typeof fetch;
 
     try {
-      await push(good());
-      await drainJobs(env);
+      await Promise.all(Array.from({ length: 10 }, () => push(good())));
     } finally {
       globalThis.fetch = realFetch;
     }
 
+    // Ten pushes, ten D1 inserts that collapse into one job, and nothing
+    // outbound. A flood of pushes cannot become a flood of API calls: the job
+    // the drain runs is rate-limited by the minute key, not by this route.
     expect(calls).toEqual([]);
+    expect(await jobs()).toHaveLength(1);
   });
 });
