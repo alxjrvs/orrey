@@ -120,3 +120,47 @@ describe("every rule", () => {
     }
   });
 });
+
+describe("a rule with no number", () => {
+  it("decides nothing rather than letting everything win", () => {
+    // `win_threshold` is nullable and the console validates the rule's *name*
+    // without checking that a rule needing a number was given one. Falling back
+    // to zero meant every date cleared the bar, including dates nobody answered.
+    expect(
+      decide({
+        rule: "min_players",
+        threshold: null,
+        rosterSize: 5,
+        tallies: [
+          { pollDateId: "d1", yes: 0 },
+          { pollDateId: "d2", yes: 1 },
+        ],
+      }),
+    ).toEqual({ rule: "min_players", required: null, won: [] });
+  });
+
+  it("says the same about a threshold of zero", () => {
+    expect(
+      decide({
+        rule: "min_players",
+        threshold: 0,
+        rosterSize: 5,
+        tallies: [{ pollDateId: "d1", yes: 0 }],
+      }),
+    ).toMatchObject({ required: null, won: [] });
+  });
+
+  it("still decides when it has one", () => {
+    expect(
+      decide({
+        rule: "min_players",
+        threshold: 2,
+        rosterSize: 5,
+        tallies: [
+          { pollDateId: "d1", yes: 1 },
+          { pollDateId: "d2", yes: 3 },
+        ],
+      }),
+    ).toMatchObject({ required: 2, won: ["d2"] });
+  });
+});
