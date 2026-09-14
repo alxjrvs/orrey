@@ -139,7 +139,7 @@ function readDate(text: string, now: Date, timeZone: string) {
   // An ISO date says everything, including the year.
   const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
   if (iso) {
-    return { year: Number(iso[1]), month: Number(iso[2]), day: Number(iso[3]) };
+    return realDate(Number(iso[1]), Number(iso[2]), Number(iso[3]));
   }
 
   // `1 Oct`, `Oct 1`, `Thu 3 Dec`, optionally with a year. A leading weekday is
@@ -163,7 +163,7 @@ function readDate(text: string, now: Date, timeZone: string) {
   if (month === 0) return undefined;
   if (parts.day < 1 || parts.day > 31) return undefined;
 
-  if (parts.year) return { year: Number(parts.year), month, day: parts.day };
+  if (parts.year) return realDate(Number(parts.year), month, parts.day);
 
   // No year: the next time this date comes round, read in the guild's zone
   // rather than the server's.
@@ -172,7 +172,29 @@ function readDate(text: string, now: Date, timeZone: string) {
     month < here.month || (month === here.month && parts.day < here.day)
       ? here.year + 1
       : here.year;
-  return { year, month, day: parts.day };
+  return realDate(year, month, parts.day);
+}
+
+/**
+ * A date that exists, or nothing at all.
+ *
+ * `instantOf` builds the instant with `Date.UTC(year, month - 1, day, …)`, and
+ * `Date.UTC` **normalises** rather than refusing: 31 February becomes 3 March,
+ * 2026-13-01 becomes January 2027, 2026-00-00 becomes November 2025. So the one
+ * class of typo a date parser exists to catch was the one class that sailed
+ * through — silently, onto a poll, eighteen months from the day somebody meant.
+ *
+ * This file's own rule: "a parser that guesses is a parser that puts a poll on
+ * the wrong day and tells nobody, so anything it is not sure of comes back as
+ * unreadable". A round-trip through `Date.UTC` is what asks whether the date the
+ * person typed is the date that came back; anything else goes to `unreadable`,
+ * which already hands the line back verbatim.
+ */
+function realDate(year: number, month: number, day: number) {
+  const when = new Date(Date.UTC(year, month - 1, day));
+  const same =
+    when.getUTCFullYear() === year && when.getUTCMonth() + 1 === month && when.getUTCDate() === day;
+  return same ? { year, month, day } : undefined;
 }
 
 function wallYearAndMonth(now: Date, timeZone: string) {
