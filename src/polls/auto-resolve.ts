@@ -56,6 +56,28 @@ export async function autoResolve(
     .get();
   if (!campaign || campaign.autoResolvePolls !== 1) return { outcome: "not-opted-in" };
 
+  /**
+   * Only a rule with a fixed bar can say "now".
+   *
+   * `best_available` names a winner the instant a single yes exists anywhere in
+   * the poll — it means "whatever did best", and one answer is trivially the
+   * best. `organiser_picks` names nobody until somebody picks. Both are relative
+   * to what has been said so far, so asking them "has this been decided?" after
+   * every click is asking the wrong question.
+   *
+   * That matters because `best_available` is the schema default for
+   * `date_polls.win_rule` and what every targeted `/reschedule` poll gets. For an
+   * opted-in campaign, the first person to answer — if that person is the GM and
+   * they tick one date — satisfied all three questions below and closed the poll
+   * before anybody else had seen it, with nothing in the tree able to reopen one.
+   *
+   * `min_players` and `quorum_of_roster` measure against a number that does not
+   * move, so "enough people, now" is a real moment. The rest is the organiser's.
+   */
+  if (poll.winRule !== "min_players" && poll.winRule !== "quorum_of_roster") {
+    return { outcome: "no-winner" };
+  }
+
   const view = await pollView(env, pollId, new Date());
   if (!view) return { outcome: "not-opted-in" };
 
