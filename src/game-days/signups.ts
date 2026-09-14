@@ -114,6 +114,28 @@ export async function claimSeat(
         .set({ characterName, updatedAt: sql`(unixepoch())` })
         .where(claimant(gameDayId, userId));
     }
+    // Somebody who queued while there were still seats, now asking for one —
+    // the case `prefer` exists for, read back the other way round. Taken in
+    // place, keeping the position they arrived at, because the only other route
+    // (Out, then Take a seat) deliberately sends them to the back of the queue.
+    // The seated count is inside the statement for the same reason the claim's
+    // is: two of these must not both take the last seat.
+    if (options.prefer !== "waitlist" && existing.state === "waitlisted") {
+      await db(env)
+        .update(schema.signups)
+        .set({ state: seatOrQueue(gameDayId, day.capacity), updatedAt: sql`(unixepoch())` })
+        .where(and(claimant(gameDayId, userId), eq(schema.signups.state, "waitlisted")));
+
+      // Read back rather than predict. On a full day this rewrites 'waitlisted'
+      // over 'waitlisted' and still answers `unchanged`; the `state` guard makes
+      // it a no-op if a promotion seated them while this was composing.
+      const moved = await signupOf(env, gameDayId, userId);
+      return {
+        outcome: moved?.state === "in" ? "seated" : "unchanged",
+        state: moved?.state ?? null,
+        position: moved?.position ?? null,
+      };
+    }
     return { outcome: "unchanged", state: existing.state, position: existing.position };
   }
 
@@ -124,7 +146,15 @@ export async function claimSeat(
       targetType: TARGET,
       targetId: gameDayId,
       userId,
-      state: options.prefer === "waitlist" ? sql`'waitlisted'` : seatOrQueue(gameDayId, day.capacity),
+      // The preference is only honoured on a day that has a capacity, so
+      // `promoteFromWaitlist`'s premise — a day with no capacity has no waitlist
+      // to promote from — is true by construction. Without this, Waitlist on an
+      // uncapped day writes a row nothing can ever promote and no click can
+      // change, on a post that reads "Room for however many turn up".
+      state:
+        options.prefer === "waitlist" && day.capacity !== null
+          ? sql`'waitlisted'`
+          : seatOrQueue(gameDayId, day.capacity),
       position: nextPosition(gameDayId),
       characterName,
     })
