@@ -1,0 +1,11 @@
+:root{
+  /* Motion is a state change confirmation, never an entrance. */
+  --duration-instant:0ms; /* @kind other */
+  --duration-fast:90ms; /* @kind other */
+  --duration-base:140ms; /* @kind other */
+  --duration-slow:220ms; /* @kind other */
+  --ease-standard:cubic-bezier(.2,0,.2,1); /* @kind other */
+  --ease-out:cubic-bezier(0,0,.2,1); /* @kind other */
+  --transition-hover:background var(--duration-fast) var(--ease-standard),border-color var(--duration-fast) var(--ease-standard),color var(--duration-fast) var(--ease-standard);
+  --transition-meter:width var(--duration-slow) var(--ease-out);
+}
