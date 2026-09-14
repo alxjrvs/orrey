@@ -2,6 +2,7 @@ import { env } from "cloudflare:test";
 import { and, eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import { db, schema } from "../src/db/index.ts";
+import { SETTING_KEYS, setSetting } from "../src/db/settings.ts";
 import { decodeCustomId, encodeCustomId } from "../src/discord/custom-id.ts";
 import { InteractionResponseType, InteractionType, MessageFlags } from "../src/discord/types.ts";
 import { createApp } from "../src/http/app.ts";
@@ -55,10 +56,15 @@ async function session(over: Partial<typeof schema.sessions.$inferInsert> = {}) 
     });
 }
 
-async function came(userId: string, attended = true, tablesPlayed: string | null = null) {
+async function came(
+  userId: string,
+  attended = true,
+  tablesPlayed: string | null = null,
+  name = `Player ${userId}`,
+) {
   await db(env)
     .insert(schema.users)
-    .values({ discordId: userId, username: userId, globalName: `Player ${userId}`, feedToken: `t-${userId}` })
+    .values({ discordId: userId, username: userId, globalName: name, feedToken: `t-${userId}` })
     .onConflictDoNothing();
   await db(env)
     .insert(schema.attendance)
@@ -71,8 +77,8 @@ async function came(userId: string, attended = true, tablesPlayed: string | null
     });
 }
 
-function member(id: string) {
-  return { user: { id, username: id, global_name: `Player ${id}` }, roles: [] };
+function member(id: string, roles: string[] = []) {
+  return { user: { id, username: id, global_name: `Player ${id}` }, roles };
 }
 
 async function post(body: unknown) {
@@ -83,11 +89,11 @@ async function post(body: unknown) {
   };
 }
 
-function click(who: string, target = SESSION_ID) {
+function click(who: string, target = SESSION_ID, roles: string[] = []) {
   return post({
     type: InteractionType.MESSAGE_COMPONENT,
     data: { custom_id: encodeCustomId({ action: "tables", target }), component_type: 2 },
-    member: member(who),
+    member: member(who, roles),
     message: { id: "msg-1", channel_id: "chan-1" },
   });
 }
@@ -238,6 +244,109 @@ describe("what the post shows", () => {
   });
 });
 
+describe("what Discord will accept", () => {
+  it("sheds the free text rather than sending a post Discord rejects", async () => {
+    await day();
+    await session();
+    for (let i = 0; i < 20; i++) await came(`p${i}`, true, "T".repeat(140));
+
+    const payload = correctionPost(await target(), await registerRows(env, SESSION_ID), new Date(), {
+      multiDay: true,
+    });
+
+    // Twenty lines of a hundred and forty characters is three and a half
+    // thousand on its own. Over two thousand is not a post that reads badly, it
+    // is a post Discord rejects — and `attendance.assume` would retry it into
+    // the identical 400 for ever.
+    expect(payload.content.length).toBeLessThanOrEqual(1900);
+    expect(payload.content).toContain("20 of 20");
+    expect(payload.content).toContain("recorded — read them in the console");
+    // The toggles are what the post is for; they survive every pass.
+    expect((payload.components as unknown[]).length).toBe(5);
+  });
+
+  it("sheds the names too, rather than growing past it", async () => {
+    await day();
+    await session();
+    for (let i = 0; i < 20; i++) {
+      await came(`p${i}`, true, "T".repeat(140), `Player ${i} `.padEnd(90, "x"));
+    }
+
+    const payload = correctionPost(await target(), await registerRows(env, SESSION_ID), new Date(), {
+      multiDay: true,
+    });
+
+    expect(payload.content.length).toBeLessThanOrEqual(1900);
+    expect(payload.content).toContain("20 of 20");
+  });
+
+  it("leaves an ordinary post exactly as it was", async () => {
+    await day();
+    await session();
+    await came("p0", true, "Blades, then Fiasco");
+
+    const payload = correctionPost(await target(), await registerRows(env, SESSION_ID), new Date(), {
+      multiDay: true,
+    });
+
+    expect(payload.content).toContain("Player p0 — Blades, then Fiasco");
+  });
+});
+
+describe("Refresh", () => {
+  it("is on the post, beside Tables played", async () => {
+    await day();
+    await session();
+    await came("p0");
+
+    const payload = correctionPost(await target(), await registerRows(env, SESSION_ID), new Date(), {
+      multiDay: true,
+    });
+
+    const rows = payload.components as { components: { custom_id: string; label?: string }[] }[];
+    expect(rows.at(-1)?.components.map((c) => c.label)).toEqual(["Tables played", "Refresh"]);
+  });
+
+  it("rewrites the post it came from, with the lines on it", async () => {
+    await day();
+    await session();
+    await came("p0", true, "Blades, then Fiasco");
+
+    const answer = await post({
+      type: InteractionType.MESSAGE_COMPONENT,
+      data: {
+        custom_id: encodeCustomId({
+          action: "correction",
+          arg: "refresh",
+          target: SESSION_ID,
+        }),
+        component_type: 2,
+      },
+      member: member("anybody"),
+      message: { id: "msg-1", channel_id: "chan-1" },
+    });
+
+    // What "it will be on the post on its next Refresh" means. Without this
+    // there is no next render of this post at all.
+    expect(answer.type).toBe(InteractionResponseType.UPDATE_MESSAGE);
+    expect(answer.data.content).toContain("Player p0 — Blades, then Fiasco");
+  });
+
+  it("degrades to the retired-post response for a session that is gone", async () => {
+    const answer = await post({
+      type: InteractionType.MESSAGE_COMPONENT,
+      data: {
+        custom_id: encodeCustomId({ action: "correction", arg: "refresh", target: "nowhere" }),
+        component_type: 2,
+      },
+      member: member("anybody"),
+      message: { id: "msg-1", channel_id: "chan-1" },
+    });
+
+    expect(answer.data.content).toContain("retired");
+  });
+});
+
 describe("the chain", () => {
   it("offers the people marked as having come", async () => {
     await day();
@@ -341,12 +450,38 @@ describe("who may", () => {
     expect(await stored("p0")).toMatchObject({ tablesPlayed: null });
   });
 
-  it("fails closed, and says which way, when the day has no host", async () => {
+  it("lets an organiser record it on a day with no host", async () => {
+    await day({ hostUserId: null });
+    await session();
+    await came("p0");
+    await setSetting(env, SETTING_KEYS.organiserRoleId, "role-org");
+
+    // Nothing writes `host_user_id` yet, so a day with no host is every day.
+    // Refusing here would refuse the feature, and the console page the old
+    // refusal named does not exist.
+    const answer = await click("somebody", SESSION_ID, ["role-org"]);
+    expect(answer.data.content).not.toContain("Only an organiser");
+    expect(answer.data.components).toBeDefined();
+  });
+
+  it("still refuses somebody with no role on a day with no host", async () => {
+    await day({ hostUserId: null });
+    await session();
+    await came("p0");
+    await setSetting(env, SETTING_KEYS.organiserRoleId, "role-org");
+
+    expect((await click("somebody")).data.content).toContain("Only an organiser");
+  });
+
+  it("fails closed when the organiser role has never been seeded", async () => {
     await day({ hostUserId: null });
     await session();
     await came("p0");
 
-    expect((await click(HOST)).data.content).toContain("set a host in the console");
+    // An unseeded role id means nobody, which somebody notices.
+    expect((await click(HOST, SESSION_ID, ["role-org"])).data.content).toContain(
+      "Only an organiser",
+    );
   });
 
   it("degrades a campaign session's click to the retired-post response", async () => {

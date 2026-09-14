@@ -6,7 +6,12 @@ import { decodeCustomId, encodeCustomId } from "./custom-id.ts";
 import { deleteUserData, describeReceipt } from "../privacy/delete.ts";
 import { correctionPost, renderAttendancePost } from "../attendance/render.ts";
 import { registerRows } from "../attendance/assume.ts";
-import { hostCheck, setTablesPlayed, tablesPlayedFor } from "../attendance/tables.ts";
+import {
+  hostCheck,
+  isMultiDaySession,
+  setTablesPlayed,
+  tablesPlayedFor,
+} from "../attendance/tables.ts";
 import { isGm } from "../campaigns/roster.ts";
 import { loadProjectionTarget, sessionTitle } from "../projection/target.ts";
 import { loginLink } from "../console/link.ts";
@@ -466,6 +471,8 @@ async function handleComponent(
       return handleAttend(interaction, env, id.arg, id.target);
     case "attended":
       return handleAttended(interaction, env, id.arg, id.target);
+    case "correction":
+      return handleCorrection(interaction, env, id.arg, id.target);
     case "ping":
       return handlePing(interaction, env, id.target ?? "default");
     case "privacy":
@@ -674,7 +681,40 @@ async function handleAttended(
   // response — the one rewrite send-only allows.
   return {
     type: InteractionResponseType.UPDATE_MESSAGE,
-    data: correctionPost(target, await registerRows(env, sessionId), new Date()),
+    // The same option the drain renders with. Two render sites for one post
+    // that disagree about whether it has a Tables block would drop the block —
+    // and the button under it — on the first toggle, permanently.
+    data: correctionPost(target, await registerRows(env, sessionId), new Date(), {
+      multiDay: await isMultiDaySession(env, sessionId),
+    }),
+  };
+}
+
+/**
+ * Refresh on a correction post.
+ *
+ * What the Tables-played confirmation means by "on the post on its next
+ * Refresh". No write, so no lock and no guard past `loadProjectionTarget` — it
+ * is the same read-only re-render the attendance post's own Refresh is, and the
+ * click came from the message it rewrites, which is the one rewrite send-only
+ * allows.
+ */
+async function handleCorrection(
+  interaction: Interaction,
+  env: Env,
+  arg: string | undefined,
+  sessionId: string | undefined,
+): Promise<Json> {
+  if (arg !== "refresh" || !sessionId) return retiredPost();
+
+  const target = await loadProjectionTarget(env, sessionId);
+  if (!target) return retiredPost();
+
+  return {
+    type: InteractionResponseType.UPDATE_MESSAGE,
+    data: correctionPost(target, await registerRows(env, sessionId), new Date(), {
+      multiDay: await isMultiDaySession(env, sessionId),
+    }),
   };
 }
 
@@ -796,7 +836,7 @@ async function handleTables(
   const actor = actorOf(interaction);
   if (!actor) return ephemeral("Orrey could not tell who clicked that.");
 
-  const refusal = await refuseUnlessHost(env, sessionId, actor.id);
+  const refusal = await refuseUnlessHost(env, interaction, sessionId, actor.id);
   if (refusal) return refusal;
 
   const register = await registerRows(env, sessionId);
@@ -835,7 +875,7 @@ async function handleTablesWho(
   const actor = actorOf(interaction);
   if (!actor) return ephemeral("Orrey could not tell who chose that.");
 
-  const refusal = await refuseUnlessHost(env, sessionId, actor.id);
+  const refusal = await refuseUnlessHost(env, interaction, sessionId, actor.id);
   if (refusal) return refusal;
 
   const userId = interaction.data?.values?.[0];
@@ -878,6 +918,7 @@ const TABLES_INPUT = "tables";
 /** The one guard, in one place, so the button and the select cannot disagree. */
 async function refuseUnlessHost(
   env: Env,
+  interaction: Interaction,
   sessionId: string,
   userId: string,
 ): Promise<Json | undefined> {
@@ -887,9 +928,16 @@ async function refuseUnlessHost(
     case "no":
       return ephemeral("Only whoever ran the day can record what was played.");
     case "no-host":
-      // Fails closed, and says which way: a fixable answer rather than a silent
-      // refusal or an open door.
-      return ephemeral("Nobody is down as running this day — set a host in the console first.");
+      // Nothing writes `game_days.host_user_id` yet, so a day with no host is
+      // every day — refusing here would refuse the whole feature, and the
+      // console page the refusal used to name does not exist. The organiser
+      // role stands in: the same role that opens a poll for a day, read off the
+      // member the bot token resolved, still closed to a player, and still
+      // failing closed when the role id is unseeded. The host column stays the
+      // narrower check for when a writer lands.
+      return (await hasOrganiserRole(env, interaction))
+        ? undefined
+        : ephemeral("Only an organiser can record what was played.");
     default:
       return retiredPost();
   }
@@ -1025,7 +1073,7 @@ async function submitTablesPlayed(
   const actor = actorOf(interaction);
   if (!actor) return ephemeral("Orrey could not tell who submitted that.");
 
-  const refusal = await refuseUnlessHost(env, sessionId, actor.id);
+  const refusal = await refuseUnlessHost(env, interaction, sessionId, actor.id);
   if (refusal) return refusal;
 
   const text =

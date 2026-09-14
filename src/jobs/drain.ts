@@ -202,6 +202,11 @@ async function runJob(job: typeof schema.jobs.$inferSelect, env: Env): Promise<v
       if (!target) return;
 
       const assumed = await assumeAttendance(env, target);
+
+      // A game day's evening is over, so the day is too. This happens before the
+      // early return below, because a day nobody claimed a seat at is still a
+      // day that has been and gone.
+      if (target.session.gameDayId) await playAfterAssume(env, target.session.gameDayId);
       // Nobody on the roster and nobody who clicked: there is no register to
       // correct, and a post with no buttons is a post that says nothing.
       if (assumed.length === 0) return;
