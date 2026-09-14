@@ -18,6 +18,7 @@ import { APPLY_JOB, applyFollowUp } from "../polls/canonise.ts";
 import { POST_SIGNUP_JOB, postSignupPost, startDayThread } from "../game-days/post.ts";
 import { sessionIdFor } from "../game-days/lifecycle.ts";
 import { PROMOTED_JOB } from "../game-days/promote.ts";
+import { LOCK_JOB, lockIfSeating } from "../game-days/lifecycle.ts";
 import { postDayNoticeOnce, promotedNotice } from "../game-days/notice.ts";
 import { loadProjectionTarget } from "../projection/target.ts";
 
@@ -371,6 +372,23 @@ async function runJob(job: typeof schema.jobs.$inferSelect, env: Env): Promise<v
         `promoted:${noticeId ?? userIds.join(",")}`,
         promotedNotice(row.day, row.game, userIds),
       );
+      return;
+    }
+
+    /**
+     * The table settles. A fallback for the day nobody locked by hand, which is
+     * why it is written to be harmless on one that is already locked, played or
+     * called off rather than throwing on the ordinary case.
+     *
+     * It posts nothing. The signup post's buttons outlive the lock — a post is
+     * never edited — and the `seat` handler is what tells a late clicker what
+     * happened, ephemerally, leaving the post alone.
+     */
+    case LOCK_JOB: {
+      const { gameDayId } = job.payload as { gameDayId?: string };
+      if (!gameDayId) throw new Error(`${LOCK_JOB} job ${job.id} has no gameDayId`);
+
+      await lockIfSeating(env, gameDayId);
       return;
     }
 

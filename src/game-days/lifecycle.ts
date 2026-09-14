@@ -1,10 +1,15 @@
 import { eq, sql } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
+import {
+  SETTING_DEFAULTS,
+  SETTING_KEYS,
+  settingOr,
+} from "../db/settings.ts";
 import { assumeJob } from "../attendance/assume.ts";
 import { jeopardyJob } from "../attendance/jeopardy.ts";
 import { reminderJobs } from "../attendance/reminders.ts";
-import { rearmStatement } from "../jobs/arm.ts";
+import { rearm, rearmStatement, type ArmedJob } from "../jobs/arm.ts";
 import { POST_SIGNUP_JOB } from "./post.ts";
 
 /**
@@ -139,6 +144,7 @@ export async function transition(
   // batch is left with nothing in it that can throw for its own reasons.
   const standing = [
     assumeJob(sessionId, day.endsAt),
+    await lockJob(env, gameDayId, day.startsAt),
     await jeopardyJob(env, sessionId, day.startsAt),
     ...(await reminderJobs(env, sessionId, day.startsAt)),
   ];
@@ -183,6 +189,73 @@ export async function transition(
   ]);
 
   return { from, to, changed: true, sessionId };
+}
+
+/**
+ * The lead-time lock, armed and handled in the same PR.
+ *
+ * The job is a *fallback*, not the mechanism: an organiser locking by hand is
+ * the normal path and this is what happens when nobody does. So the handler is
+ * written to be harmless on a day that is already locked, already played or
+ * already called off — it asks `transition`, which refuses those moves, rather
+ * than writing the state itself.
+ */
+export const LOCK_JOB = "game-day.lock";
+
+export async function lockJob(
+  env: Env,
+  gameDayId: string,
+  startsAt: number,
+  now = Math.floor(Date.now() / 1000),
+): Promise<ArmedJob> {
+  const hours = await settingOr<number>(
+    env,
+    SETTING_KEYS.gameDayLockLeadHours,
+    SETTING_DEFAULTS[SETTING_KEYS.gameDayLockLeadHours],
+  );
+  const lead = startsAt - hours * 3600;
+
+  return {
+    id: `${LOCK_JOB}:${gameDayId}`,
+    kind: LOCK_JOB,
+    payload: { gameDayId },
+    // Never armed already due. A day opened for seating inside the lead time —
+    // Wednesday evening for a Thursday, against a two-day default — would
+    // otherwise lock itself in the same minute its signup post goes up, and
+    // there is no LOCKED → SEATING edge and no way to mint the day again. Every
+    // button on that post would answer "seating is closed" for ever. Firing the
+    // jeopardy check or a reminder early is harmless; firing the lock early is
+    // terminal, so short-notice seating runs to the evening itself instead.
+    runAt: lead > now ? lead : startsAt,
+  };
+}
+
+export async function armLock(env: Env, gameDayId: string, startsAt: number): Promise<void> {
+  await rearm(db(env), [await lockJob(env, gameDayId, startsAt)]);
+}
+
+/**
+ * What the clock does when the lead time comes.
+ *
+ * A day the organiser already locked, played or called off is left exactly as it
+ * is — `transition` says no to all three, and the answer here is to stop rather
+ * than to throw, because a job that fails on the ordinary case is a job that
+ * fills `last_error` with nothing wrong.
+ */
+export async function lockIfSeating(env: Env, gameDayId: string): Promise<boolean> {
+  const day = await db(env)
+    .select({ state: schema.gameDays.state })
+    .from(schema.gameDays)
+    .where(eq(schema.gameDays.id, gameDayId))
+    .get();
+
+  // Gone. Nothing to lock and nothing to retry.
+  if (!day || day.state !== "SEATING") return false;
+
+  // Null actor: the clock acts on nobody's behalf, and the audit log should say
+  // so rather than name whoever happened to open seating.
+  const result = await transition(env, gameDayId, "LOCKED", null);
+  return result.changed;
 }
 
 /** Whether this day is still taking seats. Only SEATING is. */
