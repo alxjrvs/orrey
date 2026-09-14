@@ -18,6 +18,7 @@ import { sessionFrom } from "../console/session.ts";
 import { NotConfigured, isOrganiser } from "../console/roles.ts";
 import { readLoginToken } from "../console/link.ts";
 import { campaignSummaries, gameDaySummaries, gameSummaries } from "../console/api.ts";
+import { agendaBetween, windowAround } from "../console/agenda.ts";
 import { openPollFromConsole } from "../console/polls.ts";
 import { InvalidCampaign, createCampaign, updateCampaign } from "../campaigns/write.ts";
 import { IllegalTransition, transition, type CampaignState } from "../campaigns/lifecycle.ts";
@@ -152,6 +153,31 @@ export function createApp() {
   app.get("/api/campaigns", async (c) => c.json({ campaigns: await campaignSummaries(c.env) }));
   app.get("/api/games", async (c) => c.json({ games: await gameSummaries(c.env) }));
   app.get("/api/game-days", async (c) => c.json({ gameDays: await gameDaySummaries(c.env) }));
+
+  /**
+   * What is on, between these two moments.
+   *
+   * The window is the caller's to choose, half-open, so the month grid can ask
+   * for a month that has already been. The default is the fortnight ahead, which
+   * is what the agenda opens on.
+   *
+   * The envelope is `{ asOf, rows }` and every page of the console reuses it:
+   * the console carries the same as-of line the Discord posts do, because what
+   * it shows is a reading and the reader should know when of.
+   */
+  app.get("/api/agenda", async (c) => {
+    const asOf = new Date();
+    const fortnight = windowAround(asOf, 14);
+    const from = Number(c.req.query("from") ?? fortnight.from);
+    const to = Number(c.req.query("to") ?? fortnight.to);
+
+    // A window that is not a window is a 400 rather than a silent full scan.
+    if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) {
+      return c.json({ error: "from and to are unix seconds, and to comes after from" }, 400);
+    }
+
+    return c.json(await agendaBetween(c.env, from, to, asOf));
+  });
 
   /**
    * The write half. Each route is a thin wrapper over the domain function that
