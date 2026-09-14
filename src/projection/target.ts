@@ -71,7 +71,7 @@ export function sessionTitle(target: ProjectionTarget): string {
   if (campaign) {
     return session.number == null ? campaign.name : `${campaign.name} — Session ${session.number}`;
   }
-  if (gameDay) return dayTitle(gameDay, game);
+  if (gameDay) return gameDayTitle(gameDay, game);
   // A one-off with no parent at all. `hasExactlyOneParent` says there should be
   // none, but phase 1's CHECK still permits one and this is not the place to
   // discover that: a title is not worth throwing over.
@@ -84,7 +84,7 @@ export function sessionTitle(target: ProjectionTarget): string {
  * after itself — `title` is what phase 4 wrote when the poll won, and what an
  * organiser edits afterwards.
  */
-function dayTitle(
+export function gameDayTitle(
   day: typeof schema.gameDays.$inferSelect,
   game: typeof schema.games.$inferSelect | null,
 ): string {
