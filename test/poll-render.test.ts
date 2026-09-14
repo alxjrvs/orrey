@@ -108,13 +108,16 @@ describe("the components", () => {
     expect(select.max_values).toBe(MAX_DATES);
   });
 
-  it("comes back prefilled with what this person already chose", () => {
+  it("never carries one person's answer into the shared post", () => {
     const [[select]] = rows(renderPollPost(view({ chosen: ["d2"] }))) as [
-      [{ options: { value: string; default: boolean }[] }],
+      [{ options: { value: string; default?: boolean }[] }],
     ];
 
-    expect(select.options.find((o) => o.value === "d2")?.default).toBe(true);
-    expect(select.options.find((o) => o.value === "d1")?.default).toBe(false);
+    // A click answers with UPDATE_MESSAGE, which rewrites the one post everybody
+    // is looking at. A prefill computed from the clicker would be written into
+    // it and stay: the next person to open the select would find somebody else's
+    // answer ticked. There is no per-viewer render of a channel message.
+    for (const option of select.options) expect(option.default).toBeUndefined();
   });
 
   it("mints every id through custom-id, well inside the ceiling", () => {
