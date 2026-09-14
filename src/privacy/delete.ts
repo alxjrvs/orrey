@@ -39,6 +39,14 @@ export async function deleteUserData(env: Env, discordId: string): Promise<Delet
     .where(eq(schema.signups.userId, discordId))
     .returning({ targetId: schema.signups.targetId });
 
+  // A recap is somebody's own words about an evening, not a fact about the
+  // campaign the way an `audit_log` row is — so forgetting the person removes
+  // it rather than anonymising it, and the receipt says how many.
+  const logs = await d
+    .delete(schema.sessionLogs)
+    .where(eq(schema.sessionLogs.author, discordId))
+    .returning({ id: schema.sessionLogs.id });
+
   // The most sensitive thing Orrey holds about anybody, and the one whose
   // deletion has an effect outside Orrey: the pair stops working immediately and
   // the console stops recognising them.
@@ -62,6 +70,7 @@ export async function deleteUserData(env: Env, discordId: string): Promise<Delet
       attendance: attendance.length,
       campaign_members: campaignMembers.length,
       signups: signups.length,
+      session_logs: logs.length,
       discord_tokens: tokens.length,
     },
     deletedAt: new Date().toISOString(),

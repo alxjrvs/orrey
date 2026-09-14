@@ -99,6 +99,13 @@
       "when": 1789378438606,
       "tag": "0013_ics_sequence",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1789381559677,
+      "tag": "0014_session_logs",
+      "breakpoints": true
     }
   ]
 }
