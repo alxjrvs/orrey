@@ -39,6 +39,14 @@ export async function deleteUserData(env: Env, discordId: string): Promise<Delet
     .where(eq(schema.signups.userId, discordId))
     .returning({ targetId: schema.signups.targetId });
 
+  // The most sensitive thing Orrey holds about anybody, and the one whose
+  // deletion has an effect outside Orrey: the pair stops working immediately and
+  // the console stops recognising them.
+  const tokens = await d
+    .delete(schema.discordTokens)
+    .where(eq(schema.discordTokens.userId, discordId))
+    .returning({ userId: schema.discordTokens.userId });
+
   const users = await d
     .delete(schema.users)
     .where(eq(schema.users.discordId, discordId))
@@ -54,6 +62,7 @@ export async function deleteUserData(env: Env, discordId: string): Promise<Delet
       attendance: attendance.length,
       campaign_members: campaignMembers.length,
       signups: signups.length,
+      discord_tokens: tokens.length,
     },
     deletedAt: new Date().toISOString(),
   };

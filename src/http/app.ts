@@ -3,6 +3,17 @@ import type { Env } from "../env.ts";
 import { verifyDiscordRequest } from "../discord/verify.ts";
 import { handleInteraction } from "../discord/interactions.ts";
 import type { Interaction } from "../discord/types.ts";
+import {
+  SESSION_COOKIE,
+  STATE_COOKIE,
+  clear,
+  mintState,
+  readCookie,
+  sessionCookie,
+  stateCookie,
+  issueSession,
+} from "../console/cookies.ts";
+import { authorizeUrl, exchangeCode, identify, storeTokens } from "../console/oauth.ts";
 
 export function createApp() {
   const app = new Hono<{ Bindings: Env }>();
@@ -28,6 +39,57 @@ export function createApp() {
       origin: new URL(c.req.url).origin,
     });
     return c.json(response);
+  });
+
+  /**
+   * Console login, Discord OAuth, `identify` scope and nothing else.
+   *
+   * The `state` is minted here and set as a short-lived cookie; the callback
+   * refuses to exchange anything until the two match. Without it, anybody could
+   * hand somebody a callback URL carrying their own code and have the victim's
+   * browser log in as them.
+   */
+  app.get("/console/login", (c) => {
+    const state = mintState();
+    c.header("set-cookie", stateCookie(state));
+    return c.redirect(authorizeUrl(c.env, new URL(c.req.url).origin, state), 302);
+  });
+
+  app.get("/console/callback", async (c) => {
+    const code = c.req.query("code");
+    const returned = c.req.query("state");
+    const expected = readCookie(c.req.header("cookie"), STATE_COOKIE);
+
+    // The state check comes first, before the code is worth anything. One
+    // response for every way this can fail: saying which half was wrong tells
+    // somebody guessing which half to keep.
+    if (!code || !returned || !expected || returned !== expected) {
+      c.header("set-cookie", clear(STATE_COOKIE));
+      return c.text("That login link did not check out. Run /console again.", 400);
+    }
+
+    const origin = new URL(c.req.url).origin;
+    try {
+      const pair = await exchangeCode(c.env, origin, code);
+      const user = await identify(pair.accessToken);
+      await storeTokens(c.env, user, pair);
+
+      c.header("set-cookie", clear(STATE_COOKIE));
+      c.header("set-cookie", sessionCookie(await issueSession(c.env, user.id, new Date())), {
+        append: true,
+      });
+      return c.redirect("/console", 302);
+    } catch (error) {
+      console.error("console login failed", error);
+      c.header("set-cookie", clear(STATE_COOKIE));
+      return c.text("Discord would not complete that login. Run /console again.", 502);
+    }
+  });
+
+  /** Logging out is forgetting the cookie. The token pair is dropped with it. */
+  app.post("/console/logout", (c) => {
+    c.header("set-cookie", clear(SESSION_COOKIE));
+    return c.redirect("/", 302);
   });
 
   // Per-campaign ICS feeds. Calendar clients cannot do OAuth, so the token in
