@@ -189,6 +189,8 @@ describe("the move", () => {
         "reminder.step",
         "reminder.step",
         "session.project",
+        // The carry-over's fresh attendance post, added one slice up.
+        "session.post-attendance",
       ].sort(),
     );
   });
