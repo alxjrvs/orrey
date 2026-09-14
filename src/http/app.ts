@@ -18,6 +18,7 @@ import { sessionFrom } from "../console/session.ts";
 import { NotConfigured, isOrganiser } from "../console/roles.ts";
 import { readLoginToken } from "../console/link.ts";
 import { campaignSummaries, gameSummaries } from "../console/api.ts";
+import { openPollFromConsole } from "../console/polls.ts";
 import { InvalidCampaign, createCampaign, updateCampaign } from "../campaigns/write.ts";
 import { IllegalTransition, transition, type CampaignState } from "../campaigns/lifecycle.ts";
 import {
@@ -187,6 +188,24 @@ export function createApp() {
     refusable(c, async () => {
       const id = await putGame(c.env, c.req.param("id"), await c.req.json(), c.get("userId"));
       return c.json({ id });
+    }),
+  );
+
+  /**
+   * Opening a date poll for the whole server.
+   *
+   * A console page rather than a fifth command, which is the rule this phase
+   * keeps testing: if opening a poll seems to want its own command, that is the
+   * console needing a page — and this is the page. It sits behind the same
+   * `/api/*` gate as everything else here, so an unauthenticated post is a 401
+   * before it reaches any of this.
+   */
+  app.post("/api/polls", async (c) =>
+    refusable(c, async () => {
+      const result = await openPollFromConsole(c.env, await c.req.json(), c.get("userId"));
+      return result.ok
+        ? c.json({ id: result.pollId }, 201)
+        : c.json({ error: result.error }, result.status);
     }),
   );
 
