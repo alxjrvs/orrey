@@ -1,0 +1,34 @@
+/* The console's own layout. Everything else is a token. */
+.bar {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3, 12px);
+  padding: var(--space-3, 12px) var(--space-4, 16px);
+  border-bottom: var(--border-structural);
+}
+.mark { font: var(--type-title, inherit); letter-spacing: 0.02em; }
+.who { color: var(--text-secondary); font: var(--type-caption, inherit); }
+
+main { padding: var(--space-4, 16px); }
+.note { color: var(--text-secondary); }
+.error { color: var(--danger-500, #d84b4b); }
+
+table { width: 100%; border-collapse: collapse; }
+caption { text-align: left; padding-bottom: var(--space-2, 8px); color: var(--text-secondary); }
+th, td {
+  text-align: left;
+  padding: var(--space-2, 8px) var(--space-3, 12px);
+  border-bottom: var(--border-hair);
+  vertical-align: top;
+}
+th { color: var(--text-secondary); font-weight: 500; }
+td.numeric, th.numeric { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* State is a word, not a colour: the four are not a severity scale. */
+.state { font-variant-caps: all-small-caps; letter-spacing: 0.06em; }
+.state[data-state="RUNNING"] { color: var(--signal-500); }
+.state[data-state="HIATUS"] { color: var(--amber-500, #d9a441); }
+.state[data-state="CONCLUDED"], .state[data-state="FORMING"] { color: var(--text-secondary); }
+
+.muted { color: var(--text-secondary); }
