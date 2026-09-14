@@ -738,7 +738,7 @@ const campaignState = { selected: null };
  * reasons that is. An empty table under a heading is the one thing this must
  * never render.
  */
-function campaignPageSection(plan) {
+function campaignPageSection(plan, history) {
   const section = document.createElement("section");
   section.className = "campaign-page";
 
@@ -766,6 +766,8 @@ function campaignPageSection(plan) {
   } else {
     section.append(upcomingTable(plan.upcoming));
   }
+
+  if (history) section.append(historySection(history));
 
   return section;
 }
@@ -881,6 +883,113 @@ function upcomingTable(rows) {
   return table;
 }
 
+/**
+ * What the campaign has already done, and what that implies.
+ *
+ * The two tables are one section on purpose: every number in the first is
+ * counted from the second, and a streak shown without the sessions it came from
+ * is a number nobody can check. Flake memory is information for the organiser
+ * and never an automatic consequence — nothing reads it back.
+ */
+function historySection(history) {
+  const section = document.createElement("section");
+  section.append(subheading("Record"));
+
+  if (history.note) {
+    const note = document.createElement("p");
+    note.className = "note";
+    note.textContent = history.note;
+    section.append(note);
+  }
+
+  if (history.members.length > 0) section.append(recordTable(history.members));
+  if (history.sessions.length > 0) section.append(playedTable(history.sessions));
+  return section;
+}
+
+function recordTable(members) {
+  const table = document.createElement("table");
+  const head = document.createElement("tr");
+  for (const [label, className] of [
+    ["Player", ""],
+    ["Came", "numeric"],
+    ["Of", "numeric"],
+    ["Rate", "numeric"],
+    ["Said in, missed", "numeric"],
+  ]) {
+    const th = document.createElement("th");
+    th.textContent = label;
+    if (className) th.className = className;
+    head.append(th);
+  }
+  const thead = document.createElement("thead");
+  thead.append(head);
+  table.append(thead);
+
+  const body = document.createElement("tbody");
+  for (const member of members) {
+    const tr = document.createElement("tr");
+    cell(tr, member.name);
+    cell(tr, String(member.attended), "numeric");
+    cell(tr, String(member.played), "numeric");
+    // No number at all below the threshold: "1 of 2" reads as a judgement
+    // rather than as the shrug it should be.
+    cell(tr, member.rate === null ? "—" : `${Math.round(member.rate * 100)}%`, "numeric");
+    cell(tr, member.noShowStreak === 0 ? "—" : String(member.noShowStreak), "numeric");
+    body.append(tr);
+  }
+  table.append(body);
+  return table;
+}
+
+function playedTable(sessions) {
+  const table = document.createElement("table");
+  const caption = document.createElement("caption");
+  caption.textContent = "What the numbers were counted from";
+  table.append(caption);
+
+  const head = document.createElement("tr");
+  for (const [label, className] of [
+    ["When", ""],
+    ["Session", ""],
+    ["Came", "numeric"],
+    ["Missed", "numeric"],
+    ["No register", "numeric"],
+  ]) {
+    const th = document.createElement("th");
+    th.textContent = label;
+    if (className) th.className = className;
+    head.append(th);
+  }
+  const thead = document.createElement("thead");
+  thead.append(head);
+  table.append(thead);
+
+  const body = document.createElement("tbody");
+  for (const played of sessions) {
+    const tr = document.createElement("tr");
+    tr.tabIndex = 0;
+    tr.addEventListener("click", () => {
+      agendaState.selected = played.sessionId;
+      load();
+    });
+    cell(tr, when(played.startsAt));
+    const title = cell(tr, played.number === null ? played.sessionId : `Session ${played.number}`);
+    const sub = document.createElement("div");
+    sub.className = "muted";
+    sub.textContent = text(played.location);
+    title.append(sub);
+    cell(tr, String(played.came), "numeric");
+    cell(tr, String(played.missed), "numeric");
+    // Never folded into "missed": nobody wrote the register is not the same
+    // answer as they did not turn up.
+    cell(tr, played.unrecorded === 0 ? "—" : String(played.unrecorded), "numeric");
+    body.append(tr);
+  }
+  table.append(body);
+  return table;
+}
+
 function subheading(label) {
   const h = document.createElement("h4");
   h.textContent = label;
@@ -912,11 +1021,16 @@ async function load() {
 
     // Likewise the campaign page: the summaries table needs none of it, and a
     // campaign nobody has opened is a query nobody has asked for.
-    const plan = campaignState.selected
-      ? await api(`/api/campaigns/${encodeURIComponent(campaignState.selected)}/page`).catch(
-          () => null,
-        )
-      : null;
+    const [plan, history] = campaignState.selected
+      ? await Promise.all([
+          api(`/api/campaigns/${encodeURIComponent(campaignState.selected)}/page`).catch(
+            () => null,
+          ),
+          api(`/api/campaigns/${encodeURIComponent(campaignState.selected)}/history`).catch(
+            () => null,
+          ),
+        ])
+      : [null, null];
 
     who.textContent = `signed in as ${me.userId}`;
     const split = document.createElement("div");
@@ -924,7 +1038,7 @@ async function load() {
     split.append(agendaSection(agenda), detailRail(detail));
     main.replaceChildren(split);
     main.append(heading("Campaigns"), campaignsTable(campaigns));
-    if (plan) main.append(campaignPageSection(plan.campaign));
+    if (plan) main.append(campaignPageSection(plan.campaign, history));
     main.append(heading("Game days"), gameDaysTable(gameDays));
     main.append(heading("Games"), gamesTable(games), createForm());
   } catch (error) {
