@@ -210,3 +210,32 @@ describe("the crossing arms it", () => {
     expect(await jobs()).toHaveLength(1);
   });
 });
+
+describe("what must not burn the claim", () => {
+  it("does not take one when the guild id has never been seeded", async () => {
+    await env.DB.prepare("DELETE FROM settings WHERE key = ?").bind(SETTING_KEYS.guildId).run();
+
+    await expect(
+      postNoticeOnce(env, await target(), "confirmed", confirmedNotice(await target())),
+    ).rejects.toThrow();
+
+    // A claim is expensive to hold — nothing else may post while it stands — so
+    // burning one on a missing setting would suppress this notice for good, with
+    // no Discord call ever made and nothing to show for it.
+    expect(await find(env, noticeRef)).toBeUndefined();
+    expect(calls).toEqual([]);
+  });
+
+  it("does not take one for a session with nowhere to post", async () => {
+    await env.DB.prepare("UPDATE sessions SET thread_id = NULL").run();
+    await env.DB.prepare("UPDATE campaigns SET discord_channel_id = NULL").run();
+
+    expect(
+      await postNoticeOnce(env, await target(), "confirmed", confirmedNotice(await target())),
+    ).toBeUndefined();
+
+    // Taking a claim to say "nowhere" would block the attempt that comes after
+    // somebody makes the thread.
+    expect(await find(env, noticeRef)).toBeUndefined();
+  });
+});
