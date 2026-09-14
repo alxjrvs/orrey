@@ -17,6 +17,7 @@ import { authorizeUrl, exchangeCode, identify, storeTokens } from "../console/oa
 import { sessionFrom } from "../console/session.ts";
 import { NotConfigured, isOrganiser } from "../console/roles.ts";
 import { readLoginToken } from "../console/link.ts";
+import { campaignSummaries, gameSummaries } from "../console/api.ts";
 
 export function createApp() {
   const app = new Hono<{ Bindings: Env; Variables: { userId: string } }>();
@@ -130,6 +131,11 @@ export function createApp() {
 
   /** Who Orrey thinks you are. The first thing the console asks. */
   app.get("/api/me", (c) => c.json({ userId: c.get("userId") }));
+
+  // The read half of the console. Every field comes from D1: a console that read
+  // Discord back would be showing a projection as though it were the thing.
+  app.get("/api/campaigns", async (c) => c.json({ campaigns: await campaignSummaries(c.env) }));
+  app.get("/api/games", async (c) => c.json({ games: await gameSummaries(c.env) }));
 
   /** Logging out is forgetting the cookie. The token pair is dropped with it. */
   app.post("/console/logout", (c) => {

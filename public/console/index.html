@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Orrey console</title>
+    <!--
+      The design system lives in `design/` and is not shipped: `public/` is what
+      the ASSETS binding serves. These files are verbatim copies of
+      design/tokens/*.css — copied rather than imported, and never edited here.
+      There is no build step in this repo and this is not the phase to add one.
+    -->
+    <link rel="stylesheet" href="/console/tokens/colors.css" />
+    <link rel="stylesheet" href="/console/tokens/fonts.css" />
+    <link rel="stylesheet" href="/console/tokens/typography.css" />
+    <link rel="stylesheet" href="/console/tokens/spacing.css" />
+    <link rel="stylesheet" href="/console/tokens/borders.css" />
+    <link rel="stylesheet" href="/console/tokens/motion.css" />
+    <link rel="stylesheet" href="/console/tokens/base.css" />
+    <link rel="stylesheet" href="/console/console.css" />
+  </head>
+  <body>
+    <header class="bar">
+      <span class="mark">Orrey</span>
+      <span class="who" id="who"></span>
+    </header>
+
+    <main id="main" aria-busy="true">
+      <p class="note" id="status">Loading…</p>
+    </main>
+
+    <script type="module" src="/console/console.js"></script>
+  </body>
+</html>
