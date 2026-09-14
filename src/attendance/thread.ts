@@ -40,6 +40,17 @@ export async function startSessionThread(
   const { session } = target;
   if (session.threadId) return session.threadId;
 
+  // A game day already has a thread, opened on its signup post. The day's
+  // session belongs in it rather than in one of its own: Discord has no thread
+  // inside a thread, so hanging one off a post that went *into* the day's thread
+  // would be refused — and two threads about one evening is one too many anyway.
+  // Recording it on the session is what makes every later notice, reminder and
+  // recap land there without any of them learning about game days.
+  if (target.gameDay?.threadId) {
+    await rememberThreadId(env, session.id, target.gameDay.threadId);
+    return target.gameDay.threadId;
+  }
+
   // No post means nothing to hang a thread on. The post job runs first and this
   // rides on the back of it, so this is the "post failed" case, not a race.
   if (!session.discordMessageId) return undefined;
@@ -141,12 +152,20 @@ export async function destinationFor(
   env: Env,
   target: ProjectionTarget,
 ): Promise<string | undefined> {
-  return target.session.threadId ?? (await channelOf(env, target));
+  // The day's thread before the session's own column knows about it: the
+  // attendance post is the first thing that goes into it, and it runs before
+  // `startSessionThread` has had a chance to record it.
+  return target.session.threadId ?? target.gameDay?.threadId ?? (await channelOf(env, target));
 }
 
-async function channelOf(env: Env, target: ProjectionTarget): Promise<string | undefined> {
+/**
+ * The channel a session's posts belong in: its campaign's, or its day's, and
+ * the scheduling channel for anything with neither.
+ */
+export async function channelOf(env: Env, target: ProjectionTarget): Promise<string | undefined> {
   return (
     target.campaign?.discordChannelId ??
+    target.gameDay?.discordChannelId ??
     (await getSetting<string>(env, SETTING_KEYS.schedulingChannelId))
   );
 }
