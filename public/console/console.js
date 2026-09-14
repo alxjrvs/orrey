@@ -158,6 +158,96 @@ function gamesTable(games) {
   return table;
 }
 
+function gameDaysTable(days) {
+  const table = document.createElement("table");
+  const caption = document.createElement("caption");
+  caption.textContent = days.length === 1 ? "1 game day" : `${days.length} game days`;
+  table.append(caption);
+
+  const head = document.createElement("tr");
+  for (const [label, className] of [
+    ["Day", ""],
+    ["State", ""],
+    ["When", ""],
+    ["Venue", ""],
+    ["Seated", "numeric"],
+    ["Waiting", "numeric"],
+    ["", ""],
+  ]) {
+    const th = document.createElement("th");
+    th.textContent = label;
+    if (className) th.className = className;
+    head.append(th);
+  }
+  const thead = document.createElement("thead");
+  thead.append(head);
+  table.append(thead);
+
+  const body = document.createElement("tbody");
+  for (const day of days) {
+    const row = document.createElement("tr");
+
+    const name = cell(row, text(day.gameName ?? day.title ?? "Game day"));
+    const id = document.createElement("div");
+    id.className = "muted";
+    id.textContent = `${day.kind} · ${day.id}`;
+    name.append(id);
+
+    const state = cell(row, day.state);
+    state.className = "state";
+    state.dataset.state = day.state;
+
+    cell(row, when(day.startsAt));
+    cell(row, text(day.venue));
+    // The seat count as the day itself knows it, never as the post shows it.
+    cell(row, day.capacity ? `${day.seated}/${day.capacity}` : String(day.seated), "numeric");
+    cell(row, String(day.waitlisted), "numeric");
+    dayLifecycleCell(row, day);
+
+    body.append(row);
+  }
+  table.append(body);
+  return table;
+}
+
+/** What a day in this state may do next. `src/game-days/lifecycle.ts` holds the
+ *  map that decides; this is the same shape, for buttons. */
+const DAY_NEXT = {
+  PROPOSED: [
+    ["SEATING", "Open seating"],
+    ["CANCELLED", "Call it off"],
+  ],
+  SEATING: [["CANCELLED", "Call it off"]],
+  LOCKED: [["CANCELLED", "Call it off"]],
+  PLAYED: [],
+  CANCELLED: [],
+};
+
+function dayLifecycleCell(row, day) {
+  const td = document.createElement("td");
+  for (const [to, label] of DAY_NEXT[day.state] ?? []) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = label;
+    button.addEventListener("click", async () => {
+      // Opening seating posts a message nobody can unpost, and calling a day off
+      // is the end of it. Both are worth one sentence of friction.
+      const name = day.gameName ?? day.title ?? "this day";
+      if (!confirm(`${label} — ${name}?`)) return;
+
+      button.disabled = true;
+      await act(() =>
+        api(`/api/game-days/${encodeURIComponent(day.id)}/transition`, {
+          method: "POST",
+          body: JSON.stringify({ to }),
+        }),
+      );
+    });
+    td.append(button);
+  }
+  row.append(td);
+}
+
 /** What a campaign in this state may do next. The map that says so lives in
  *  `src/campaigns/lifecycle.ts`; this is the same shape, for buttons. */
 const NEXT = {
@@ -278,14 +368,16 @@ function heading(label) {
 
 async function load() {
   try {
-    const [me, { campaigns }, { games }] = await Promise.all([
+    const [me, { campaigns }, { games }, { gameDays }] = await Promise.all([
       api("/api/me"),
       api("/api/campaigns"),
       api("/api/games"),
+      api("/api/game-days"),
     ]);
 
     who.textContent = `signed in as ${me.userId}`;
     main.replaceChildren(heading("Campaigns"), campaignsTable(campaigns));
+    main.append(heading("Game days"), gameDaysTable(gameDays));
     main.append(heading("Games"), gamesTable(games), createForm());
   } catch (error) {
     const message =
