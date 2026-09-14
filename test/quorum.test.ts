@@ -219,3 +219,35 @@ describe("the click that crosses it", () => {
     expect(await db(env).select().from(schema.attendance).all()).toHaveLength(3);
   });
 });
+
+describe("a session that was marked short", () => {
+  const actor = (id: string) => ({ id, username: `p${id}`, global_name: null });
+
+  function lock() {
+    return env.SESSION_LOCK.get(env.SESSION_LOCK.idFromName(SESSION_ID));
+  }
+
+  it("confirms when the table turns up after all", async () => {
+    await setQuorum(2);
+    await db(env)
+      .update(schema.sessions)
+      .set({ state: "JEOPARDY" })
+      .where(eq(schema.sessions.id, SESSION_ID));
+
+    await lock().setIntent({ sessionId: SESSION_ID, actor: actor("1"), intent: "in" });
+    await lock().setIntent({ sessionId: SESSION_ID, actor: actor("2"), intent: "in" });
+
+    // Being marked short a day out is a question asked of the table, not a
+    // terminal state — and somebody answering by turning up is the whole point
+    // of asking. Refusing to confirm would leave the post reading "Confirmed"
+    // over a session D1 says is in jeopardy, for ever, with no click able to fix
+    // it.
+    expect(
+      await db(env)
+        .select({ state: schema.sessions.state })
+        .from(schema.sessions)
+        .where(eq(schema.sessions.id, SESSION_ID))
+        .get(),
+    ).toMatchObject({ state: "CONFIRMED" });
+  });
+});

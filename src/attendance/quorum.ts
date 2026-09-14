@@ -40,12 +40,23 @@ export function quorumOf(target: ProjectionTarget, rows: AttendanceRow[]): Quoru
 }
 
 /**
- * Whether this click is the one that crosses the threshold. Only a session that
- * is still SCHEDULED confirms: a CANCELLED or PLAYED session is not waiting to
- * be confirmed, and a CONFIRMED one already is.
+ * Whether this click is the one that crosses the threshold.
+ *
+ * A session that is still waiting to be confirmed is one of two things:
+ * SCHEDULED, or **JEOPARDY**. Being marked short a day out is not a terminal
+ * state — it is a question asked of the table — and the whole point of asking is
+ * that somebody might answer by turning up. A JEOPARDY session that reaches
+ * quorum is exactly the good outcome, and refusing to confirm it would leave a
+ * post reading "Confirmed" over a session the database says is in jeopardy, for
+ * ever, with no click able to fix it.
+ *
+ * CANCELLED and PLAYED are not waiting for anything, and a CONFIRMED one already
+ * is.
  */
+const WAITING = new Set(["SCHEDULED", "JEOPARDY"]);
+
 export function crossesThreshold(quorum: Quorum, target: ProjectionTarget): boolean {
-  return quorum.met && target.session.state === "SCHEDULED";
+  return quorum.met && WAITING.has(target.session.state);
 }
 
 /** The line the post carries about all this, or nothing when there is no threshold. */
