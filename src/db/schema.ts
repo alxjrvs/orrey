@@ -206,6 +206,12 @@ export const sessions = sqliteTable(
     id: text("id").primaryKey(),
     kind: text("kind", { enum: ["campaign_session", "one_off"] }).notNull(),
     campaignId: text("campaign_id").references(() => campaigns.id, { onDelete: "cascade" }),
+    /**
+     * A one-off's parent. A game day gets a session row so that attendance, the
+     * thread, the Discord event and the Google event reuse the machinery they
+     * already have rather than growing a second copy of it.
+     */
+    gameDayId: text("game_day_id").references(() => gameDays.id, { onDelete: "cascade" }),
     /** Session number within the campaign. Display only — never an ordering key. */
     number: integer("number"),
     /** Unix seconds, UTC. The timezone is a rendering concern, held in settings. */
@@ -231,6 +237,22 @@ export const sessions = sqliteTable(
   (t) => [
     index("sessions_starts_idx").on(t.startsAt),
     index("sessions_campaign_idx").on(t.campaignId, t.startsAt),
+    /**
+     * Phase 1's CHECK, **untouched**. It still says exactly what it said: a
+     * campaign session has a campaign and a one-off does not.
+     *
+     * It does not say a one-off has a game day, and it deliberately is not made
+     * to. SQLite cannot alter a CHECK, so any change here — including *removing*
+     * it — is a rebuild of `sessions`, and `docs/GOTCHAS.md` records that D1
+     * ignores `PRAGMA foreign_keys=OFF`: dropping the old table would cascade
+     * away every `attendance` row, every `calendar_links` row, and every
+     * `date_polls` row that targets a session. That is the entire attendance
+     * history of the server, deleted to tighten a constraint.
+     *
+     * So the second half of "exactly one parent, and the one its kind names"
+     * lives in `hasExactlyOneParent` below, next to `singleNamesGame` and for the
+     * same reason.
+     */
     check(
       "sessions_parent_ck",
       sql`(${t.kind} = 'campaign_session' AND ${t.campaignId} IS NOT NULL)
@@ -238,6 +260,23 @@ export const sessions = sqliteTable(
     ),
   ],
 );
+
+/**
+ * Exactly one parent, and the one its `kind` names.
+ *
+ * The campaign half is a CHECK; this is the whole rule, including the half
+ * SQLite will not let Orrey add without deleting the attendance history to do
+ * it. Every path that writes a session goes through this.
+ */
+export function hasExactlyOneParent(session: {
+  kind: string;
+  campaignId: string | null;
+  gameDayId: string | null;
+}): boolean {
+  return session.kind === "campaign_session"
+    ? session.campaignId !== null && session.gameDayId === null
+    : session.campaignId === null && session.gameDayId !== null;
+}
 
 /**
  * One row per person per session. `intent` is what they said; `attended` is what
@@ -257,6 +296,14 @@ export const attendance = sqliteTable(
     intent: text("intent", { enum: ["in", "out", "maybe"] }),
     attended: integer("attended"),
     attendedSource: text("attended_source", { enum: ["auto", "gm"] }),
+    /**
+     * What this person actually played, on a day where several tables ran.
+     *
+     * Free text on a row already keyed `(session_id, user_id)`, so it is per
+     * person by construction — which is #7's open question settled: there is no
+     * `tables` table and no per-table seating. Nothing reads this until `p5/13`.
+     */
+    tablesPlayed: text("tables_played"),
     note: text("note"),
     updatedAt: integer("updated_at").notNull().default(now),
   },
