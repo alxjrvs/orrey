@@ -2,6 +2,7 @@ import { env } from "cloudflare:test";
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import { db, schema } from "../src/db/index.ts";
+import { hasExactlyOneParent } from "../src/db/schema.ts";
 
 /**
  * The domain tables. What is worth a test here is not that drizzle can write a
@@ -266,6 +267,97 @@ describe("the roster, the signup and the log", () => {
     expect(await db(env).select().from(schema.auditLog).get()).toMatchObject({
       actorUserId: null,
       detail: { before: { sessions: 2 }, after: { sessions: 4 } },
+    });
+  });
+});
+
+describe("a session's second parent", () => {
+  it("accepts a one-off hanging off a game day", async () => {
+    await env.DB.prepare(
+      "INSERT INTO game_days (id, kind, starts_at, ends_at) VALUES ('day-1', 'multi', 1, 2)",
+    ).run();
+
+    await expect(
+      env.DB.prepare(
+        "INSERT INTO sessions (id, kind, game_day_id, starts_at, ends_at) VALUES ('s1', 'one_off', 'day-1', 1, 2)",
+      ).run(),
+    ).resolves.toBeTruthy();
+  });
+
+  it("says a session with both parents is wrong", () => {
+    // The campaign half is phase 1's CHECK; this is the half SQLite will not let
+    // Orrey add without rebuilding `sessions` — and rebuilding it on D1 cascades
+    // away every attendance row, calendar link and date poll that references it.
+    expect(
+      hasExactlyOneParent({ kind: "one_off", campaignId: "c", gameDayId: "d" }),
+    ).toBe(false);
+    expect(
+      hasExactlyOneParent({ kind: "campaign_session", campaignId: "c", gameDayId: "d" }),
+    ).toBe(false);
+  });
+
+  it("says a session with neither is wrong", () => {
+    expect(hasExactlyOneParent({ kind: "one_off", campaignId: null, gameDayId: null })).toBe(
+      false,
+    );
+  });
+
+  it("says each kind with its own parent is right", () => {
+    expect(hasExactlyOneParent({ kind: "one_off", campaignId: null, gameDayId: "d" })).toBe(true);
+    expect(
+      hasExactlyOneParent({ kind: "campaign_session", campaignId: "c", gameDayId: null }),
+    ).toBe(true);
+  });
+
+  it("keeps phase 1's CHECK exactly as it was", async () => {
+    // Untouched, so no rebuild — which is the whole reason the other half is a
+    // function.
+    await expect(
+      env.DB.prepare(
+        "INSERT INTO sessions (id, kind, starts_at, ends_at) VALUES ('bad', 'campaign_session', 1, 2)",
+      ).run(),
+    ).rejects.toThrow();
+  });
+
+  it("takes the day's sessions with the day", async () => {
+    await env.DB.prepare(
+      "INSERT INTO game_days (id, kind, starts_at, ends_at) VALUES ('day-2', 'multi', 1, 2)",
+    ).run();
+    await env.DB.prepare(
+      "INSERT INTO sessions (id, kind, game_day_id, starts_at, ends_at) VALUES ('s2', 'one_off', 'day-2', 1, 2)",
+    ).run();
+
+    await env.DB.prepare("DELETE FROM game_days WHERE id = 'day-2'").run();
+
+    // A one-off has no other reason to exist. This also pins the hand-corrected
+    // ON DELETE — drizzle-kit drops it on an added column.
+    expect(
+      await db(env).select().from(schema.sessions).where(eq(schema.sessions.id, "s2")).get(),
+    ).toBeUndefined();
+  });
+});
+
+describe("what a person played", () => {
+  it("is free text on the row that is already per person", async () => {
+    await env.DB.prepare(
+      "INSERT INTO game_days (id, kind, starts_at, ends_at) VALUES ('day-3', 'multi', 1, 2)",
+    ).run();
+    await env.DB.prepare(
+      "INSERT INTO sessions (id, kind, game_day_id, starts_at, ends_at) VALUES ('s3', 'one_off', 'day-3', 1, 2)",
+    ).run();
+    await env.DB.prepare(
+      "INSERT INTO users (discord_id, feed_token) VALUES ('ada', 't-ada')",
+    ).run();
+
+    await env.DB.prepare(
+      "INSERT INTO attendance (session_id, user_id, tables_played) VALUES ('s3', 'ada', 'Blades, then the Mothership one-shot')",
+    ).run();
+
+    // #7's open question, settled: no `tables` table and no per-table seating.
+    // The row is already keyed (session_id, user_id), so this is per person by
+    // construction.
+    expect(await db(env).select().from(schema.attendance).get()).toMatchObject({
+      tablesPlayed: "Blades, then the Mothership one-shot",
     });
   });
 });
