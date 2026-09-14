@@ -7,7 +7,7 @@ import { decide } from "./win-rule.ts";
 import { pollView } from "./rows.ts";
 import { moveSession } from "./move.ts";
 import { carryOver } from "./carry-over.ts";
-import { mintGameDays } from "./game-days.ts";
+import { mintStatements } from "./game-days.ts";
 import type { PollView } from "./render.ts";
 import type { Interaction } from "../discord/types.ts";
 
@@ -247,17 +247,25 @@ export async function applyOutcomes(
         ]
       : [];
 
-  // One batch. A poll marked closed with half its dates still `open` is a poll
-  // whose consequences would fire against a record nobody can read. `closed`
-  // leads so the tuple is non-empty however the dates fall.
-  await d.batch([closed, lost, ...marked, ...follow]);
-
   // A poll with no target was looking for a day rather than moving one, so what
   // its winners become is a game day — one per winning date, because a
   // multi-kind poll can win more than one and then that is genuinely two days.
-  if (!poll.targetSessionId && won.length > 0) {
-    await mintGameDays(env, pollId, won);
-  }
+  //
+  // The statements go in the batch below rather than being run after it. Minting
+  // afterwards meant the close committed first, and Apply's own guard refuses a
+  // closed poll — so a crash, an eviction or a D1 error in between left a poll
+  // permanently closed with winning dates and no day, with nothing able to make
+  // one. Nothing in the mint talks to Discord, so there is no reason for it to
+  // be anywhere but here.
+  const mint =
+    !poll.targetSessionId && won.length > 0
+      ? (await mintStatements(env, pollId, won)).statements
+      : [];
+
+  // One batch. A poll marked closed with half its dates still `open` is a poll
+  // whose consequences would fire against a record nobody can read. `closed`
+  // leads so the tuple is non-empty however the dates fall.
+  await d.batch([closed, lost, ...marked, ...follow, ...mint]);
 
   return pollView(env, pollId, new Date());
 }

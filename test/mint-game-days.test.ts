@@ -255,3 +255,32 @@ describe("the announcement", () => {
     expect(String(calls[0]?.body.content)).toContain("Several tables.");
   });
 });
+
+describe("the claim this file makes", () => {
+  it("mints the day in the same batch that closes the poll", async () => {
+    await seed({ gameDayKind: "single" });
+
+    await canoniseWith(dates[0]!);
+
+    // "The mint happens inside the same batch that writes the outcomes, so a
+    // poll cannot end up closed with winners and no days." It was not true: the
+    // close committed in one batch and the mint ran in another, and Apply's own
+    // guard refuses a closed poll — so a crash in between lost the day for good.
+    // Asserting the pairing rather than the ordering, because the ordering is
+    // what a batch removes.
+    expect(
+      await db(env).select().from(schema.datePolls).where(eq(schema.datePolls.id, POLL)).get(),
+    ).toMatchObject({ status: "closed" });
+    expect(await days()).toHaveLength(1);
+  });
+
+  it("leaves no won date without a day", async () => {
+    await seed();
+
+    await canoniseWith(dates[0]!, dates[1]!);
+
+    const won = (await pollDates()).filter((date) => date.outcome === "won");
+    expect(won).toHaveLength(2);
+    for (const date of won) expect(date.gameDayId).not.toBeNull();
+  });
+});
