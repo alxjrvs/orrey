@@ -7,6 +7,7 @@ import { ASSUME_JOB } from "../src/attendance/assume.ts";
 import { POST_SIGNUP_JOB } from "../src/game-days/post.ts";
 import {
   IllegalDayTransition,
+  LOCK_JOB,
   isSeating,
   sessionIdFor,
   transition,
@@ -111,26 +112,25 @@ describe("opening seating", () => {
     expect(await sessions()).toHaveLength(1);
   });
 
-  it("arms the projection and the signup post, and the register for afterwards", async () => {
+  it("arms the four standing jobs a seating day wants", async () => {
     await day();
     await transition(env, DAY_ID, "SEATING", "organiser");
 
     const sessionId = sessionIdFor(DAY_ID);
     expect((await jobs()).map((job) => [job.kind, job.id])).toEqual([
       [ASSUME_JOB, `${ASSUME_JOB}:${sessionId}`],
+      [LOCK_JOB, `${LOCK_JOB}:${DAY_ID}`],
       [POST_SIGNUP_JOB, `${POST_SIGNUP_JOB}:${DAY_ID}`],
       ["session.project", `session.project:${sessionId}`],
     ]);
     expect((await jobs()).find((job) => job.kind === ASSUME_JOB)?.runAt).toBe(START + 18_000);
   });
 
-  it("arms no lock job — that is the PR above this one", async () => {
+  it("puts the lock two days out, by default", async () => {
     await day();
     await transition(env, DAY_ID, "SEATING", "organiser");
 
-    // Arming a job kind `runJob` does not know is how a row retries into
-    // `last_error` until the handler lands.
-    expect((await jobs()).some((job) => job.kind === "game-day.lock")).toBe(false);
+    expect((await jobs()).find((job) => job.kind === LOCK_JOB)?.runAt).toBe(START - 48 * 3600);
   });
 
   it("does not write a second set of jobs on a replay", async () => {
