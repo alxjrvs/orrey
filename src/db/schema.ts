@@ -3,12 +3,12 @@ import { check, index, integer, primaryKey, sqliteTable, text } from "drizzle-or
 
 /**
  * The footings (phase 0), the smallest slice of the domain that can describe one
- * session of one running campaign and who is coming (phase 1), and the ledger of
- * what Orrey has put into the world (#73).
+ * session of one running campaign and who is coming (phase 1), the ledger of what
+ * Orrey has put into the world (#73), and what it takes to run *several*
+ * campaigns — the game each plays and the cadence each keeps (phase 2).
  *
- * The rest — signups, date_polls, games, campaign_members, session_logs,
- * audit_log, game days — lands in the phase that actually reads it. See
- * https://github.com/alxjrvs/orrey/issues/1.
+ * The rest — date_polls, game_days, session_logs — lands in the phase that
+ * actually reads it. See https://github.com/alxjrvs/orrey/issues/1.
  */
 
 const now = sql`(unixepoch())`;
@@ -60,38 +60,121 @@ export const jobs = sqliteTable(
 
 
 /**
- * Only the columns phase 1 reads. Cadence (anchor, interval_weeks), quorum and
- * the rest of the lifecycle arrive with phases 2 and 3; `state` is here because
- * the projector must not project a campaign that is not running, and phase 1
- * seeds it as `RUNNING`.
+ * A game is a thing you play, not a thing you schedule. Its player counts and
+ * its usual length are what a campaign inherits — the quorum a GM starts from,
+ * and the end time a materialised session gets — and in phase 5 they are where a
+ * single game day's capacity comes from.
+ *
+ * Separate from `campaigns` because two campaigns can run the same game, and
+ * because a game day names one without any campaign existing at all.
  */
-export const campaigns = sqliteTable("campaigns", {
-  /** A slug, not a snowflake: Orrey's own id, stable across Discord objects. */
-  id: text("id").primaryKey(),
-  name: text("name").notNull(),
-  /** run = we play it here, play = someone else runs it, tracked = calendar only. */
-  kind: text("kind", { enum: ["run", "play", "tracked"] }).notNull(),
-  discordChannelId: text("discord_channel_id"),
-  discordRoleId: text("discord_role_id"),
-  /** Discord's role colour, as the integer Discord stores. */
-  colour: integer("colour"),
-  /** Decides the Discord scheduled event's entity type: EXTERNAL vs VOICE. */
-  locationType: text("location_type", { enum: ["external", "voice"] })
-    .notNull()
-    .default("external"),
-  /** Voice channel id when location_type is `voice`; otherwise unused. */
-  discordVoiceChannelId: text("discord_voice_channel_id"),
+export const games = sqliteTable(
+  "games",
+  {
+    /** A slug, like every other id Orrey mints. */
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    /** Both nullable: plenty of games are happy with however many turn up. */
+    minPlayers: integer("min_players"),
+    maxPlayers: integer("max_players"),
+    /** How long a session of it usually runs, in minutes. */
+    defaultDurationMinutes: integer("default_duration_minutes"),
+    createdAt: integer("created_at").notNull().default(now),
+    updatedAt: integer("updated_at").notNull().default(now),
+  },
+  (t) => [
+    // A game that needs more players than it seats cannot be run, and phase 5
+    // reads both numbers to decide a game day's capacity. Catching it here is
+    // cheaper than explaining an empty waitlist later.
+    check("games_players_ck", sql`${t.minPlayers} IS NULL OR ${t.maxPlayers} IS NULL
+       OR ${t.minPlayers} <= ${t.maxPlayers}`),
+  ],
+);
+
+/**
+ * A campaign: the thing sessions hang off. Phase 1 needed only enough of it to
+ * project one session; this is what it takes to run several — the game it plays,
+ * the cadence it keeps, and the numbers that say how big it is.
+ *
+ * Cadence is an anchor plus an interval rather than a weekday, because Discord
+ * cannot own recurrence (weekly means exactly one weekday, and `count`/`end`
+ * cannot be set externally) and because an anchor in the past is how a campaign
+ * that started before Orrey existed keeps its rhythm. There is no per-campaign
+ * timezone: recurrence is wall-clock work in one guild's zone, and that zone is
+ * already `SETTING_KEYS.timezone`.
+ */
+export const campaigns = sqliteTable(
+  "campaigns",
+  {
+    /** A slug, not a snowflake: Orrey's own id, stable across Discord objects. */
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    /** run = we play it here, play = someone else runs it, tracked = calendar only. */
+    kind: text("kind", { enum: ["run", "play", "tracked"] }).notNull(),
+    discordChannelId: text("discord_channel_id"),
+    discordRoleId: text("discord_role_id"),
+    /** Discord's role colour, as the integer Discord stores. */
+    colour: integer("colour"),
+    /** Decides the Discord scheduled event's entity type: EXTERNAL vs VOICE. */
+    locationType: text("location_type", { enum: ["external", "voice"] })
+      .notNull()
+      .default("external"),
+    /** Voice channel id when location_type is `voice`; otherwise unused. */
+    discordVoiceChannelId: text("discord_voice_channel_id"),
+    /**
+     * What is being played. Nullable, and `set null` on delete: a campaign whose
+     * game row is removed is still a campaign, and losing the game must never take
+     * the sessions people are coming to with it.
+     */
+    gameId: text("game_id").references(() => games.id, { onDelete: "set null" }),
+    /**
+     * Unix seconds. Any occurrence of the cadence — commonly the first session
+     * ever played, which may be long past. The materialiser counts forward from it
+     * in `interval_weeks` steps and skips what has already happened, which is what
+     * makes "session 47" arithmetic rather than a counter somebody maintains.
+     */
+    recurrenceAnchor: integer("recurrence_anchor"),
+    intervalWeeks: integer("interval_weeks"),
+    /** How many `in` it takes for the session to be worth holding. Phase 3 acts on it. */
+    quorum: integer("quorum"),
+    /** How many seats the campaign has at all. */
+    capacity: integer("capacity"),
+    /** A campaign with an end in sight. Reaching it stops materialisation, not the campaign. */
+    maxSessions: integer("max_sessions"),
+    /**
+     * History starts empty, so numbering has to be told where it is. The four real
+     * campaigns continue Hermuz's numbering from a number entered by hand; a new
+     * campaign starts at 1.
+     */
+    firstSessionNumber: integer("first_session_number").notNull().default(1),
+    /**
+     * FORMING, not RUNNING: `isProjectable` publishes only what is RUNNING, so
+     * the default decides which way an insert that forgets to say fails. A
+     * campaign nobody has started is the safe side of that.
+     */
+    state: text("state", { enum: ["FORMING", "RUNNING", "HIATUS", "CONCLUDED"] })
+      .notNull()
+      .default("FORMING"),
+    createdAt: integer("created_at").notNull().default(now),
+    updatedAt: integer("updated_at").notNull().default(now),
+  },
   /**
-   * FORMING, not RUNNING: `isProjectable` publishes only what is RUNNING, so
-   * the default decides which way an insert that forgets to say fails. A
-   * campaign nobody has started is the safe side of that.
+   * No CHECK on `interval_weeks`, and not for want of wanting one.
+   *
+   * Adding a constraint to an existing SQLite table means rebuilding it, and a
+   * rebuild drops the old table — which in D1 fires `ON DELETE CASCADE` on
+   * everything that references it, because `PRAGMA foreign_keys=OFF` is a no-op
+   * there. Rebuilding `campaigns` would delete every session, every attendance
+   * row and every calendar link, silently, and report success. That is proved
+   * against the real thing; docs/GOTCHAS.md has it.
+   *
+   * So "an interval of zero or less is a materialiser that never advances" is
+   * enforced by the code that writes the column, and this table only ever grows
+   * by `ALTER TABLE ADD COLUMN`. `games` keeps its CHECK because it is a new
+   * table with nothing pointing at it.
    */
-  state: text("state", { enum: ["FORMING", "RUNNING", "HIATUS", "CONCLUDED"] })
-    .notNull()
-    .default("FORMING"),
-  createdAt: integer("created_at").notNull().default(now),
-  updatedAt: integer("updated_at").notNull().default(now),
-});
+  () => [],
+);
 
 /**
  * `kind` is explicit from day one so that game days (phases 4–5) add a parent
