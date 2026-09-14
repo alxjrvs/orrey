@@ -8,6 +8,7 @@ import { startSessionThread } from "../attendance/thread.ts";
 import { postNoticeOnce } from "../attendance/notice.ts";
 import { checkJeopardy } from "../attendance/jeopardy.ts";
 import { sendReminder } from "../attendance/reminders.ts";
+import { assumeAttendance } from "../attendance/assume.ts";
 import { gmOf } from "../campaigns/roster.ts";
 import { attendanceRows } from "../attendance/rows.ts";
 import { jeopardyNotice } from "../attendance/render.ts";
@@ -166,8 +167,23 @@ async function runJob(job: typeof schema.jobs.$inferSelect, env: Env): Promise<v
       return;
     }
 
-    // attendance.assume, poll.close, horizon.extend — each added in the phase
-    // that needs it.
+    /**
+     * It is over. Write the register from what people said, mark it as an
+     * assumption, and mark the session PLAYED. The correction post is the PR
+     * above this one.
+     */
+    case "attendance.assume": {
+      const { sessionId } = job.payload as { sessionId?: string };
+      if (!sessionId) throw new Error(`attendance.assume job ${job.id} has no sessionId`);
+
+      const target = await loadProjectionTarget(env, sessionId);
+      if (!target) return;
+
+      await assumeAttendance(env, target);
+      return;
+    }
+
+    // poll.close, horizon.extend — each added in the phase that needs it.
     default:
       throw new Error(`unknown job kind: ${job.kind}`);
   }
