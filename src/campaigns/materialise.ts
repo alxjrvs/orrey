@@ -2,6 +2,7 @@ import { and, count, eq, isNotNull, sql } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
 import { SETTING_DEFAULTS, SETTING_KEYS, settingOr } from "../db/settings.ts";
+import { armAssume } from "../attendance/assume.ts";
 import { armJeopardyCheck } from "../attendance/jeopardy.ts";
 import { enforceEventCap } from "./event-cap.ts";
 import { occurrencesFrom } from "./recurrence.ts";
@@ -125,7 +126,7 @@ async function materialiseOne(
 
     if (inserted.length === 0) continue;
 
-    await armJobs(env, sessionId, occurrence.startsAt, leadDays);
+    await armJobs(env, sessionId, occurrence.startsAt, occurrence.endsAt, leadDays);
     made.push({
       campaignId: campaign.id,
       sessionId,
@@ -156,6 +157,7 @@ async function armJobs(
   env: Env,
   sessionId: string,
   startsAt: number,
+  endsAt: number,
   leadDays: number,
 ): Promise<void> {
   const postAt = startsAt - leadDays * 86_400;
@@ -186,6 +188,8 @@ async function armJobs(
   // separately because it is the one job whose time moves when the session does,
   // so it upserts its `run_at` rather than being written once and forgotten.
   await armJeopardyCheck(env, sessionId, startsAt);
+  // And the register, when it is over.
+  await armAssume(env, sessionId, endsAt);
 }
 
 function sessionCount(env: Env, campaignId: string): Promise<number> {
