@@ -11,3 +11,8 @@ dist/
 !.env.op.example
 # Local ops scratch: the Hermuz id lookup, seed SQL. Never committed.
 ops/
+
+# Throwaway git worktrees made by agent tooling when it wants an undisturbed
+# tree to read. They are created and removed under the repo root, and a stray one
+# left behind by a crash should never turn into a commit.
+.claude/worktrees/
