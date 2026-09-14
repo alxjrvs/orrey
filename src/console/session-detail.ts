@@ -5,6 +5,7 @@ import { SETTING_KEYS, getSetting } from "../db/settings.ts";
 import { attendanceRows } from "../attendance/rows.ts";
 import { quorumOf, type Quorum } from "../attendance/quorum.ts";
 import { loadProjectionTarget, sessionTitle } from "../projection/target.ts";
+import { logsForSession, type LogEntry } from "./logs.ts";
 
 /**
  * One session, as the console shows it.
@@ -67,6 +68,12 @@ export interface SessionDetail {
     syncedAt: number | null;
     lastError: string | null;
   };
+  /**
+   * What was written down about the evening, oldest first — the same rows the
+   * modal writes, read back. Empty is the ordinary state: most sessions have
+   * not happened yet, and plenty that have were never written up.
+   */
+  logs: LogEntry[];
 }
 
 export async function sessionDetail(
@@ -106,6 +113,7 @@ export async function sessionDetail(
         ? `https://discord.com/events/${guildId}/${session.discordEventId}`
         : null,
     sync: syncStateOf(link),
+    logs: await logsForSession(env, sessionId),
   };
 }
 

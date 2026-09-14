@@ -383,8 +383,92 @@ function detailRail(detail) {
     syncLog(detail.sync),
     railLinks(detail),
     railActions(detail),
+    logList(detail.logs),
+    recapForm(detail),
   );
   return rail;
+}
+
+/**
+ * What was written down about the evening, oldest first.
+ *
+ * Absent rather than empty when there is nothing: most sessions have not
+ * happened yet, and a heading over nothing reads as a page that failed to load.
+ */
+function logList(logs, heading = true) {
+  const box = document.createElement("div");
+  if (!logs || logs.length === 0) return box;
+
+  box.className = "logs";
+  if (heading) {
+    const title = document.createElement("h3");
+    title.textContent = "Written up";
+    box.append(title);
+  }
+
+  for (const entry of logs) {
+    const article = document.createElement("article");
+    const by = document.createElement("p");
+    by.className = "muted";
+    // `authorName` falls back to the id on a cache that has not caught up — a
+    // log with a missing author is still a log.
+    by.textContent = `${entry.authorName} · ${when(entry.createdAt)}`;
+    const body = document.createElement("p");
+    // `textContent`, and a wrapping style rather than markup: a recap keeps its
+    // newlines and is somebody else's text.
+    body.className = "log-body";
+    body.textContent = entry.body;
+    article.append(by, body);
+    box.append(article);
+  }
+  return box;
+}
+
+/**
+ * The second door on to `writeRecap`.
+ *
+ * It posts to the console route, which calls the same function the Discord
+ * modal calls — same permission check, same normalisation, same row, same post
+ * into the thread. A recap that landed in D1 and never reached the thread is
+ * the failure this avoids, and the only way to be sure of it is for there to be
+ * nothing here that could diverge.
+ */
+function recapForm(detail) {
+  const form = document.createElement("form");
+  // A session that has not happened has nothing to write up yet.
+  if (detail.state !== "PLAYED") return form;
+
+  form.className = "recap";
+  const label = document.createElement("label");
+  label.textContent = "Write it up";
+  const body = document.createElement("textarea");
+  body.name = "body";
+  body.rows = 6;
+  body.maxLength = 4000;
+  label.append(body);
+
+  const submit = document.createElement("button");
+  submit.type = "submit";
+  submit.textContent = "Post the recap";
+  form.append(label, submit);
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    submit.disabled = true;
+    await act(async () => {
+      try {
+        await api(`/api/sessions/${detail.sessionId}/recap`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ body: body.value }),
+        });
+      } finally {
+        submit.disabled = false;
+      }
+    });
+  });
+
+  return form;
 }
 
 /**
@@ -965,7 +1049,35 @@ function historySection(history) {
 
   if (history.members.length > 0) section.append(recordTable(history.members));
   if (history.sessions.length > 0) section.append(playedTable(history.sessions));
+  if (history.logs && history.logs.length > 0) section.append(logbook(history.logs));
   return section;
+}
+
+/**
+ * The written record beside the counted one, one heading per evening.
+ *
+ * Grouped rather than flat because a recap without its session is a paragraph
+ * about nothing, and sessions nobody wrote up are absent rather than empty: the
+ * page reads as what was written, not as a list of what was not.
+ */
+function logbook(groups) {
+  const box = document.createElement("div");
+  box.className = "logs";
+  const heading = document.createElement("h3");
+  heading.textContent = "Written up";
+  box.append(heading);
+
+  for (const group of groups) {
+    const evening = document.createElement("h4");
+    evening.textContent = [
+      group.number === null ? null : `Session ${group.number}`,
+      when(group.startsAt),
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    box.append(evening, logList(group.entries, false));
+  }
+  return box;
 }
 
 function recordTable(members) {
