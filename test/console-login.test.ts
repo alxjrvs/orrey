@@ -33,7 +33,12 @@ function consoleEnv() {
 
 /** The console has no public front door: `/console/login` needs a minted link. */
 async function login(cookie?: string) {
-  const link = await loginLink(consoleEnv(), "https://orrey.test", "1001", NOW);
+  // Minted against the real clock, not `NOW`. The link carries five minutes of
+  // life and the route checks it against the clock it is actually running on,
+  // so a fixed date works only for the five minutes either side of itself and
+  // then turns every test through this helper red, for ever, on a change to
+  // nothing. The tests below that want a *stale* link say so by minting one.
+  const link = await loginLink(consoleEnv(), "https://orrey.test", "1001", new Date());
   return get(link.replace("https://orrey.test", ""), cookie);
 }
 
