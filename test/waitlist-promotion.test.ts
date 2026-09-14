@@ -270,6 +270,20 @@ describe("the notice", () => {
     expect(payload.components).toEqual([]);
   });
 
+  it("escapes a game name and a venue somebody typed markdown into", () => {
+    const payload = promotedNotice(
+      { startsAt: START, venue: "The **Wreck**, back room", kind: "single", title: null } as never,
+      { name: "Gloomhaven `night`" } as never,
+      ["p2"],
+    );
+
+    // A stray backtick opens a code span that never closes, swallowing the
+    // timestamp, the venue and the instruction line — on a message Orrey can
+    // never edit. Every other renderer in the repo escapes these two values.
+    expect(payload.content).toContain("Gloomhaven \\`night\\`");
+    expect(payload.content).toContain("The \\*\\*Wreck\\*\\*, back room");
+  });
+
   it("goes into the day's thread, once", async () => {
     await day();
     const ids = await people(3);
