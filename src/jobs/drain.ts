@@ -7,6 +7,9 @@ import { postAttendancePost } from "../attendance/post.ts";
 import { startSessionThread } from "../attendance/thread.ts";
 import { postNoticeOnce } from "../attendance/notice.ts";
 import { checkJeopardy } from "../attendance/jeopardy.ts";
+import { gmOf } from "../campaigns/roster.ts";
+import { attendanceRows } from "../attendance/rows.ts";
+import { jeopardyNotice } from "../attendance/render.ts";
 import { confirmedNotice } from "../attendance/render.ts";
 import { loadProjectionTarget } from "../projection/target.ts";
 
@@ -122,7 +125,27 @@ async function runJob(job: typeof schema.jobs.$inferSelect, env: Env): Promise<v
       const target = await loadProjectionTarget(env, sessionId);
       if (!target) return;
 
-      await checkJeopardy(env, target);
+      const outcome = await checkJeopardy(env, target);
+      // Only the session that actually fell short gets a notice. The other three
+      // outcomes are "nothing to say", and a notice asking whether a confirmed
+      // session is happening is worse than silence.
+      if (outcome !== "in-jeopardy") return;
+
+      const required = target.campaign?.quorum;
+      if (required == null) return;
+
+      await postNoticeOnce(
+        env,
+        target,
+        "jeopardy",
+        jeopardyNotice({
+          target,
+          rows: await attendanceRows(env, sessionId),
+          gmId: target.campaign ? await gmOf(env, target.campaign.id) : undefined,
+          required,
+          asOf: new Date(),
+        }),
+      );
       return;
     }
 
