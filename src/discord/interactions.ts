@@ -4,7 +4,7 @@ import { deleteUserData, describeReceipt } from "../privacy/delete.ts";
 import { correctionPost, renderAttendancePost } from "../attendance/render.ts";
 import { registerRows } from "../attendance/assume.ts";
 import { isGm } from "../campaigns/roster.ts";
-import { loadProjectionTarget } from "../projection/target.ts";
+import { loadProjectionTarget, sessionTitle } from "../projection/target.ts";
 import { loginLink } from "../console/link.ts";
 import {
   answerPoll,
@@ -15,6 +15,9 @@ import {
 } from "../polls/respond.ts";
 import { renderUpcoming, upcomingWithTotal } from "../commands/upcoming.ts";
 import { renderWhosIn, sessionChoices, whosIn } from "../commands/whos-in.ts";
+import { parseDates } from "../polls/parse-dates.ts";
+import { openPoll } from "../polls/open.ts";
+import { SETTING_KEYS, getSetting } from "../db/settings.ts";
 import type { SmokeTally } from "../do/session-lock.ts";
 import {
   ButtonStyle,
@@ -94,7 +97,7 @@ async function handleCommand(
     case "upcoming":
       return upcoming(interaction, env);
     case "reschedule":
-      return ephemeral("Date polls arrive in phase 4.");
+      return reschedule(interaction, env);
     case "whos-in":
       return whosInCommand(interaction, env);
     case "console":
@@ -129,6 +132,128 @@ async function whosInCommand(interaction: Interaction, env: Env): Promise<Json> 
     default:
       return ephemeral(renderWhosIn(answer, asOf));
   }
+}
+
+/**
+ * `/reschedule` — pick a session, then say which days might work instead.
+ *
+ * The command opens a modal rather than taking the dates as options, because a
+ * command option is one line and a poll takes ten. Its `custom_id` is minted the
+ * same way every other component id is and carries the session through the round
+ * trip, which is the only thing that survives between the command and the
+ * submission — Orrey holds no interaction state.
+ */
+async function reschedule(interaction: Interaction, env: Env): Promise<Json> {
+  const sessionId = optionOf(interaction, "event");
+  if (!sessionId) return ephemeral("Name the session you want to move.");
+
+  const actor = actorOf(interaction);
+  if (!actor) return ephemeral("Orrey could not tell who asked.");
+
+  const target = await loadProjectionTarget(env, sessionId);
+  if (!target) return ephemeral("Orrey does not know that session.");
+
+  return datesModal(sessionId, sessionTitle(target));
+}
+
+const DATES_INPUT = "dates";
+
+/**
+ * One paragraph, one date per line. A modal takes five text inputs and a poll
+ * takes ten dates, so five boxes would be both too few and too fiddly.
+ */
+function datesModal(sessionId: string, title: string): Json {
+  return {
+    type: InteractionResponseType.MODAL,
+    data: {
+      custom_id: encodeCustomId({ action: "poll-open", target: sessionId }),
+      title: `Another day for ${title}`.slice(0, 45),
+      components: [
+        {
+          type: ComponentType.ACTION_ROW,
+          components: [
+            {
+              type: ComponentType.TEXT_INPUT,
+              custom_id: DATES_INPUT,
+              style: TextInputStyle.PARAGRAPH,
+              label: "Which days might work? One per line.",
+              placeholder: "2026-10-01 19:00\nThu 8 Oct 7pm\n15 Oct 19:00",
+              max_length: 500,
+              required: true,
+            },
+          ],
+        },
+      ],
+    },
+  };
+}
+
+/**
+ * The submission. On a clean parse the poll is written and posted; on a dirty
+ * one **nothing is written** and the lines come back, so nobody retypes nine
+ * good dates because of one bad one.
+ */
+async function openDatePoll(
+  interaction: Interaction,
+  env: Env,
+  sessionId: string,
+): Promise<Json> {
+  const actor = actorOf(interaction);
+  if (!actor) return ephemeral("Orrey could not tell who submitted that.");
+
+  const target = await loadProjectionTarget(env, sessionId);
+  if (!target) return retiredPost();
+
+  const text =
+    interaction.data?.components
+      ?.flatMap((row) => row.components)
+      .find((input) => input.custom_id === DATES_INPUT)?.value ?? "";
+
+  const timeZone =
+    (await getSetting<string>(env, SETTING_KEYS.timezone)) ?? "Europe/London";
+  const parsed = parseDates({
+    text,
+    timeZone,
+    durationSeconds: target.session.endsAt - target.session.startsAt,
+    now: new Date(),
+  });
+
+  if (!parsed.ok) {
+    return ephemeral(
+      parsed.tooMany
+        ? `That is ${parsed.tooMany} dates — a poll takes ten. Trim it and try again.`
+        : [
+            "Orrey could not read these lines, so nothing was written:",
+            ...parsed.unreadable.map((line) => `- \`${line}\``),
+            "",
+            "Try `2026-10-01 19:00`, `Thu 8 Oct 7pm`, or `15 Oct 19:00`.",
+          ].join("\n"),
+    );
+  }
+
+  const opened = await openPoll(env, {
+    actor,
+    targetSessionId: sessionId,
+    ...(target.session.campaignId ? { campaignId: target.session.campaignId } : {}),
+    channelId:
+      target.campaign?.discordChannelId ??
+      (await getSetting<string>(env, SETTING_KEYS.schedulingChannelId)) ??
+      undefined,
+    dates: parsed.dates,
+    now: new Date(),
+  });
+
+  if (!opened.ok) {
+    return ephemeral(
+      opened.reason === "already-open"
+        ? "There is already a poll open for that session. Settle that one first."
+        : "Orrey has nowhere to post that — the campaign has no channel and neither does settings.",
+    );
+  }
+
+  return ephemeral(
+    `Asking. ${parsed.dates.length} ${parsed.dates.length === 1 ? "day" : "days"} are going up in the channel now.`,
+  );
 }
 
 /**
@@ -447,7 +572,10 @@ const NOTE_INPUT = "note";
  */
 async function handleModal(interaction: Interaction, env: Env): Promise<Json> {
   const id = decodeCustomId(interaction.data?.custom_id ?? "");
-  if (!id || id.action !== "attend-note" || !id.target) return retiredPost();
+  if (!id || !id.target) return retiredPost();
+
+  if (id.action === "poll-open") return openDatePoll(interaction, env, id.target);
+  if (id.action !== "attend-note") return retiredPost();
 
   const actor = actorOf(interaction);
   if (!actor) return ephemeral("Orrey could not tell who submitted that.");

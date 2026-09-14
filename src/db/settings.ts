@@ -31,6 +31,8 @@ export const SETTING_KEYS = {
   jeopardyLeadHours: "jeopardy.lead_hours",
   /** How many hours before a session each reminder goes out. Descending. */
   reminderStepsHours: "reminder.steps_hours",
+  /** How long a date poll takes answers for, in hours. */
+  pollWindowHours: "poll.window_hours",
 } as const;
 
 /** Used when the setting has not been written. Stated here, next to the key. */
@@ -39,6 +41,7 @@ export const SETTING_DEFAULTS = {
   [SETTING_KEYS.attendanceLeadDays]: 10,
   [SETTING_KEYS.jeopardyLeadHours]: 24,
   [SETTING_KEYS.reminderStepsHours]: [72, 24, 2],
+  [SETTING_KEYS.pollWindowHours]: 72,
   [SETTING_KEYS.timezone]: "Europe/London",
 } as const;
 
