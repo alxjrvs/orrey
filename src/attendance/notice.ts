@@ -3,7 +3,8 @@ import { asDiscordFailure } from "../discord/rest.ts";
 import { claim, record, recordFailure, release } from "../projection/publications.ts";
 import type { ProjectionTarget } from "../projection/target.ts";
 import type { MessagePayload } from "./render.ts";
-import { postToSession } from "./thread.ts";
+import { destinationFor, postToSession } from "./thread.ts";
+import { requireGuildId } from "../db/settings.ts";
 
 /**
  * A notice: a new message in the session's thread, sent once and never touched.
@@ -31,6 +32,19 @@ export async function postNoticeOnce(
     label,
   } as const;
 
+  /**
+   * Everything that can fail *locally* happens before the claim, for the reason
+   * `postAttendancePost` gives: a claim is expensive to hold — nothing else may
+   * post while it stands — so burning one on an unseeded guild id would suppress
+   * this notice for good, with no Discord call ever made and nothing to show for
+   * it. `recordFailure` keeps the claim on exactly that kind of throw.
+   */
+  const destination = await destinationFor(env, target);
+  // No destination at all: nothing can be posted, and taking a claim to say so
+  // would block the attempt that comes after somebody makes the thread.
+  if (!destination) return undefined;
+  await requireGuildId(env);
+
   const { mine, publication } = await claim(env, ref);
   // Somebody already posted it, or tried to. Either way this is not the caller
   // that gets to post it: a notice arriving twice is worse than one arriving
@@ -50,7 +64,8 @@ export async function postNoticeOnce(
     throw error;
   }
 
-  // No destination at all: nothing was posted, so the claim must not stand.
+  // Belt and braces: the destination was resolved before the claim, so this is
+  // only reachable if it vanished in between. Nothing was posted either way.
   if (!messageId) {
     await release(env, ref);
     return undefined;

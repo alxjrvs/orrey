@@ -131,6 +131,19 @@ export function threadName(target: ProjectionTarget, timeZone = "UTC"): string {
   return `${title} — ${when}`.slice(0, 100);
 }
 
+/**
+ * Where a post about this session would go, without posting anything.
+ *
+ * Exported so a caller holding a claim can resolve the destination *before*
+ * taking it — see `postNoticeOnce`.
+ */
+export async function destinationFor(
+  env: Env,
+  target: ProjectionTarget,
+): Promise<string | undefined> {
+  return target.session.threadId ?? (await channelOf(env, target));
+}
+
 async function channelOf(env: Env, target: ProjectionTarget): Promise<string | undefined> {
   return (
     target.campaign?.discordChannelId ??
