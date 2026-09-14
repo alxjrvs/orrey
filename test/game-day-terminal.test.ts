@@ -276,6 +276,19 @@ describe("a day that was called off", () => {
     ]);
   });
 
+  it("escapes a title and a venue somebody typed markdown into", async () => {
+    await day({ state: "SEATING", kind: "multi", gameId: null, title: "November `games` day" });
+    await session();
+    await transition(outboxEnv(), DAY_ID, "CANCELLED", "organiser");
+
+    await drainJobs(outboxEnv());
+
+    // A stray backtick opens a code span that never closes, swallowing the
+    // timestamp and the line about the calendar — on a message never edited.
+    const notice = calls.at(-1)?.body as { content: string };
+    expect(notice.content).toContain("November \\`games\\` day");
+  });
+
   it("calls the session off with it", async () => {
     await day({ state: "SEATING" });
     await session();
