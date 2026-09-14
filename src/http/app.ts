@@ -18,6 +18,7 @@ import { sessionFrom } from "../console/session.ts";
 import { NotConfigured, isOrganiser } from "../console/roles.ts";
 import { readLoginToken } from "../console/link.ts";
 import { campaignSummaries, gameDaySummaries, gameSummaries } from "../console/api.ts";
+import { campaignPage } from "../console/campaign.ts";
 import { agendaBetween, windowAround } from "../console/agenda.ts";
 import { sessionDetail } from "../console/session-detail.ts";
 import { cancelSession, lockSession } from "../sessions/lifecycle.ts";
@@ -218,6 +219,22 @@ export function createApp() {
   app.get("/api/sessions/:id", async (c) => {
     const detail = await sessionDetail(c.env, c.req.param("id"));
     return detail ? c.json(detail) : c.json({ error: "Orrey does not know that session." }, 404);
+  });
+
+  /**
+   * One campaign's plan: where it is, where it may go, what it runs on, who is
+   * on it, and what is coming.
+   *
+   * `asOf` is returned with the answer rather than left implicit, the same
+   * envelope the agenda uses. The page is a reading, and the reader should know
+   * when of.
+   */
+  app.get("/api/campaigns/:id/page", async (c) => {
+    const asOf = new Date();
+    const page = await campaignPage(c.env, c.req.param("id"), asOf);
+    return page
+      ? c.json({ asOf: Math.floor(asOf.getTime() / 1000), campaign: page })
+      : c.json({ error: "Orrey does not know that campaign." }, 404);
   });
 
   /**
