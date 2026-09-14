@@ -314,15 +314,22 @@ export interface RegisterRow {
  * whole point of this post is that the register is complete.
  */
 /**
- * Twenty-five toggles is five rows, which is every row Discord allows — so a
- * post that also carries the **Tables played** button has room for twenty.
+ * Twenty, not twenty-five, and **Recap** is why.
  *
- * Dropping five names rather than dropping the button is the right way round on
- * a multi day: the console corrects a register and there is a line on the post
- * saying so, but nothing else can record what somebody played.
+ * Discord gives five buttons a row and five rows. Twenty-five toggles is all
+ * five rows, which left nothing for a button underneath — fine while there was
+ * no button underneath. Every correction post now carries one, so the toggles
+ * get four rows and the sixth row that twenty-five would need does not exist:
+ * Discord rejects the message outright rather than truncating it.
+ *
+ * Dropping five names rather than dropping the button is the right way round,
+ * and for the reason the multi-day case already gave: the console corrects a
+ * register and there is a line on the post saying so, but nothing else writes a
+ * recap or records what somebody played.
+ *
+ * One number now, because **Tables played** and **Recap** share the row.
  */
-const MAX_TOGGLES = 25;
-const MAX_TOGGLES_WITH_TABLES = 20;
+const MAX_TOGGLES = 20;
 
 export interface CorrectionOptions {
   /**
@@ -341,7 +348,7 @@ export function correctionPost(
   options: CorrectionOptions = {},
 ): MessagePayload {
   const tables = options.multiDay === true;
-  const shown = register.slice(0, tables ? MAX_TOGGLES_WITH_TABLES : MAX_TOGGLES);
+  const shown = register.slice(0, MAX_TOGGLES);
   const dropped = register.length - shown.length;
 
   // The same three-pass ladder the attendance post and the signup post climb,
@@ -375,7 +382,7 @@ export function correctionPost(
     content,
     components: [
       ...rowsOf(shown.map((row) => toggle(target.session.id, row))),
-      ...(tables ? [tablesRow(target.session.id)] : []),
+      afterRow(target.session.id, tables),
     ],
     allowed_mentions: { parse: [], roles: [] },
   };
@@ -432,6 +439,28 @@ function correctionBody(
 }
 
 /**
+ * The row under the toggles: **Recap** always, **Tables played** on a multi day.
+ *
+ * One row rather than two, because a row holds five buttons and the toggles
+ * above have already spent most of the post's component budget — a second row
+ * for one button would cost a toggle.
+ */
+export function afterRow(sessionId: string, tables: boolean): Record<string, unknown> {
+  return {
+    type: ComponentType.ACTION_ROW,
+    components: [
+      ...(tables ? (tablesRow(sessionId).components as Record<string, unknown>[]) : []),
+      {
+        type: ComponentType.BUTTON,
+        style: ButtonStyle.SECONDARY,
+        label: "Recap",
+        custom_id: encodeCustomId({ action: "recap", target: sessionId }),
+      },
+    ],
+  };
+}
+
+/**
  * One button, and a chain that is ephemeral from there on.
  *
  * The post has already spent its component budget on one toggle per person, and
@@ -441,8 +470,7 @@ function correctionBody(
  *
  * The correction post itself is never rewritten by any of it. Rewriting it would
  * replace the toggles everyone else is using with one organiser's select, for
- * good. The line appears on the post's next Refresh, which is how every stale
- * reading in this repo becomes current.
+ * good. The line appears on the post's next Refresh, which is beside it.
  */
 export function tablesRow(sessionId: string): Record<string, unknown> {
   return {
