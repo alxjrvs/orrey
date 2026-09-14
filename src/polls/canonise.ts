@@ -7,6 +7,8 @@ import { decide } from "./win-rule.ts";
 import { pollView } from "./rows.ts";
 import { mintGameDays } from "./game-days.ts";
 import { anchorFrom, isFormingPoll } from "./anchor.ts";
+import { moveSession } from "./move.ts";
+import { carryOver } from "./carry-over.ts";
 import type { PollView } from "./render.ts";
 import type { Interaction } from "../discord/types.ts";
 
@@ -221,5 +223,35 @@ export async function applyOutcomes(
     await mintGameDays(env, pollId, won);
   }
 
+  // The other consequence. A poll with a target is a poll about moving that
+  // session, so the date it settled on is the date the session takes — and the
+  // one date, because a session is on one day. A rule that returned a tie was
+  // resolved in the override view before this ran; anything still tied here is
+  // the organiser's own pick, and the earliest of it is the session's new date.
+  if (poll.targetSessionId && won.length > 0) {
+    const winner = await earliestOf(env, won);
+    if (winner) {
+      const moved = await moveSession(env, poll.targetSessionId, winner);
+      // Only when the date actually changed. A re-apply that settles on the date
+      // the session is already on must not wipe everybody's answers and post a
+      // second time.
+      if (moved) await carryOver(env, poll.targetSessionId, winner.id);
+    }
+  }
+
   return pollView(env, pollId, new Date());
+}
+
+async function earliestOf(env: Env, ids: string[]) {
+  const rows = await db(env)
+    .select({
+      id: schema.pollDates.id,
+      startsAt: schema.pollDates.startsAt,
+      endsAt: schema.pollDates.endsAt,
+    })
+    .from(schema.pollDates)
+    .where(inArray(schema.pollDates.id, ids))
+    .all();
+
+  return rows.sort((a, b) => a.startsAt - b.startsAt)[0];
 }
