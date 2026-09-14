@@ -5,6 +5,7 @@ import type { Env, OutboxMessage } from "./env.ts";
 
 export { GuildGovernor } from "./do/guild-governor.ts";
 export { SessionLock } from "./do/session-lock.ts";
+export { PollLock } from "./do/poll-lock.ts";
 
 const app = createApp();
 
