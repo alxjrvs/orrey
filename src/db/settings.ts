@@ -27,12 +27,15 @@ export const SETTING_KEYS = {
    * console never asks for the `guilds` scope.
    */
   organiserRoleId: "discord.organiser_role_id",
+  /** How long before a session starts Orrey asks whether it still runs, in hours. */
+  jeopardyLeadHours: "jeopardy.lead_hours",
 } as const;
 
 /** Used when the setting has not been written. Stated here, next to the key. */
 export const SETTING_DEFAULTS = {
   [SETTING_KEYS.horizonSessions]: 4,
   [SETTING_KEYS.attendanceLeadDays]: 10,
+  [SETTING_KEYS.jeopardyLeadHours]: 24,
   [SETTING_KEYS.timezone]: "Europe/London",
 } as const;
 
