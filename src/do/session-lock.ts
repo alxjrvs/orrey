@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
 import { rememberUser } from "../db/users.ts";
@@ -73,6 +73,46 @@ export class SessionLock extends DurableObject<Env> {
         });
 
       return this.settle(sessionId);
+    });
+  }
+
+  /**
+   * Flip one person's attendance, and say it was a person who decided.
+   *
+   * Behind the same lock as everything else that touches this session's rows: an
+   * organiser tapping four toggles quickly is four read-modify-writes, and each
+   * one has to render the register the previous one left.
+   */
+  async toggleAttended({
+    sessionId,
+    userId,
+  }: {
+    sessionId: string;
+    userId: string;
+  }): Promise<void> {
+    return this.serialise(async () => {
+      const current = await db(this.env)
+        .select({ attended: schema.attendance.attended })
+        .from(schema.attendance)
+        .where(
+          and(
+            eq(schema.attendance.sessionId, sessionId),
+            eq(schema.attendance.userId, userId),
+          ),
+        )
+        .get();
+
+      const attended = current?.attended === 1 ? 0 : 1;
+
+      await db(this.env)
+        .insert(schema.attendance)
+        .values({ sessionId, userId, attended, attendedSource: "gm" })
+        .onConflictDoUpdate({
+          target: [schema.attendance.sessionId, schema.attendance.userId],
+          // `gm` is the point: it is what stops a re-run of the assume job
+          // putting Orrey's guess back over somebody's answer.
+          set: { attended, attendedSource: "gm" },
+        });
     });
   }
 
