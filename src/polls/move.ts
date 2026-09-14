@@ -1,6 +1,7 @@
 import { eq, sql } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
+import { bumpIcsSequence } from "../ics/sequence.ts";
 import { armAssume } from "../attendance/assume.ts";
 import { armJeopardyCheck } from "../attendance/jeopardy.ts";
 import { armReminders } from "../attendance/reminders.ts";
@@ -65,6 +66,9 @@ export async function moveSession(
       startsAt: when.startsAt,
       endsAt: when.endsAt,
       ...(lapsed ? { discordEventId: null, discordEventFingerprint: null } : {}),
+      // The date moved, so every subscribed calendar has to be told this update
+      // supersedes the one it holds. The `+ 1` itself lives in one place.
+      ...bumpIcsSequence,
       updatedAt: sql`(unixepoch())`,
     })
     .where(eq(schema.sessions.id, sessionId));
