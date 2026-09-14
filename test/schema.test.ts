@@ -29,6 +29,9 @@ const session = {
 } as const;
 
 beforeEach(async () => {
+  await env.DB.prepare("DELETE FROM signups").run();
+  await env.DB.prepare("DELETE FROM campaign_members").run();
+  await env.DB.prepare("DELETE FROM audit_log").run();
   await env.DB.prepare("DELETE FROM sessions").run();
   await env.DB.prepare("DELETE FROM campaigns").run();
   await env.DB.prepare("DELETE FROM games").run();
@@ -182,5 +185,87 @@ describe("games and cadence", () => {
     // Pinned here so the next person who regenerates a rebuild finds out why.
     const row = await env.DB.prepare('SELECT "not_a_column" AS v').first<{ v: string }>();
     expect(row?.v).toBe("not_a_column");
+  });
+});
+
+/**
+ * The roster, the signup and the log. Only one of these is a rule the schema
+ * enforces rather than a table it holds — but it is the rule CLAUDE.md names,
+ * so it is worth proving against the database rather than against TypeScript.
+ */
+describe("the roster, the signup and the log", () => {
+  const player = { discordId: "1001", username: "ada", feedToken: "tok-ada" };
+
+  it("refuses a signup that names a session", async () => {
+    const d = db(env);
+    await d.insert(schema.users).values(player);
+    await d.insert(schema.campaigns).values(campaign);
+    await d.insert(schema.sessions).values(session);
+
+    // Rejected by the constraint, not by the enum: "am I coming to this one?" is
+    // attendance, and the database is where that stops being arguable.
+    await expect(
+      env.DB.prepare(
+        "INSERT INTO signups (target_type, target_id, user_id) VALUES ('session', ?, ?)",
+      )
+        .bind(session.id, player.discordId)
+        .run(),
+    ).rejects.toThrow();
+  });
+
+  it("takes a claim on a forming campaign, and only one per person", async () => {
+    const d = db(env);
+    await d.insert(schema.users).values(player);
+    await d.insert(schema.campaigns).values({ ...campaign, state: "FORMING" });
+    const claim = {
+      targetType: "campaign_forming",
+      targetId: campaign.id,
+      userId: player.discordId,
+    } as const;
+
+    await d.insert(schema.signups).values({ ...claim, characterName: "Hollow" });
+    expect(await d.select().from(schema.signups).get()).toMatchObject({
+      state: "in",
+      position: null,
+      characterName: "Hollow",
+    });
+
+    // Clicking twice is not two seats.
+    await expect(d.insert(schema.signups).values(claim)).rejects.toThrow();
+  });
+
+  it("keeps one roster row per person per campaign", async () => {
+    const d = db(env);
+    await d.insert(schema.users).values(player);
+    await d.insert(schema.campaigns).values(campaign);
+    const member = { campaignId: campaign.id, userId: player.discordId } as const;
+
+    await d.insert(schema.campaignMembers).values({ ...member, role: "gm" });
+    await d
+      .insert(schema.campaignMembers)
+      .values({ ...member, role: "player" })
+      .onConflictDoUpdate({
+        target: [schema.campaignMembers.campaignId, schema.campaignMembers.userId],
+        set: { role: "player" },
+      });
+
+    const rows = await d.select().from(schema.campaignMembers).all();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ role: "player" });
+  });
+
+  it("records what the clock did, with no actor to blame", async () => {
+    await db(env).insert(schema.auditLog).values({
+      id: "audit-1",
+      action: "campaign.materialise",
+      targetType: "campaign",
+      targetId: campaign.id,
+      detail: { before: { sessions: 2 }, after: { sessions: 4 } },
+    });
+
+    expect(await db(env).select().from(schema.auditLog).get()).toMatchObject({
+      actorUserId: null,
+      detail: { before: { sessions: 2 }, after: { sessions: 4 } },
+    });
   });
 });

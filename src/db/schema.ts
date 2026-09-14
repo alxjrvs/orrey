@@ -5,7 +5,8 @@ import { check, index, integer, primaryKey, sqliteTable, text } from "drizzle-or
  * The footings (phase 0), the smallest slice of the domain that can describe one
  * session of one running campaign and who is coming (phase 1), the ledger of what
  * Orrey has put into the world (#73), and what it takes to run *several*
- * campaigns — the game each plays and the cadence each keeps (phase 2).
+ * campaigns — the game each plays, the cadence each keeps, who is on each, and a
+ * record of who changed what (phase 2).
  *
  * The rest — date_polls, game_days, session_logs — lands in the phase that
  * actually reads it. See https://github.com/alxjrvs/orrey/issues/1.
@@ -301,4 +302,112 @@ export const publications = sqliteTable(
     lastError: text("last_error"),
   },
   (t) => [index("publications_target_idx").on(t.targetId, t.state)],
+);
+
+/**
+ * The roster, and the answer to "who is this campaign for".
+ *
+ * A campaign entered straight into RUNNING — which is all four of the real ones
+ * — gets its roster from here rather than from signups. That is what "started
+ * campaigns skip stages 1 and 2 structurally" means once it reaches the schema:
+ * there is no signup history to reconstruct, and none is needed.
+ */
+export const campaignMembers = sqliteTable(
+  "campaign_members",
+  {
+    campaignId: text("campaign_id")
+      .notNull()
+      .references(() => campaigns.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.discordId, { onDelete: "cascade" }),
+    role: text("role", { enum: ["gm", "player"] })
+      .notNull()
+      .default("player"),
+    characterName: text("character_name"),
+    joinedAt: integer("joined_at").notNull().default(now),
+  },
+  (t) => [primaryKey({ columns: [t.campaignId, t.userId] })],
+);
+
+/**
+ * Claiming a place in something that has not started yet.
+ *
+ * A signup attaches to a campaign at formation and to a game day. It never
+ * attaches to a session — "am I coming to this one?" is attendance, a different
+ * question asked of a different audience — and the CHECK is that invariant
+ * written where it cannot be argued with.
+ *
+ * `target_id` is deliberately not a foreign key: it points at whichever table
+ * `target_type` names, and the CHECK is what keeps that honest. Both values are
+ * in the constraint even though phase 2 writes only the first. Widening a CHECK
+ * in SQLite means rebuilding the table, and a rebuild on a table with rows in it
+ * is the operation this stack has already had to hand-correct twice — so the
+ * constraint states the invariant once, now, rather than being edited later by
+ * someone who has stopped thinking about what it is for. `game_days` arrives in
+ * phase 5; until then nothing can write a row that points at one, because
+ * nothing mints that kind of id.
+ */
+export const signups = sqliteTable(
+  "signups",
+  {
+    targetType: text("target_type", { enum: ["campaign_forming", "game_day"] }).notNull(),
+    targetId: text("target_id").notNull(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.discordId, { onDelete: "cascade" }),
+    /** `in` holds a place; `waitlisted` is queued behind capacity; `out` withdrew. */
+    state: text("state", { enum: ["in", "waitlisted", "out"] })
+      .notNull()
+      .default("in"),
+    /** Waitlist order. Null for anyone who is not on the waitlist. */
+    position: integer("position"),
+    characterName: text("character_name"),
+    createdAt: integer("created_at").notNull().default(now),
+    updatedAt: integer("updated_at").notNull().default(now),
+  },
+  (t) => [
+    // One claim per person per thing: clicking twice is not two seats.
+    primaryKey({ columns: [t.targetType, t.targetId, t.userId] }),
+    index("signups_target_idx").on(t.targetType, t.targetId, t.position),
+    check(
+      "signups_target_ck",
+      sql`${t.targetType} IN ('campaign_forming', 'game_day')`,
+    ),
+  ],
+);
+
+/**
+ * Who changed what.
+ *
+ * Written by the domain functions rather than by the console routes, so a change
+ * the bot makes is recorded exactly like one a person makes — which is the only
+ * way the log can be read as what actually happened rather than as what happened
+ * to go through the web.
+ *
+ * It stores ids and a JSON diff, never a rendered sentence: the question it
+ * answers is "who changed this, and to what", and a sentence written today is
+ * unreadable after the next rename.
+ */
+export const auditLog = sqliteTable(
+  "audit_log",
+  {
+    id: text("id").primaryKey(),
+    /**
+     * Null is the clock. The materialiser and the reminders act on nobody's
+     * behalf, and saying so is more honest than attributing them to whoever
+     * happened to create the campaign.
+     */
+    actorUserId: text("actor_user_id").references(() => users.discordId, {
+      onDelete: "set null",
+    }),
+    /** `campaign.start`, `member.remove` — the domain function's own name for it. */
+    action: text("action").notNull(),
+    targetType: text("target_type").notNull(),
+    targetId: text("target_id").notNull(),
+    /** `{ before, after }`, or whatever the action needs to be legible later. */
+    detail: text("detail", { mode: "json" }),
+    createdAt: integer("created_at").notNull().default(now),
+  },
+  (t) => [index("audit_target_idx").on(t.targetType, t.targetId, t.createdAt)],
 );

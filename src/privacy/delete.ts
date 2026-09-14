@@ -21,22 +21,40 @@ export interface DeletionReceipt {
 export async function deleteUserData(env: Env, discordId: string): Promise<DeletionReceipt> {
   const d = db(env);
 
-  // Attendance would cascade off the user row anyway, but a receipt that says
+  // All of these would cascade off the user row anyway, but a receipt that says
   // only "users (1)" is a receipt that does not tell someone what they just
-  // erased. Deleting it here first is what makes the count truthful.
+  // erased. Deleting them here first is what makes the counts truthful.
   const attendance = await d
     .delete(schema.attendance)
     .where(eq(schema.attendance.userId, discordId))
     .returning({ sessionId: schema.attendance.sessionId });
+
+  const campaignMembers = await d
+    .delete(schema.campaignMembers)
+    .where(eq(schema.campaignMembers.userId, discordId))
+    .returning({ campaignId: schema.campaignMembers.campaignId });
+
+  const signups = await d
+    .delete(schema.signups)
+    .where(eq(schema.signups.userId, discordId))
+    .returning({ targetId: schema.signups.targetId });
 
   const users = await d
     .delete(schema.users)
     .where(eq(schema.users.discordId, discordId))
     .returning({ discordId: schema.users.discordId });
 
+  // `audit_log` is deliberately absent. Its actor is `set null` on delete, so
+  // the person is forgotten while the fact that a campaign was concluded is not
+  // — erasing the entry would erase somebody else's history, not only theirs.
   return {
     discordId,
-    removed: { users: users.length, attendance: attendance.length },
+    removed: {
+      users: users.length,
+      attendance: attendance.length,
+      campaign_members: campaignMembers.length,
+      signups: signups.length,
+    },
     deletedAt: new Date().toISOString(),
   };
 }

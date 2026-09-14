@@ -43,6 +43,13 @@
       "when": 1789352424597,
       "tag": "0005_games_and_cadence",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1789352518255,
+      "tag": "0006_roster_and_audit",
+      "breakpoints": true
     }
   ]
 }
