@@ -203,6 +203,7 @@ export function confirmedNotice(target: ProjectionTarget): MessagePayload {
   };
 }
 
+
 /**
  * The jeopardy notice. A new message in the thread, with its own as-of line,
  * posted when the clock found the session short a day out.
@@ -292,6 +293,59 @@ export function remindDm(target: ProjectionTarget, hours: number): MessagePayloa
   };
 }
 
+/** One row of the register, as the correction post shows it. */
+export interface RegisterRow {
+  userId: string;
+  name: string;
+  attended: boolean;
+  /** Whether a person said so, as opposed to Orrey having assumed it. */
+  corrected: boolean;
+}
+
+/**
+ * The correction post: the register, and one toggle per person.
+ *
+ * Orrey assumed this from what people said, and the assumption is wrong often
+ * enough to be worth a post — somebody says in and does not come, somebody turns
+ * up who never clicked. The toggles are the organiser's, and each click rewrites
+ * this message as its own response, which is the one rewrite send-only allows.
+ *
+ * Discord gives five buttons a row and five rows, so twenty-five people fit. A
+ * bigger table than that says so rather than silently dropping the rest — the
+ * whole point of this post is that the register is complete.
+ */
+const MAX_TOGGLES = 25;
+
+export function correctionPost(
+  target: ProjectionTarget,
+  register: RegisterRow[],
+  asOf: Date,
+): MessagePayload {
+  const shown = register.slice(0, MAX_TOGGLES);
+  const dropped = register.length - shown.length;
+
+  const came = register.filter((row) => row.attended);
+  const lines = [
+    `**Who came?** ${escapeMarkdown(sessionTitle(target))}`,
+    `${came.length} of ${register.length}${came.length > 0 ? ` — ${came.map((row) => escapeMarkdown(row.name)).join(", ")}` : ""}`,
+    "",
+    "Orrey guessed this from what people said. Tap anybody it got wrong.",
+  ];
+
+  if (dropped > 0) {
+    lines.push(
+      `-# ${dropped} more on the roster than there are buttons; correct those in the console.`,
+    );
+  }
+  lines.push(`-# As of <t:${Math.floor(asOf.getTime() / 1000)}:R>.`);
+
+  return {
+    content: lines.join("\n"),
+    components: rowsOf(shown.map((row) => toggle(target.session.id, row))),
+    allowed_mentions: { parse: [], roles: [] },
+  };
+}
+
 /**
  * The same nudge for everybody Orrey could not DM, as one message in the thread.
  * One message and not one each: the thread is shared, so three separate mentions
@@ -325,4 +379,24 @@ function inWords(hours: number): string {
   if (hours >= 24) return "tomorrow";
   if (hours === 1) return "in an hour";
   return `in ${hours} hours`;
+}
+
+function toggle(sessionId: string, row: RegisterRow): Record<string, unknown> {
+  return {
+    type: ComponentType.BUTTON,
+    // Green for came, grey for did not. A corrected row keeps the tick that says
+    // a person decided it rather than Orrey guessing.
+    style: row.attended ? ButtonStyle.SUCCESS : ButtonStyle.SECONDARY,
+    label: `${row.attended ? "✓" : "✗"} ${row.name}`.slice(0, 80),
+    custom_id: encodeCustomId({ action: "attended", arg: row.userId, target: sessionId }),
+  };
+}
+
+/** Five to a row, which is all Discord allows. */
+function rowsOf(buttons: Record<string, unknown>[]): Record<string, unknown>[] {
+  const rows: Record<string, unknown>[] = [];
+  for (let i = 0; i < buttons.length; i += 5) {
+    rows.push({ type: ComponentType.ACTION_ROW, components: buttons.slice(i, i + 5) });
+  }
+  return rows;
 }

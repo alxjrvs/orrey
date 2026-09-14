@@ -7,12 +7,11 @@ import { postAttendancePost } from "../attendance/post.ts";
 import { startSessionThread } from "../attendance/thread.ts";
 import { postNoticeOnce } from "../attendance/notice.ts";
 import { checkJeopardy } from "../attendance/jeopardy.ts";
-import { assumeAttendance } from "../attendance/assume.ts";
+import { assumeAttendance, registerRows } from "../attendance/assume.ts";
 import { sendReminder } from "../attendance/reminders.ts";
 import { gmOf } from "../campaigns/roster.ts";
 import { attendanceRows } from "../attendance/rows.ts";
-import { jeopardyNotice } from "../attendance/render.ts";
-import { confirmedNotice } from "../attendance/render.ts";
+import { confirmedNotice, correctionPost, jeopardyNotice } from "../attendance/render.ts";
 import { loadProjectionTarget } from "../projection/target.ts";
 
 const CLAIM_SECONDS = 60;
@@ -163,7 +162,19 @@ async function runJob(job: typeof schema.jobs.$inferSelect, env: Env): Promise<v
       const target = await loadProjectionTarget(env, sessionId);
       if (!target) return;
 
-      await assumeAttendance(env, target);
+      const assumed = await assumeAttendance(env, target);
+      // Nobody on the roster and nobody who clicked: there is no register to
+      // correct, and a post with no buttons is a post that says nothing.
+      if (assumed.length === 0) return;
+
+      // Re-read rather than rendering `assumed`: an organiser who corrected a
+      // row before this ran keeps their answer, and the post has to show it.
+      await postNoticeOnce(
+        env,
+        target,
+        "correction",
+        correctionPost(target, await registerRows(env, sessionId), new Date()),
+      );
       return;
     }
 
