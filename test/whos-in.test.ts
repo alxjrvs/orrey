@@ -1,4 +1,5 @@
 import { env } from "cloudflare:test";
+import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import { db, schema } from "../src/db/index.ts";
 import { createApp } from "../src/http/app.ts";
@@ -286,5 +287,77 @@ describe("the command", () => {
     expect(((await res.json()) as { data: { content: string } }).data.content).toContain(
       "not on a campaign you are on",
     );
+  });
+});
+
+describe("somebody else's text, on a message Orrey cannot edit", () => {
+  it("escapes names, character names and notes", async () => {
+    await campaign("umbra", "Age of **Umbra**");
+    await member("umbra", "ada", "**Out (4)** — Everyone");
+    const id = await session("umbra", 1, 3);
+    await said(id, "ada", "in", "`reflow` *everything*");
+    await db(env)
+      .update(schema.campaignMembers)
+      .set({ characterName: "__Vex__" })
+      .where(eq(schema.campaignMembers.userId, "ada"));
+
+    const answer = await whosIn(env, "ada", id, ASOF);
+    if (typeof answer === "string") throw new Error(answer);
+    const content = renderWhosIn(answer, ASOF);
+
+    // On the command that exists to be authoritative, a note that reformats the
+    // roster is the worst place in the repo for it.
+    expect(content).toContain("\\*\\*Out (4)\\*\\*");
+    expect(content).toContain("\\`reflow\\`");
+    expect(content).toContain("\\_\\_Vex\\_\\_");
+    expect(content).toContain("Age of \\*\\*Umbra\\*\\*");
+  });
+});
+
+describe("a roster too big to send", () => {
+  it("shortens rather than being rejected outright", async () => {
+    await campaign("umbra", "Age of Umbra");
+    const id = await session("umbra", 1, 3);
+    for (let i = 0; i < 120; i++) {
+      await member("umbra", `p${i}`, `A Player With A Rather Long Display Name ${i}`);
+      await said(id, `p${i}`, "in", `and a note that goes on for a while too ${i}`);
+    }
+
+    const answer = await whosIn(env, "p0", id, ASOF);
+    if (typeof answer === "string") throw new Error(answer);
+    const content = renderWhosIn(answer, ASOF);
+
+    // An interaction response over Discord's ceiling is not a shortened answer,
+    // it is no answer: the call is rejected outright.
+    expect(content.length).toBeLessThanOrEqual(1900);
+    // The counts are the part that must survive.
+    expect(content).toContain("**In** — 120");
+    expect(content).toContain("not from any post");
+  });
+});
+
+describe("autocomplete past the first twenty-five", () => {
+  it("finds a session the typed text names, however far out it is", async () => {
+    await campaign("umbra", "Age of Umbra");
+    await campaign("deeps", "The Deeps");
+    await member("umbra", "ada", "Ada");
+    await member("deeps", "ada", "Ada");
+    for (let n = 1; n <= MAX_CHOICES + 5; n++) await session("umbra", n, n);
+    await session("deeps", 1, 100);
+
+    const choices = await sessionChoices(env, "ada", "deeps", ASOF);
+
+    // Filtering after the LIMIT means the twenty-sixth-soonest session can never
+    // be picked however precisely somebody types its name — which is exactly
+    // when they would be typing.
+    expect(choices.map((choice) => choice.value)).toEqual(["deeps-s1"]);
+  });
+
+  it("still offers the soonest when nothing has been typed", async () => {
+    await campaign("umbra", "Age of Umbra");
+    await member("umbra", "ada", "Ada");
+    for (let n = 1; n <= MAX_CHOICES + 5; n++) await session("umbra", n, n);
+
+    expect(await sessionChoices(env, "ada", "", ASOF)).toHaveLength(MAX_CHOICES);
   });
 });
