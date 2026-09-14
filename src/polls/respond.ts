@@ -1,7 +1,10 @@
 import { eq } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
-import { renderPollPost } from "./render.ts";
+import { renderOverride, renderPollPost } from "./render.ts";
+import { applyOutcomes, mayCanonise, proposal, stagePicks, staged } from "./canonise.ts";
+import { pollView } from "./rows.ts";
+import type { Interaction } from "../discord/types.ts";
 import type { MessagePayload } from "../attendance/render.ts";
 import type { InteractionUser } from "../discord/types.ts";
 
@@ -41,4 +44,84 @@ export async function refreshPoll(
 /** Whether this poll exists at all, for the paths that need to say so first. */
 export function loadPoll(env: Env, pollId: string) {
   return db(env).select().from(schema.datePolls).where(eq(schema.datePolls.id, pollId)).get();
+}
+
+/**
+ * Canonise — the organiser's own view of the poll, with the rule's answer
+ * preselected and an Apply button.
+ *
+ * Refused for everybody else, ephemerally and with nothing written. The button
+ * sits on a post the whole server can see, so this check is the only thing
+ * between a player and closing a poll.
+ */
+export async function openOverride(
+  env: Env,
+  pollId: string,
+  actor: InteractionUser,
+  interaction: Interaction,
+): Promise<PollAnswer | { ok: false; reason: "refused" }> {
+  const poll = await loadPoll(env, pollId);
+  if (!poll) return { ok: false, reason: "unknown" };
+
+  if (!(await mayCanonise(env, poll, interaction, actor.id))) {
+    return { ok: false, reason: "refused" };
+  }
+
+  // A poll already closed has nothing to override. Show it as it stands rather
+  // than offering to decide it again.
+  if (poll.status !== "open") {
+    const closed = await pollView(env, pollId, new Date(), actor.id);
+    return closed ? { ok: true, payload: renderPollPost(closed) } : { ok: false, reason: "unknown" };
+  }
+
+  // Stage the rule's answer, so Apply without touching the select applies what
+  // the rule proposed rather than nothing.
+  const proposed = await proposal(env, pollId);
+  const view = await stagePicks(env, pollId, proposed);
+  return view
+    ? { ok: true, payload: renderOverride(view, proposed) }
+    : { ok: false, reason: "unknown" };
+}
+
+/** The organiser changing the rule's answer. Still nothing closed. */
+export async function pickWinners(
+  env: Env,
+  pollId: string,
+  actor: InteractionUser,
+  interaction: Interaction,
+  wonIds: string[],
+): Promise<PollAnswer | { ok: false; reason: "refused" }> {
+  const poll = await loadPoll(env, pollId);
+  if (!poll) return { ok: false, reason: "unknown" };
+  if (!(await mayCanonise(env, poll, interaction, actor.id))) {
+    return { ok: false, reason: "refused" };
+  }
+
+  const view = await stagePicks(env, pollId, wonIds);
+  return view
+    ? { ok: true, payload: renderOverride(view, wonIds) }
+    : { ok: false, reason: "unknown" };
+}
+
+/**
+ * Apply — the poll closes, and the post stops answering.
+ *
+ * A button click carries no select values, and Orrey never reads a message back,
+ * so what Apply acts on is what the picks wrote to D1. That is not a
+ * convenience: D1 is the only place this state is allowed to live.
+ */
+export async function applyOverride(
+  env: Env,
+  pollId: string,
+  actor: InteractionUser,
+  interaction: Interaction,
+): Promise<PollAnswer | { ok: false; reason: "refused" }> {
+  const poll = await loadPoll(env, pollId);
+  if (!poll) return { ok: false, reason: "unknown" };
+  if (!(await mayCanonise(env, poll, interaction, actor.id))) {
+    return { ok: false, reason: "refused" };
+  }
+
+  const view = await applyOutcomes(env, pollId, await staged(env, pollId));
+  return view ? { ok: true, payload: renderPollPost(view) } : { ok: false, reason: "unknown" };
 }
