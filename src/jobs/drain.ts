@@ -1,7 +1,7 @@
 import { and, eq, lte, or, sql } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
-import { enqueueProjection } from "../projection/outbox.ts";
+import { enqueueProjection, enqueueUnprojection } from "../projection/outbox.ts";
 import { surfacesFor } from "../campaigns/event-cap.ts";
 import { postAttendancePost } from "../attendance/post.ts";
 import { startSessionThread } from "../attendance/thread.ts";
@@ -18,7 +18,13 @@ import { APPLY_JOB, applyFollowUp } from "../polls/canonise.ts";
 import { POST_SIGNUP_JOB, postSignupPost, startDayThread } from "../game-days/post.ts";
 import { sessionIdFor } from "../game-days/lifecycle.ts";
 import { PROMOTED_JOB } from "../game-days/promote.ts";
-import { LOCK_JOB, lockIfSeating } from "../game-days/lifecycle.ts";
+import {
+  CANCELLED_JOB,
+  LOCK_JOB,
+  cancelledNotice,
+  lockIfSeating,
+  playAfterAssume,
+} from "../game-days/lifecycle.ts";
 import { postDayNoticeOnce, promotedNotice } from "../game-days/notice.ts";
 import { loadProjectionTarget } from "../projection/target.ts";
 
@@ -211,6 +217,11 @@ async function runJob(job: typeof schema.jobs.$inferSelect, env: Env): Promise<v
       if (!target) return;
 
       const assumed = await assumeAttendance(env, target);
+
+      // A game day's evening is over, so the day is too. This happens before the
+      // early return below, because a day nobody claimed a seat at is still a
+      // day that has been and gone.
+      if (target.session.gameDayId) await playAfterAssume(env, target.session.gameDayId);
       // Nobody on the roster and nobody who clicked: there is no register to
       // correct, and a post with no buttons is a post that says nothing.
       if (assumed.length === 0) return;
@@ -389,6 +400,43 @@ async function runJob(job: typeof schema.jobs.$inferSelect, env: Env): Promise<v
       if (!gameDayId) throw new Error(`${LOCK_JOB} job ${job.id} has no gameDayId`);
 
       await lockIfSeating(env, gameDayId);
+      return;
+    }
+
+    /**
+     * The day is off. One new message in its thread, claimed under its own label
+     * so a second cancellation posts nothing.
+     *
+     * The deletes went out with the transition itself — they are queue messages
+     * rather than work for here, and `project`'s retract branch is deliberately
+     * ungated so a cancelled day's event comes down rather than being stranded.
+     */
+    case CANCELLED_JOB: {
+      const { gameDayId } = job.payload as { gameDayId?: string };
+      if (!gameDayId) throw new Error(`${CANCELLED_JOB} job ${job.id} has no gameDayId`);
+
+      // Both surfaces come down, and from here rather than from `transition`,
+      // so the deletes are owed by the same durable row that owes the notice. A
+      // queue that is down sends this job back to `pending` with a backoff
+      // instead of losing the retraction for good — cancelling is terminal and
+      // there is no second click that reaches the transition again.
+      //
+      // Not gated on the day still being projectable: a delete is how something
+      // published comes down, and `project`'s retract branch is deliberately
+      // ungated for exactly this, no-ops on a session with no event ids, and is
+      // written so that projecting twice is indistinct from projecting once. So
+      // a re-run after a refused post costs nothing.
+      await enqueueUnprojection(env, sessionIdFor(gameDayId));
+
+      const row = await db(env)
+        .select({ day: schema.gameDays, game: schema.games })
+        .from(schema.gameDays)
+        .leftJoin(schema.games, eq(schema.gameDays.gameId, schema.games.id))
+        .where(eq(schema.gameDays.id, gameDayId))
+        .get();
+      if (!row) return;
+
+      await postDayNoticeOnce(env, gameDayId, "cancelled", cancelledNotice(row.day, row.game));
       return;
     }
 
