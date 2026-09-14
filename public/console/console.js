@@ -538,11 +538,21 @@ function gameDaysTable(days) {
   for (const day of days) {
     const row = document.createElement("tr");
 
-    const name = cell(row, text(day.gameName ?? day.title ?? "Game day"));
+    const name = cell(row, "");
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "link";
+    open.textContent = text(day.gameName ?? day.title ?? "Game day");
+    open.addEventListener("click", () => {
+      dayState.selected = dayState.selected === day.id ? null : day.id;
+      load();
+    });
+    name.append(open);
     const id = document.createElement("div");
     id.className = "muted";
     id.textContent = `${day.kind} · ${day.id}`;
     name.append(id);
+    if (dayState.selected === day.id) row.setAttribute("aria-selected", "true");
 
     const state = cell(row, day.state);
     state.className = "state";
@@ -881,6 +891,106 @@ function upcomingTable(rows) {
   return table;
 }
 
+/** Which day's page is open, if any. */
+const dayState = { selected: null };
+
+/**
+ * One game day.
+ *
+ * The two lists are two sections and are never merged. Signups hang off the day
+ * and attendance hangs off the session the day owns: somebody can hold a seat
+ * and not turn up, and somebody can turn up who was on the waitlist all week.
+ * One combined roster would quietly claim a signup is an intent.
+ */
+function gameDaySection(day) {
+  const section = document.createElement("section");
+  section.className = "campaign-page";
+
+  const title = document.createElement("h3");
+  title.textContent = day.gameName ?? day.title ?? "Game day";
+  const state = document.createElement("span");
+  state.className = "state";
+  state.dataset.state = day.state;
+  state.textContent = day.state;
+  title.append(" ", state);
+  section.append(title);
+
+  const facts = document.createElement("dl");
+  facts.className = "facts";
+  for (const [label, value] of [
+    ["When", when(day.startsAt)],
+    ["Venue", text(day.venue)],
+    ["Host", text(day.hostName)],
+    ["Kind", day.kind],
+    // Null capacity is "however many turn up", which a multi day with no venue
+    // cap honestly has. A zero there would be a number computed from nothing.
+    ["Seats", day.capacity === null ? "however many turn up" : `${day.seated.length}/${day.capacity}`],
+  ]) {
+    const term = document.createElement("dt");
+    term.textContent = label;
+    const said = document.createElement("dd");
+    said.textContent = value;
+    facts.append(term, said);
+  }
+  section.append(facts);
+
+  section.append(subheading("Seated"), signupList(day.seated, "Nobody has taken a seat."));
+  section.append(subheading("Waitlist"), signupList(day.waitlist, "Nobody waiting."));
+  section.append(subheading("Register"), rosterList(day.register));
+
+  if (day.tables) section.append(subheading("Tables played"), tablesList(day.tables));
+
+  const links = document.createElement("p");
+  for (const [label, href] of [
+    ["Post", day.postUrl],
+    ["Thread", day.threadUrl],
+  ]) {
+    if (!href) continue;
+    const link = document.createElement("a");
+    link.href = href;
+    link.rel = "noreferrer";
+    link.target = "_blank";
+    link.textContent = label;
+    links.append(link, document.createTextNode(" "));
+  }
+  if (links.childElementCount > 0) section.append(links);
+
+  return section;
+}
+
+function signupList(signups, empty) {
+  if (signups.length === 0) {
+    const none = document.createElement("p");
+    none.className = "note";
+    none.textContent = empty;
+    return none;
+  }
+  const list = document.createElement("dl");
+  list.className = "roster";
+  for (const signup of signups) {
+    const name = document.createElement("dt");
+    name.textContent = signup.name;
+    const said = document.createElement("dd");
+    said.textContent = [signup.characterName, `#${signup.position}`].filter(Boolean).join(" · ");
+    list.append(name, said);
+  }
+  return list;
+}
+
+function tablesList(tables) {
+  const list = document.createElement("dl");
+  list.className = "roster";
+  for (const row of tables) {
+    const name = document.createElement("dt");
+    name.textContent = row.name;
+    const said = document.createElement("dd");
+    // Null is "has not said", not "played nothing".
+    said.textContent = row.tablesPlayed ?? "not said";
+    list.append(name, said);
+  }
+  return list;
+}
+
 function subheading(label) {
   const h = document.createElement("h4");
   h.textContent = label;
@@ -912,6 +1022,10 @@ async function load() {
 
     // Likewise the campaign page: the summaries table needs none of it, and a
     // campaign nobody has opened is a query nobody has asked for.
+    const dayPage = dayState.selected
+      ? await api(`/api/game-days/${encodeURIComponent(dayState.selected)}/page`).catch(() => null)
+      : null;
+
     const plan = campaignState.selected
       ? await api(`/api/campaigns/${encodeURIComponent(campaignState.selected)}/page`).catch(
           () => null,
@@ -926,6 +1040,7 @@ async function load() {
     main.append(heading("Campaigns"), campaignsTable(campaigns));
     if (plan) main.append(campaignPageSection(plan.campaign));
     main.append(heading("Game days"), gameDaysTable(gameDays));
+    if (dayPage) main.append(gameDaySection(dayPage));
     main.append(heading("Games"), gamesTable(games), createForm());
   } catch (error) {
     const message =
