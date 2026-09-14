@@ -1,6 +1,7 @@
 import { and, asc, count, eq, gte, inArray, lt } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
+import { SETTING_DEFAULTS, SETTING_KEYS } from "../db/settings.ts";
 import { quorumOf, type Quorum } from "../attendance/quorum.ts";
 import { isProjectable, sessionTitle, type ProjectionTarget } from "../projection/target.ts";
 
@@ -30,6 +31,17 @@ export interface AgendaRow {
   sessionId: string;
   title: string;
   startsAt: number;
+  /**
+   * The calendar day this falls on **in the guild's zone**, as `YYYY-MM-DD`, and
+   * the heading a page puts above it.
+   *
+   * Grouped here rather than in the browser, and that is not only about being
+   * testable in a repo with no DOM harness. Two people in two zones must not see
+   * a session fall on different days: a Friday-evening session is a Friday
+   * session for the table, whatever the reader's laptop says.
+   */
+  day: string;
+  dayLabel: string;
   endsAt: number;
   state: string;
   location: string | null;
@@ -64,6 +76,7 @@ export async function agendaBetween(
   from: number,
   to: number,
   asOf: Date,
+  timeZone: string = SETTING_DEFAULTS[SETTING_KEYS.timezone],
 ): Promise<Agenda> {
   // Half-open. A session starting exactly at `to` belongs to the next window,
   // or a month grid would show the first of next month twice.
@@ -116,6 +129,8 @@ export async function agendaBetween(
         title: sessionTitle(row.target),
         startsAt: row.session.startsAt,
         endsAt: row.session.endsAt,
+        day: dayOf(row.session.startsAt, timeZone),
+        dayLabel: dayLabelOf(row.session.startsAt, timeZone),
         state: row.session.state,
         location: row.session.location ?? row.gameDay?.venue ?? null,
         campaignId: row.session.campaignId,
@@ -227,6 +242,21 @@ async function rosterSizes(env: Env, campaignIds: string[], gameDayIds: string[]
   }
 
   return { campaigns, days };
+}
+
+/** `YYYY-MM-DD` in the guild's zone. `en-CA` is the locale that formats that way. */
+export function dayOf(startsAt: number, timeZone: string): string {
+  return new Date(startsAt * 1000).toLocaleDateString("en-CA", { timeZone });
+}
+
+/** `Saturday, 7 November` — what a day header says. */
+export function dayLabelOf(startsAt: number, timeZone: string): string {
+  return new Date(startsAt * 1000).toLocaleDateString("en-GB", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    timeZone,
+  });
 }
 
 function unix(date: Date): number {
