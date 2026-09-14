@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import { and, eq, sql } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
+import { SESSION_CONFIRMED } from "../db/audit.ts";
 import { rememberUser } from "../db/users.ts";
 import { attendanceRows } from "../attendance/rows.ts";
 import { crossesThreshold, quorumOf } from "../attendance/quorum.ts";
@@ -235,6 +236,23 @@ export class SessionLock extends DurableObject<Env> {
             runAt: sql`(unixepoch())`,
           })
           .onConflictDoNothing(),
+
+        // And on the record, in the same batch as the state it records. The
+        // gap between this row and `sessions.created_at` is the campaign's lead
+        // time to quorum, and a confirmation that committed without its audit
+        // row would be a session that silently left the average.
+        //
+        // `actor_user_id` is null: nobody decided this. The count did, on the
+        // click that happened to cross it, and attributing it to that person
+        // would read as though they had confirmed it themselves.
+        d.insert(schema.auditLog).values({
+          id: crypto.randomUUID(),
+          actorUserId: null,
+          action: SESSION_CONFIRMED,
+          targetType: "session",
+          targetId: sessionId,
+          detail: { required: quorumOf(target, rows).required },
+        }),
       ]);
     }
 
