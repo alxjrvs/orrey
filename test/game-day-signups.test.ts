@@ -175,6 +175,41 @@ describe("claiming a place", () => {
     expect(await signupsForDay(env, id)).toHaveLength(1);
   });
 
+  it("lets somebody who queued while seats were free take one", async () => {
+    const id = await day({ capacity: 4 });
+    const [user] = await people(1);
+    await claimSeat(env, id, user!, { prefer: "waitlist" });
+
+    const taken = await claimSeat(env, id, user!, { prefer: "seat" });
+
+    // "I'll come if you need me" is what `prefer` is for, and the only other way
+    // back out of it — Out, then Take a seat — costs the position they arrived
+    // at. They keep it.
+    expect(taken).toMatchObject({ outcome: "seated", state: "in", position: 1 });
+  });
+
+  it("still says nothing changed to a waitlister on a full day", async () => {
+    const id = await day({ capacity: 1 });
+    const ids = await people(2);
+    await claimSeat(env, id, ids[0]!);
+    await claimSeat(env, id, ids[1]!);
+
+    const again = await claimSeat(env, id, ids[1]!, { prefer: "seat" });
+
+    expect(again).toMatchObject({ outcome: "unchanged", state: "waitlisted", position: 2 });
+  });
+
+  it("does not queue anybody on a day with no capacity, however they ask", async () => {
+    const id = await day({ kind: "multi", gameId: null });
+    const [user] = await people(1);
+
+    const asked = await claimSeat(env, id, user!, { prefer: "waitlist" });
+
+    // A day with no capacity has no waitlist to promote from, so a waitlisted
+    // row here is one nothing could ever promote and no click could change.
+    expect(asked).toMatchObject({ outcome: "seated", state: "in" });
+  });
+
   it("takes a character name a repeated click has finally filled in", async () => {
     const id = await day();
     const [user] = await people(1);
