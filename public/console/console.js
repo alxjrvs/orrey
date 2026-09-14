@@ -363,6 +363,108 @@ async function act(work) {
   }
 }
 
+/**
+ * The month the grid is showing, as a year and a 1-12 month.
+ *
+ * Held rather than derived from the clock so that stepping between months is a
+ * state change and not a second kind of navigation.
+ */
+const monthState = { year: null, month: null };
+
+const MONTHS = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+
+/**
+ * A month, seven columns wide and always six rows deep.
+ *
+ * Six whatever the month would have fitted in: a grid that changes height when
+ * somebody steps between months is one people misclick.
+ *
+ * There is no design for this screen — `design/readme.md` lists it under "Open
+ * questions for the author" as not drawn — so it uses existing tokens only: the
+ * `--campaign-1..5` identity colours as swatches, and no new component.
+ */
+function monthSection(month) {
+  const section = document.createElement("section");
+
+  const controls = document.createElement("p");
+  controls.className = "month-controls";
+  const back = document.createElement("button");
+  back.type = "button";
+  back.textContent = "←";
+  back.addEventListener("click", () => step(-1));
+  const label = document.createElement("span");
+  label.textContent = `${MONTHS[month.month - 1]} ${month.year}`;
+  const forward = document.createElement("button");
+  forward.type = "button";
+  forward.textContent = "→";
+  forward.addEventListener("click", () => step(1));
+  controls.append(back, label, forward);
+  section.append(controls);
+
+  const grid = document.createElement("div");
+  grid.className = "month";
+
+  for (const day of ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]) {
+    const head = document.createElement("div");
+    head.className = "month-head";
+    head.textContent = day;
+    grid.append(head);
+  }
+
+  for (const week of month.weeks) {
+    for (const cell of week) {
+      const box = document.createElement("div");
+      box.className = "month-cell";
+      // Shown, because the grid draws it — but never dressed up as this month.
+      if (!cell.inMonth) box.dataset.outside = "true";
+
+      const number = document.createElement("div");
+      number.className = "month-number";
+      number.textContent = String(Number(cell.day.slice(8)));
+      box.append(number);
+
+      for (const row of cell.sessions) {
+        const pip = document.createElement("button");
+        pip.type = "button";
+        pip.className = "pip";
+        // The identity colour is assigned per campaign and never reused as UI.
+        pip.style.background = `var(--campaign-${swatch(row.campaignId ?? row.gameDayId)})`;
+        pip.title = row.title;
+        pip.textContent = row.title;
+        // The session rail arrives in `p6/3`, on the other side of this fork.
+        // Until both are in main this selects and nothing opens, which is the
+        // same gap the agenda has and not a reason to serialise the two.
+        pip.addEventListener("click", () => {
+          monthState.selected = row.sessionId;
+        });
+        box.append(pip);
+      }
+
+      grid.append(box);
+    }
+  }
+
+  section.append(grid);
+  return section;
+}
+
+/** Five identity colours, assigned by id so one campaign keeps one colour. */
+function swatch(id) {
+  let hash = 0;
+  for (const character of String(id)) hash = (hash * 31 + character.charCodeAt(0)) % 5;
+  return hash + 1;
+}
+
+function step(by) {
+  const index = monthState.year * 12 + (monthState.month - 1) + by;
+  monthState.year = Math.floor(index / 12);
+  monthState.month = (index % 12) + 1;
+  load();
+}
+
 function heading(label) {
   const h = document.createElement("h2");
   h.textContent = label;
@@ -371,15 +473,27 @@ function heading(label) {
 
 async function load() {
   try {
-    const [me, { campaigns }, { games }, { gameDays }] = await Promise.all([
+    if (monthState.year === null) {
+      // The browser's month is the right one to open on: it is the reader's
+      // "now". Which cell a session falls in is the guild's business, and the
+      // server has already decided that.
+      const today = new Date();
+      monthState.year = today.getFullYear();
+      monthState.month = today.getMonth() + 1;
+    }
+
+    const [me, { campaigns }, { games }, { gameDays }, month] = await Promise.all([
       api("/api/me"),
       api("/api/campaigns"),
       api("/api/games"),
       api("/api/game-days"),
+      api(`/api/month/${monthState.year}/${monthState.month}`).catch(() => null),
     ]);
 
     who.textContent = `signed in as ${me.userId}`;
-    main.replaceChildren(heading("Campaigns"), campaignsTable(campaigns));
+    main.replaceChildren(heading("Month"));
+    if (month) main.append(monthSection(month));
+    main.append(heading("Campaigns"), campaignsTable(campaigns));
     main.append(heading("Game days"), gameDaysTable(gameDays));
     main.append(heading("Games"), gamesTable(games), createForm());
   } catch (error) {

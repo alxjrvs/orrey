@@ -55,3 +55,12 @@ button {
 }
 button + button { margin-left: var(--space-2, 8px); }
 button[disabled] { opacity: .5; cursor: default; }
+
+/* The month grid. Not drawn by the author — tokens and primitives only. */
+.month-controls { display: flex; align-items: baseline; gap: var(--space-3, 12px); }
+.month { display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px; background: var(--border-hair-colour, #2a2b2e); border: var(--border-structural); }
+.month-head { padding: var(--space-2, 8px); color: var(--text-secondary); font: var(--type-caption, inherit); background: var(--surface-inset, #1e1f22); }
+.month-cell { min-height: 5rem; padding: var(--space-2, 8px); background: var(--surface, transparent); display: grid; align-content: start; gap: var(--space-1, 4px); }
+.month-cell[data-outside="true"] { opacity: 0.45; }
+.month-number { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.pip { display: block; width: 100%; text-align: left; border: 0; border-radius: var(--radius-sm); padding: 2px var(--space-1, 4px); color: #12131a; font: var(--type-caption, inherit); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
