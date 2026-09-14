@@ -1,6 +1,7 @@
 import { encodeCustomId } from "../discord/custom-id.ts";
 import { ButtonStyle, ComponentType } from "../discord/types.ts";
 import { sessionTitle, type ProjectionTarget } from "../projection/target.ts";
+import { quorumLine, quorumOf } from "./quorum.ts";
 
 /**
  * The attendance post, rendered from D1 and nothing else.
@@ -107,6 +108,12 @@ function compose(
   }
 
   if (rows.length === 0) lines.push("*Nobody has said yet.*");
+
+  // Does it run. Last, because it is the answer and the tallies above are the
+  // working — and it survives every truncation pass, because a post shortened
+  // past the one line that answers the question is a post worth nothing.
+  const quorum = quorumLine(quorumOf(target, rows));
+  if (quorum) lines.push("", quorum);
 
   lines.push("", `-# As of <t:${unix(asOf)}:R>. Refresh for a fresh reading.`);
   return lines.join("\n");
