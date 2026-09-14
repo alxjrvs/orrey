@@ -4,6 +4,7 @@ import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
 import { rememberUser } from "../db/users.ts";
 import { pollView } from "../polls/rows.ts";
+import { applyOutcomes } from "../polls/canonise.ts";
 import type { PollView } from "../polls/render.ts";
 import type { InteractionUser } from "../discord/types.ts";
 
@@ -27,6 +28,24 @@ export class PollLock extends DurableObject<Env> {
     const next = this.chain.then(work);
     this.chain = next.catch(() => undefined);
     return next as Promise<T>;
+  }
+
+  /**
+   * Apply — closing the poll and firing whatever that closes enables.
+   *
+   * Behind the same object as `select`, and for a sharper reason. `applyOutcomes`
+   * reads `status`, decides it is open, and writes `closed` — a read-then-write
+   * with a `SELECT` and a `batch` between the two. Two Apply clicks landing
+   * together both read `open`, both close, and both fire the consequence: two
+   * "Moved." notices, or two game days minted from one poll.
+   *
+   * The Durable Object is what makes the check and the write one unit per poll
+   * id, so the second click finds `closed` and gets the rendered closed poll.
+   * `mayCanonise` stays outside: it reads the signed interaction payload, which
+   * must not cross into here.
+   */
+  async apply(pollId: string, wonIds: string[]): Promise<PollView | undefined> {
+    return this.serialise(() => applyOutcomes(this.env, pollId, wonIds));
   }
 
   /**
