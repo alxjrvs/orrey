@@ -46,7 +46,7 @@ export function renderSignupPost(view: SignupView): MessagePayload {
 
   return {
     content,
-    components: [seatButtons(view.day.id)],
+    components: [seatButtons(view.day.id, view.day.kind, view.capacity)],
     // Nothing. A game day has no role of its own and its post is addressed to
     // the room, so there is no mention Orrey means to fire — and `parse: []`
     // turns off the ones it does not.
@@ -69,16 +69,24 @@ function compose({ day, game, signups, capacity, asOf }: SignupView, detail: Det
   const seated = signups.filter((signup) => signup.state === "in");
   const queued = signups.filter((signup) => signup.state === "waitlisted");
 
+  // A `single` day is a table: the question is whether there is a seat, and the
+  // count is the answer. A `multi` day is a hangout, and the question is whether
+  // you are coming — so the heading says so, and there is no seat count unless
+  // somebody set a capacity, because inventing one would be answering a question
+  // the day has not asked.
+  const multi = day.kind === "multi";
   const of = capacity === null ? `${seated.length}` : `${seated.length}/${capacity}`;
-  lines.push(`**Seated (${of})**${named(seated, detail)}`);
+  lines.push(`**${multi ? "Coming" : "Seated"} (${of})**${named(seated, detail)}`);
   if (queued.length > 0) lines.push(`**Waitlist (${queued.length})**${named(queued, detail)}`);
 
-  if (signups.length === 0) lines.push("*Nobody has taken a seat yet.*");
+  if (signups.length === 0) {
+    lines.push(multi ? "*Nobody has said yet.*" : "*Nobody has taken a seat yet.*");
+  }
 
   // The answer, last, because everything above it is the working — and it
   // survives every truncation pass, because a post shortened past the one line
   // that says whether there is room is a post worth nothing.
-  lines.push("", room(capacity, seated.length));
+  lines.push("", room(capacity, seated.length, multi));
 
   lines.push("", `-# As of <t:${unix(asOf)}:R>. Refresh for a fresh reading.`);
   return lines.join("\n");
@@ -90,10 +98,18 @@ function compose({ day, game, signups, capacity, asOf }: SignupView, detail: Det
  * A day with no capacity says so rather than inventing one: "however many turn
  * up" is a real answer and a made-up number is not.
  */
-function room(capacity: number | null, seated: number): string {
-  if (capacity === null) return "*Room for however many turn up.*";
+function room(capacity: number | null, seated: number, multi: boolean): string {
+  if (capacity === null) {
+    return multi ? "*Everybody welcome — just say you're coming.*" : "*Room for however many turn up.*";
+  }
   const left = Math.max(0, capacity - seated);
-  if (left === 0) return "*Full. Take a seat puts you on the waitlist.*";
+  if (left === 0) {
+    return multi
+      ? "*Full. Coming puts you on the waitlist.*"
+      : "*Full. Take a seat puts you on the waitlist.*";
+  }
+  const noun = left === 1 ? "place" : "places";
+  if (multi) return `*${left} ${noun} left.*`;
   return left === 1 ? "*One seat left.*" : `*${left} seats left.*`;
 }
 
@@ -109,7 +125,18 @@ function name(signup: DaySignup, detail: Detail): string {
 }
 
 /**
- * Four buttons, one row.
+ * One row, and the same three or four ids under two sets of words.
+ *
+ * **Take a seat** and **Coming** are the same click: `claimSeat`, preferring a
+ * seat. They are not two arguments, because they are not two things — a `multi`
+ * day is asking whether you are coming to the day rather than whether you want
+ * one of five chairs, and the word that fits is the only difference. A second
+ * `custom_id` argument meaning exactly what the first one means is a second
+ * handler branch to keep in step for nothing.
+ *
+ * **Waitlist** is absent on a day with no capacity. There is no queue to join
+ * when there is no limit to be past, and a button that always lands somebody in
+ * a waitlist of one is a button that lies about what the day is.
  *
  * **Take a seat** and **Waitlist** land in the same place on a full day — the
  * first is what somebody clicks when they have not looked at the count, and
@@ -122,12 +149,18 @@ function name(signup: DaySignup, detail: Detail): string {
  * is the thing that produced this day in the first place. A button that loops
  * back to where you came from is worse than no button.
  */
-export function seatButtons(gameDayId: string): Record<string, unknown> {
+export function seatButtons(
+  gameDayId: string,
+  kind: "single" | "multi" = "single",
+  capacity: number | null = null,
+): Record<string, unknown> {
+  const yes = kind === "multi" ? "Coming" : "Take a seat";
+
   return {
     type: ComponentType.ACTION_ROW,
     components: [
-      button("Take a seat", gameDayId, "in", ButtonStyle.SUCCESS),
-      button("Waitlist", gameDayId, "wait", ButtonStyle.SECONDARY),
+      button(yes, gameDayId, "in", ButtonStyle.SUCCESS),
+      ...(capacity === null ? [] : [button("Waitlist", gameDayId, "wait", ButtonStyle.SECONDARY)]),
       button("Out", gameDayId, "out", ButtonStyle.DANGER),
       button("Refresh", gameDayId, "refresh", ButtonStyle.SECONDARY),
     ],

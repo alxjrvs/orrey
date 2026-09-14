@@ -162,8 +162,8 @@ describe("what it says", () => {
 
     const { content } = renderSignupPost(await view());
     expect(content).toContain("**November Games Day**");
-    expect(content).toContain("Room for however many turn up.");
-    expect(content).not.toMatch(/Seated \(\d+\/\d+\)/);
+    expect(content).toContain("Everybody welcome");
+    expect(content).not.toMatch(/\(\d+\/\d+\)/);
   });
 
   it("lists the waitlist behind the seated, in arrival order", async () => {
@@ -204,13 +204,15 @@ describe("what it says", () => {
     const { content } = renderSignupPost(await view());
     expect(content.length).toBeLessThanOrEqual(2000);
     // The line that answers the question survives every truncation pass.
-    expect(content).toContain("Room for however many turn up.");
+    expect(content).toContain("Everybody welcome");
   });
 });
 
 describe("the buttons", () => {
   it("are four, in one row, and round-trip through decodeCustomId", async () => {
-    const row = seatButtons(DAY_ID) as { components: { label: string; custom_id: string }[] };
+    const row = seatButtons(DAY_ID, "single", 4) as {
+      components: { label: string; custom_id: string }[];
+    };
 
     expect(row.components.map((button) => button.label)).toEqual([
       "Take a seat",
@@ -224,7 +226,7 @@ describe("the buttons", () => {
   });
 
   it("carry an id short enough for Discord", () => {
-    const row = seatButtons(mintId()) as { components: { custom_id: string }[] };
+    const row = seatButtons(mintId(), "single", 4) as { components: { custom_id: string }[] };
     for (const button of row.components) expect(button.custom_id.length).toBeLessThanOrEqual(100);
   });
 });
