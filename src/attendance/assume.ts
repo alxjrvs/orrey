@@ -48,9 +48,22 @@ export async function assumeAttendance(
 ): Promise<Assumed[]> {
   const { session } = target;
 
-  // A session that was called off did not happen, and one already marked played
-  // has been through this. Neither wants its register rewritten.
-  if (session.state === "CANCELLED" || session.state === "PLAYED") return [];
+  // A session that was called off did not happen. There is nothing to assume and
+  // nothing to correct.
+  if (session.state === "CANCELLED") return [];
+
+  /**
+   * Already played, so the register has been written and must not be rewritten —
+   * but **the answer is still the register**, not nothing.
+   *
+   * Returning `[]` here made the PLAYED write the thing that enforced "once".
+   * The drain marks the session played inside this call and posts the correction
+   * post afterwards; if that post was refused, the retry found PLAYED, got an
+   * empty list, returned early, and the organiser was left with a register they
+   * could never correct — assumed for everybody, with no post to flip anyone on.
+   * The claim in `postNoticeOnce` is what makes the post once.
+   */
+  if (session.state === "PLAYED") return registerRows(env, session.id);
 
   const rows = await attendanceRows(env, session.id);
   const assumed: Assumed[] = rows.map((row) => ({
@@ -108,4 +121,15 @@ export function registerOf(env: Env, sessionId: string) {
     .leftJoin(schema.users, eq(schema.attendance.userId, schema.users.discordId))
     .where(and(eq(schema.attendance.sessionId, sessionId)))
     .all();
+}
+
+/** The register as the correction post shows it. */
+export async function registerRows(env: Env, sessionId: string) {
+  const rows = await registerOf(env, sessionId);
+  return rows.map((row) => ({
+    userId: row.userId,
+    name: row.globalName ?? row.username ?? `<@${row.userId}>`,
+    attended: row.attended === 1,
+    corrected: row.attendedSource === "gm",
+  }));
 }

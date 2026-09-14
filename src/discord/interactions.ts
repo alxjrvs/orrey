@@ -1,7 +1,9 @@
 import type { Env } from "../env.ts";
 import { decodeCustomId, encodeCustomId } from "./custom-id.ts";
 import { deleteUserData, describeReceipt } from "../privacy/delete.ts";
-import { renderAttendancePost } from "../attendance/render.ts";
+import { correctionPost, renderAttendancePost } from "../attendance/render.ts";
+import { registerRows } from "../attendance/assume.ts";
+import { isGm } from "../campaigns/roster.ts";
 import { loadProjectionTarget } from "../projection/target.ts";
 import type { SmokeTally } from "../do/session-lock.ts";
 import {
@@ -127,6 +129,8 @@ async function handleComponent(
   switch (id.action) {
     case "attend":
       return handleAttend(interaction, env, id.arg, id.target);
+    case "attended":
+      return handleAttended(interaction, env, id.arg, id.target);
     case "ping":
       return handlePing(interaction, env, id.target ?? "default");
     case "privacy":
@@ -189,6 +193,43 @@ async function handleAttend(
   return {
     type: InteractionResponseType.UPDATE_MESSAGE,
     data: renderAttendancePost({ target: settled, rows, asOf: new Date() }),
+  };
+}
+
+/**
+ * One toggle on the correction post. The organiser's alone: the register is what
+ * flake memory reads, and a register anybody can edit is a register nobody can
+ * rely on.
+ *
+ * Everyone else gets an ephemeral sentence rather than a silent no-op, because a
+ * button that appears to do nothing reads as broken rather than as forbidden.
+ */
+async function handleAttended(
+  interaction: Interaction,
+  env: Env,
+  userId: string | undefined,
+  sessionId: string | undefined,
+): Promise<Json> {
+  if (!userId || !sessionId) return retiredPost();
+
+  const actor = actorOf(interaction);
+  if (!actor) return ephemeral("Orrey could not tell who clicked that.");
+
+  const target = await loadProjectionTarget(env, sessionId);
+  if (!target) return retiredPost();
+
+  if (!target.campaign || !(await isGm(env, target.campaign.id, actor.id))) {
+    return ephemeral("Only whoever ran the session can correct the register.");
+  }
+
+  const lock = env.SESSION_LOCK.get(env.SESSION_LOCK.idFromName(sessionId));
+  await lock.toggleAttended({ sessionId, userId });
+
+  // Rendered from what was just written, and returned as this click's own
+  // response — the one rewrite send-only allows.
+  return {
+    type: InteractionResponseType.UPDATE_MESSAGE,
+    data: correctionPost(target, await registerRows(env, sessionId), new Date()),
   };
 }
 
