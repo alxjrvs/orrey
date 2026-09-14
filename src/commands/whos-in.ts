@@ -188,7 +188,15 @@ function describe(row: WhosInRow, detail: { notes: boolean }): string {
   return parts.join(" ");
 }
 
-async function isOnRoster(env: Env, campaignId: string, userId: string): Promise<boolean> {
+/**
+ * Whether this person is on this campaign.
+ *
+ * Exported because an autocomplete is a convenience and not an access check: a
+ * person can type any id they like, and session ids are `<campaign-slug>-s<n>`,
+ * which is guessable rather than secret. Anything that discloses or changes a
+ * session on somebody else's behalf asks this, not the autocomplete.
+ */
+export async function isOnRoster(env: Env, campaignId: string, userId: string): Promise<boolean> {
   const row = await db(env)
     .select({ userId: schema.campaignMembers.userId })
     .from(schema.campaignMembers)
