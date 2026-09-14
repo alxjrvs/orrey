@@ -11,6 +11,8 @@ import { jeopardyJob } from "../attendance/jeopardy.ts";
 import { reminderJobs } from "../attendance/reminders.ts";
 import { rearm, rearmStatement, type ArmedJob } from "../jobs/arm.ts";
 import { POST_SIGNUP_JOB } from "./post.ts";
+import { gameDayTitle } from "../projection/target.ts";
+import type { MessagePayload } from "../attendance/render.ts";
 
 /**
  * `PROPOSED → SEATING → LOCKED → PLAYED`, with `CANCELLED` reachable from
@@ -119,8 +121,51 @@ export async function transition(
   // attendance post, the reminders, the register — is machinery phases 1–3
   // already built, and all of it hangs off a session row.
   if (to !== "SEATING") {
-    await d.batch([moved, logged]);
-    return { from, to, changed: true };
+    const existing = await d
+      .select({ id: schema.sessions.id, state: schema.sessions.state })
+      .from(schema.sessions)
+      .where(eq(schema.sessions.id, sessionIdFor(gameDayId)))
+      .get();
+
+    if (to !== "CANCELLED" || !existing) {
+      await d.batch([moved, logged]);
+      return { from, to, changed: true, ...(existing ? { sessionId: existing.id } : {}) };
+    }
+
+    await d.batch([
+      moved,
+      logged,
+      // The evening is off, so the session is off. Leaving it SCHEDULED would
+      // let a late `attendance.assume` write a register for a day nobody played,
+      // and `assumeAttendance` reads exactly this column to decide.
+      d
+        .update(schema.sessions)
+        .set({ state: "CANCELLED", updatedAt: sql`(unixepoch())` })
+        .where(eq(schema.sessions.id, existing.id)),
+      // One notice, in the day's thread. A job rather than a post made here, so
+      // the console's click answers at once — and claimed under its own label,
+      // which is what makes cancelling twice post once.
+      d
+        .insert(schema.jobs)
+        .values({
+          id: `${CANCELLED_JOB}:${gameDayId}`,
+          kind: CANCELLED_JOB,
+          payload: { gameDayId },
+          idempotencyKey: `${CANCELLED_JOB}:${gameDayId}`,
+          runAt: sql`(unixepoch())`,
+        })
+        .onConflictDoNothing(),
+    ]);
+
+    // The calendar deletes are owed by that job too, not sent from here. A queue
+    // send after the commit is the one consequence of cancelling that could not
+    // be replayed: `if (from === to)` above returns before any of this, and
+    // `EDGES.CANCELLED` is empty, so a `sendBatch` that threw would leave the
+    // day CANCELLED, the notice armed — "The calendar entries have been taken
+    // down" — and both entries still on everybody's calendar, with no second
+    // click that could reach here. Hung off the job row instead, a queue that is
+    // down costs a retry rather than the retraction.
+    return { from, to, changed: true, sessionId: existing.id };
   }
 
   const sessionId = sessionIdFor(gameDayId);
@@ -202,6 +247,9 @@ export async function transition(
  */
 export const LOCK_JOB = "game-day.lock";
 
+/** The one message a called-off day sends. */
+export const CANCELLED_JOB = "game-day.cancelled";
+
 export async function lockJob(
   env: Env,
   gameDayId: string,
@@ -256,6 +304,62 @@ export async function lockIfSeating(env: Env, gameDayId: string): Promise<boolea
   // so rather than name whoever happened to open seating.
   const result = await transition(env, gameDayId, "LOCKED", null);
   return result.changed;
+}
+
+/**
+ * How a day that was played ends.
+ *
+ * It rides phase 3's `attendance.assume` job at `ends_at` — no new job and no
+ * new clock. The evening is over, so there is nothing left to decide.
+ *
+ * A day still `SEATING` at the end of its own evening never got locked: the lock
+ * job failed, or the lead time was longer than the notice. It is locked on the
+ * way past rather than being left in a state the map gives it no way out of —
+ * the table has certainly settled by the time the day is over.
+ *
+ * A day that was called off is not played, and is left exactly as it is.
+ */
+export async function playAfterAssume(env: Env, gameDayId: string): Promise<boolean> {
+  const state = async () =>
+    (
+      await db(env)
+        .select({ state: schema.gameDays.state })
+        .from(schema.gameDays)
+        .where(eq(schema.gameDays.id, gameDayId))
+        .get()
+    )?.state;
+
+  if ((await state()) === "SEATING") await transition(env, gameDayId, "LOCKED", null);
+  if ((await state()) !== "LOCKED") return false;
+
+  return (await transition(env, gameDayId, "PLAYED", null)).changed;
+}
+
+/**
+ * "It's off." One new message in the day's thread, and the only thing a
+ * cancellation says.
+ *
+ * The signup post is not touched. Its buttons still work in the sense that
+ * Discord will deliver the clicks, and the `seat` handler answers each one
+ * ephemerally with what happened — which is the same answer a locked day gives,
+ * for the same reason.
+ */
+export function cancelledNotice(
+  day: typeof schema.gameDays.$inferSelect,
+  game: typeof schema.games.$inferSelect | null,
+): MessagePayload {
+  return {
+    content: [
+      `**It's off.** ${gameDayTitle(day, game)} is not happening.`,
+      `It was <t:${day.startsAt}:F>${day.venue ? `, ${day.venue}` : ""}.`,
+      "",
+      "-# The calendar entries have been taken down.",
+    ].join("\n"),
+    components: [],
+    // Nobody in particular. A day is open to the room, and a cancellation is
+    // news rather than a summons.
+    allowed_mentions: { parse: [], roles: [] },
+  };
 }
 
 /** Whether this day is still taking seats. Only SEATING is. */
