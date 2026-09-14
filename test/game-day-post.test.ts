@@ -184,7 +184,7 @@ describe("what it says", () => {
   it("shows a character name beside whoever gave one", async () => {
     await day();
     const ids = await people(1);
-    await claimSeat(env, DAY_ID, ids[0]!, "Arquebus");
+    await claimSeat(env, DAY_ID, ids[0]!, { characterName: "Arquebus" });
 
     expect(renderSignupPost(await view()).content).toContain("Player p0 (Arquebus)");
   });
@@ -199,7 +199,7 @@ describe("what it says", () => {
   it("stays under Discord's ceiling however many turn up", async () => {
     await day({ kind: "multi", gameId: null, title: "November Games Day" });
     const ids = await people(120);
-    for (const id of ids) await claimSeat(env, DAY_ID, id, "A character with a long name");
+    for (const id of ids) await claimSeat(env, DAY_ID, id, { characterName: "A character with a long name" });
 
     const { content } = renderSignupPost(await view());
     expect(content.length).toBeLessThanOrEqual(2000);
