@@ -450,6 +450,46 @@ export const discordTokens = sqliteTable("discord_tokens", {
 });
 
 /**
+ * A day that is being organised, as opposed to a session of a campaign.
+ *
+ * This is what a winning date *produces*. A game day is the open-invite thing —
+ * one table or several, on a date that had to be found rather than assumed — and
+ * the poll that found the date points at it from `poll_dates.game_day_id`.
+ *
+ * Everything else about a game day is phase 5's: capacity, venue, host, the game
+ * being played, seating, and the `signups` CHECK that binds a signup to a
+ * campaign at formation or to a game day and never to a session. None of that is
+ * read here, and a column added now "because phase 5 will want it" is a column
+ * no test in this phase can justify.
+ *
+ * `sessions_parent_ck` is untouched. A game day does not become a session's
+ * parent until phase 5, and widening that CHECK before anything writes such a
+ * session would be widening it on faith.
+ */
+export const gameDays = sqliteTable("game_days", {
+  id: text("id").primaryKey(),
+  /** One table, or several running alongside each other on the same day. */
+  kind: text("kind", { enum: ["single", "multi"] })
+    .notNull()
+    .default("single"),
+  startsAt: integer("starts_at").notNull(),
+  endsAt: integer("ends_at").notNull(),
+  title: text("title"),
+  /**
+   * PROPOSED once a date has won, SEATING while people claim places, LOCKED when
+   * the table is settled, PLAYED afterwards — or CANCELLED, which like every
+   * terminal state in this schema is entered by a person and never by a job.
+   */
+  state: text("state", {
+    enum: ["PROPOSED", "SEATING", "LOCKED", "PLAYED", "CANCELLED"],
+  })
+    .notNull()
+    .default("PROPOSED"),
+  createdAt: integer("created_at").notNull().default(now),
+  updatedAt: integer("updated_at").notNull().default(now),
+});
+
+/**
  * Asking a group which day works.
  *
  * One poll, its candidate dates, and one row per person per date they said yes
@@ -535,6 +575,13 @@ export const pollDates = sqliteTable(
     outcome: text("outcome", { enum: ["open", "won", "lost", "withdrawn"] })
       .notNull()
       .default("open"),
+    /**
+     * What this date became, once it won. Null for every date that did not, and
+     * null again if the day is deleted — the poll is still a true record of what
+     * people said, and losing that because a day was called off would be losing
+     * the only account of how the date was chosen.
+     */
+    gameDayId: text("game_day_id").references(() => gameDays.id, { onDelete: "set null" }),
     createdAt: integer("created_at").notNull().default(now),
   },
   (t) => [

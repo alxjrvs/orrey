@@ -64,6 +64,13 @@
       "when": 1789359501203,
       "tag": "0008_date_polls",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1789359640274,
+      "tag": "0009_game_days",
+      "breakpoints": true
     }
   ]
 }
