@@ -14,6 +14,7 @@ import { attendanceRows } from "../attendance/rows.ts";
 import { confirmedNotice, correctionPost, jeopardyNotice } from "../attendance/render.ts";
 import { announceGameDay, postCloseNotice, postPollPost } from "../polls/post.ts";
 import { APPLY_JOB, applyFollowUp } from "../polls/canonise.ts";
+import { POST_SIGNUP_JOB, postSignupPost, startDayThread } from "../game-days/post.ts";
 import { loadProjectionTarget } from "../projection/target.ts";
 
 const CLAIM_SECONDS = 60;
@@ -254,6 +255,33 @@ async function runJob(job: typeof schema.jobs.$inferSelect, env: Env): Promise<v
       if (!sessionId) return;
 
       await applyFollowUp(env, pollId, sessionId, wasStartsAt);
+      return;
+    }
+
+    /**
+     * The seating stage's post, sent once, and the thread that hangs off it.
+     *
+     * Send-only, like the attendance post: this records the message id and never
+     * touches the message again — a re-run finds the id and does nothing rather
+     * than posting a second one with live buttons.
+     *
+     * Nothing arms this yet. `PROPOSED → SEATING` is `p5/9`'s, and it is defined
+     * as "post the signup post", so the transition and this handler have to be
+     * on the same side of a merge: a transition landing first would arm a job
+     * `runJob` throws on, which sends it back to `pending` with a growing
+     * backoff until the PR above it lands.
+     */
+    case POST_SIGNUP_JOB: {
+      const { gameDayId } = job.payload as { gameDayId?: string };
+      if (!gameDayId) throw new Error(`game-day.post-signup job ${job.id} has no gameDayId`);
+
+      const messageId = await postSignupPost(env, gameDayId);
+      // No post, no thread to hang off it. The job re-runs, and a post that went
+      // up but was not recorded heals on the next drain — at which point the
+      // thread is started from the *recorded* id rather than this call's.
+      if (!messageId) return;
+
+      await startDayThread(env, gameDayId);
       return;
     }
 
