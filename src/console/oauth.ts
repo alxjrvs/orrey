@@ -136,7 +136,15 @@ export async function identify(accessToken: string): Promise<InteractionUser> {
  */
 export async function storeTokens(env: Env, user: InteractionUser, pair: TokenPair): Promise<void> {
   await rememberUser(env, user);
+  await replaceTokens(env, user.id, pair);
+}
 
+/**
+ * The pair alone. A refresh knows the id and nothing else about the person, and
+ * writing through `rememberUser` with the fields it does not have would blank
+ * the name cache every time a token was renewed.
+ */
+export async function replaceTokens(env: Env, userId: string, pair: TokenPair): Promise<void> {
   const row = {
     accessToken: pair.accessToken,
     refreshToken: pair.refreshToken,
@@ -146,7 +154,7 @@ export async function storeTokens(env: Env, user: InteractionUser, pair: TokenPa
 
   await db(env)
     .insert(schema.discordTokens)
-    .values({ userId: user.id, ...row })
+    .values({ userId, ...row })
     .onConflictDoUpdate({ target: schema.discordTokens.userId, set: row });
 }
 
