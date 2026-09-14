@@ -31,6 +31,8 @@ export interface CampaignInput {
   capacity?: number | null;
   maxSessions?: number | null;
   firstSessionNumber?: number;
+  /** Whether a date poll for this campaign may close itself. Off by default. */
+  autoResolvePolls?: boolean;
 }
 
 export class InvalidCampaign extends Error {
@@ -194,6 +196,7 @@ const WRITABLE = [
   "capacity",
   "maxSessions",
   "firstSessionNumber",
+  "autoResolvePolls",
 ] as const;
 
 type CampaignColumns = Partial<typeof schema.campaigns.$inferInsert>;
@@ -201,7 +204,11 @@ type CampaignColumns = Partial<typeof schema.campaigns.$inferInsert>;
 function columns(input: Partial<CampaignInput>): CampaignColumns {
   const out: CampaignColumns = {};
   for (const field of WRITABLE) {
-    if (input[field] !== undefined) (out as Record<string, unknown>)[field] = input[field];
+    if (input[field] === undefined) continue;
+    // The console sends a checkbox; the column is an integer, like every other
+    // boolean in this schema.
+    (out as Record<string, unknown>)[field] =
+      field === "autoResolvePolls" ? (input[field] ? 1 : 0) : input[field];
   }
   return out;
 }

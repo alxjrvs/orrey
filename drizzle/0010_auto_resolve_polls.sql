@@ -1,0 +1,1 @@
+ALTER TABLE `campaigns` ADD `auto_resolve_polls` integer DEFAULT 0 NOT NULL;
