@@ -109,3 +109,14 @@ export function registerOf(env: Env, sessionId: string) {
     .where(and(eq(schema.attendance.sessionId, sessionId)))
     .all();
 }
+
+/** The register as the correction post shows it. */
+export async function registerRows(env: Env, sessionId: string) {
+  const rows = await registerOf(env, sessionId);
+  return rows.map((row) => ({
+    userId: row.userId,
+    name: row.globalName ?? row.username ?? `<@${row.userId}>`,
+    attended: row.attended === 1,
+    corrected: row.attendedSource === "gm",
+  }));
+}
