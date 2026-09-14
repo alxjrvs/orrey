@@ -14,6 +14,12 @@ export const SETTING_KEYS = {
   /** IANA zone for recurrence and reminders. */
   timezone: "timezone",
   /**
+   * The role that may administer. Read with the bot token against the guild
+   * member endpoint — never from the user's own OAuth token, which is why the
+   * console never asks for the `guilds` scope.
+   */
+  organiserRoleId: "discord.organiser_role_id",
+  /**
    * How many sessions ahead the materialiser keeps in D1 and on Google. The
    * Discord horizon is separate and much shorter — two per campaign, because
    * scheduled events are capped per guild and treated as disposable.

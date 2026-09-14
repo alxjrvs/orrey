@@ -7,6 +7,7 @@ import { isGm } from "../campaigns/roster.ts";
 import { loadProjectionTarget } from "../projection/target.ts";
 import { renderUpcoming, upcomingWithTotal } from "../commands/upcoming.ts";
 import { renderWhosIn, sessionChoices, whosIn } from "../commands/whos-in.ts";
+import { loginLink } from "../console/link.ts";
 import type { SmokeTally } from "../do/session-lock.ts";
 import {
   ButtonStyle,
@@ -90,7 +91,7 @@ async function handleCommand(
     case "whos-in":
       return whosInCommand(interaction, env);
     case "console":
-      return console_(ctx);
+      return console_(interaction, env, ctx);
     default:
       return ephemeral("Unknown command.");
   }
@@ -168,13 +169,42 @@ function optionOf(interaction: Interaction, name: string): string | undefined {
 }
 
 /**
- * Until the console exists (phase 2), `/console` is where the two things
- * Discord's terms require live: the privacy policy, and a way out.
+ * A login link, and the two things Discord's terms require: the privacy policy
+ * and a way out.
+ *
+ * The link carries a five-minute signed token, so the redirect to Discord's
+ * authorize endpoint only happens for somebody who asked for it here, just now.
+ * The response is ephemeral, so the link is seen by the person who ran the
+ * command and nobody else.
+ *
+ * The **Delete my data** button stays exactly where it is. It is the only way
+ * out Orrey offers until the console has a page of its own for it, which is
+ * phase 6 — losing it here in the move would quietly drop a term of service.
  */
-function console_(ctx: InteractionContext): Json {
+async function console_(
+  interaction: Interaction,
+  env: Env,
+  ctx: InteractionContext,
+): Promise<Json> {
+  const actor = actorOf(interaction);
+  if (!actor) return ephemeral("Orrey could not tell who asked.");
+
+  // A deploy without `CONSOLE_SESSION_SECRET` cannot mint a link. That must not
+  // cost the person the privacy policy and the way out, and it must never reach
+  // them as "interaction failed" — so the link line is what goes missing, and it
+  // says why.
+  let linkLine: string;
+  try {
+    const link = await loginLink(env, ctx.origin, actor.id, new Date());
+    linkLine = `**The Orrey console** — <${link}>\n-# That link is yours and lasts five minutes. Run \`/console\` again for another.`;
+  } catch (error) {
+    console.error("could not mint a console link", error);
+    linkLine = "**The Orrey console** — not available on this deploy.";
+  }
+
   return ephemeral(
     [
-      "The console arrives in phase 2. Until then:",
+      linkLine,
       "",
       `**What Orrey knows about you** — <${ctx.origin}/privacy>`,
     ].join("\n"),
