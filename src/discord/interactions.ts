@@ -6,6 +6,7 @@ import { registerRows } from "../attendance/assume.ts";
 import { isGm } from "../campaigns/roster.ts";
 import { loadProjectionTarget } from "../projection/target.ts";
 import { loginLink } from "../console/link.ts";
+import { answerPoll, refreshPoll } from "../polls/respond.ts";
 import { renderUpcoming, upcomingWithTotal } from "../commands/upcoming.ts";
 import { renderWhosIn, sessionChoices, whosIn } from "../commands/whos-in.ts";
 import type { SmokeTally } from "../do/session-lock.ts";
@@ -234,6 +235,8 @@ async function handleComponent(
       return handlePing(interaction, env, id.target ?? "default");
     case "privacy":
       return handlePrivacy(interaction, env, ctx, id.arg);
+    case "poll":
+      return handlePoll(interaction, env, id.arg, id.target);
     default:
       return retiredPost();
   }
@@ -330,6 +333,47 @@ async function handleAttended(
     type: InteractionResponseType.UPDATE_MESSAGE,
     data: correctionPost(target, await registerRows(env, sessionId), new Date()),
   };
+}
+
+/**
+ * Answering a date poll, and re-reading one.
+ *
+ * Discord sends the **complete** selection in `data.values` every time, so the
+ * write behind this is a replacement rather than a toggle — and an empty
+ * selection is a real answer, "none of these work", not a click that failed to
+ * say anything.
+ *
+ * The response is `UPDATE_MESSAGE` rendering what was just written: the click is
+ * the re-render. The message itself is never read.
+ *
+ * **Canonise** is on the post already and falls through to the retired-post
+ * response until the slice that implements it. That is a loose end, and it is
+ * loose in a branch rather than in a channel.
+ */
+async function handlePoll(
+  interaction: Interaction,
+  env: Env,
+  arg: string | undefined,
+  pollId: string | undefined,
+): Promise<Json> {
+  if (!pollId) return retiredPost();
+
+  const actor = actorOf(interaction);
+  if (!actor) return ephemeral("Orrey could not tell who clicked that.");
+
+  const answer =
+    arg === "select"
+      ? await answerPoll(env, pollId, actor, interaction.data?.values ?? [])
+      : arg === "refresh"
+        ? await refreshPoll(env, pollId, actor)
+        : undefined;
+
+  // Anything else on a poll post — Canonise, until its slice lands — is an id
+  // Orrey minted but cannot yet act on, which is the retired-post case.
+  if (!answer) return retiredPost();
+  if (!answer.ok) return retiredPost();
+
+  return { type: InteractionResponseType.UPDATE_MESSAGE, data: answer.payload };
 }
 
 /**

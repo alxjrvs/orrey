@@ -1,4 +1,5 @@
 import type { GuildGovernor } from "./do/guild-governor.ts";
+import type { PollLock } from "./do/poll-lock.ts";
 import type { SessionLock } from "./do/session-lock.ts";
 
 export interface Env {
@@ -8,6 +9,7 @@ export interface Env {
   ASSETS: Fetcher;
   GUILD: DurableObjectNamespace<GuildGovernor>;
   SESSION_LOCK: DurableObjectNamespace<SessionLock>;
+  POLL_LOCK: DurableObjectNamespace<PollLock>;
 
   // Vars
   ENVIRONMENT: "development" | "production";
