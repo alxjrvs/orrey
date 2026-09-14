@@ -141,10 +141,17 @@ describe("delete-my-data", () => {
       "INSERT INTO signups (target_type, target_id, user_id, state) VALUES ('campaign_forming', 'age-of-umbra', '1001', 'in')",
     ).run();
 
+    // The console's token pair. The most sensitive row Orrey holds, and the one
+    // whose deletion has an effect outside Orrey.
+    await env.DB.prepare(
+      "INSERT INTO discord_tokens (user_id, access_token, refresh_token, expires_at) VALUES ('1001', 'a', 'r', 1)",
+    ).run();
+
     const receipt = await deleteUserData(env, "1001");
     expect(Object.keys(receipt.removed).sort()).toEqual([
       "attendance",
       "campaign_members",
+      "discord_tokens",
       "signups",
       "users",
     ]);
@@ -153,9 +160,10 @@ describe("delete-my-data", () => {
       attendance: 1,
       campaign_members: 1,
       signups: 1,
+      discord_tokens: 1,
     });
 
-    for (const table of ["attendance", "campaign_members", "signups"]) {
+    for (const table of ["attendance", "campaign_members", "signups", "discord_tokens"]) {
       const left = await env.DB.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first<{ n: number }>();
       expect(left?.n, table).toBe(0);
     }
