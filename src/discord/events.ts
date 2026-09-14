@@ -14,6 +14,7 @@ import { throughGovernor } from "./governor.ts";
 import {
   createScheduledEvent,
   deleteScheduledEvent,
+  isLapsedEvent,
   isUnknownEvent,
   listScheduledEvents,
   modifyScheduledEvent,
@@ -139,9 +140,14 @@ async function upsert(env: Env, target: ProjectionTarget, guildId: string): Prom
     try {
       return await modifyScheduledEvent(env, guildId, known, body);
     } catch (error) {
-      // Someone deleted it, or it lapsed out from under us. The session still
-      // wants an event, so make one rather than retrying into the DLQ.
-      if (isUnknownEvent(error)) return createScheduledEvent(env, guildId, body);
+      // The session still wants an event, so make one rather than retrying
+      // into the DLQ.
+      // Someone deleted it, or it lapsed out from under us, or its old start
+      // time has passed and Discord has already marked it COMPLETED — which
+      // cannot be moved, only replaced.
+      if (isUnknownEvent(error) || isLapsedEvent(error)) {
+        return createScheduledEvent(env, guildId, body);
+      }
       throw error;
     }
   });
