@@ -121,6 +121,7 @@ export function registerOf(env: Env, sessionId: string) {
       attended: schema.attendance.attended,
       attendedSource: schema.attendance.attendedSource,
       intent: schema.attendance.intent,
+      tablesPlayed: schema.attendance.tablesPlayed,
       username: schema.users.username,
       globalName: schema.users.globalName,
     })
@@ -138,5 +139,6 @@ export async function registerRows(env: Env, sessionId: string) {
     name: row.globalName ?? row.username ?? `<@${row.userId}>`,
     attended: row.attended === 1,
     corrected: row.attendedSource === "gm",
+    tablesPlayed: row.tablesPlayed,
   }));
 }

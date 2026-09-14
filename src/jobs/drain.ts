@@ -13,6 +13,7 @@ import { gmOf } from "../campaigns/roster.ts";
 import { attendanceRows } from "../attendance/rows.ts";
 import { requiredFor } from "../attendance/quorum.ts";
 import { confirmedNotice, correctionPost, jeopardyNotice } from "../attendance/render.ts";
+import { isMultiDaySession } from "../attendance/tables.ts";
 import { announceGameDay, postCloseNotice, postPollPost } from "../polls/post.ts";
 import { APPLY_JOB, applyFollowUp } from "../polls/canonise.ts";
 import { POST_SIGNUP_JOB, postSignupPost, startDayThread } from "../game-days/post.ts";
@@ -189,22 +190,6 @@ async function runJob(job: typeof schema.jobs.$inferSelect, env: Env): Promise<v
     }
 
     /**
-     * One rung of the ladder. A DM to everybody who has not answered, and one
-     * shared message in the thread for everybody whose DMs are shut.
-     */
-    case "reminder.step": {
-      const { sessionId, hours } = job.payload as { sessionId?: string; hours?: number };
-      if (!sessionId) throw new Error(`reminder.step job ${job.id} has no sessionId`);
-      if (hours === undefined) throw new Error(`reminder.step job ${job.id} has no hours`);
-
-      const target = await loadProjectionTarget(env, sessionId);
-      if (!target) return;
-
-      await sendReminder(env, target, hours);
-      return;
-    }
-
-    /**
      * It is over. Write the register from what people said, mark it as an
      * assumption, and mark the session PLAYED. The correction post is the PR
      * above this one.
@@ -217,11 +202,6 @@ async function runJob(job: typeof schema.jobs.$inferSelect, env: Env): Promise<v
       if (!target) return;
 
       const assumed = await assumeAttendance(env, target);
-
-      // A game day's evening is over, so the day is too. This happens before the
-      // early return below, because a day nobody claimed a seat at is still a
-      // day that has been and gone.
-      if (target.session.gameDayId) await playAfterAssume(env, target.session.gameDayId);
       // Nobody on the roster and nobody who clicked: there is no register to
       // correct, and a post with no buttons is a post that says nothing.
       if (assumed.length === 0) return;
@@ -232,8 +212,29 @@ async function runJob(job: typeof schema.jobs.$inferSelect, env: Env): Promise<v
         env,
         target,
         "correction",
-        correctionPost(target, await registerRows(env, sessionId), new Date()),
+        correctionPost(target, await registerRows(env, sessionId), new Date(), {
+          // The button is a multi day's alone. A campaign session and a single
+          // day both play one thing, and asking what somebody played would be a
+          // question with one answer.
+          multiDay: await isMultiDaySession(env, sessionId),
+        }),
       );
+      return;
+    }
+
+    /**
+     * One rung of the ladder. A DM to everybody who has not answered, and one
+     * shared message in the thread for everybody whose DMs are shut.
+     */
+    case "reminder.step": {
+      const { sessionId, hours } = job.payload as { sessionId?: string; hours?: number };
+      if (!sessionId) throw new Error(`reminder.step job ${job.id} has no sessionId`);
+      if (hours === undefined) throw new Error(`reminder.step job ${job.id} has no hours`);
+
+      const target = await loadProjectionTarget(env, sessionId);
+      if (!target) return;
+
+      await sendReminder(env, target, hours);
       return;
     }
 
