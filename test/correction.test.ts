@@ -210,3 +210,73 @@ describe("the toggle", () => {
     expect(reply.data.content).toContain("retired");
   });
 });
+
+describe("a post Discord refused", () => {
+  it("goes up on the retry, so the register is still correctable", async () => {
+    await member(GM, "gm", "in");
+    await member("p-1", "player", "in");
+    await armAssume(env, SESSION_ID, Math.floor(Date.now() / 1000) - 60);
+
+    // Discord refuses the post. `assumeAttendance` has already marked the
+    // session PLAYED inside the same call.
+    const healthy = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(
+        typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+      );
+      if (url.pathname.endsWith("/channels/thread-1/messages")) {
+        return Response.json({ code: 50001, message: "Missing Access" }, { status: 403 });
+      }
+      return healthy(input, init);
+    }) as typeof fetch;
+
+    await drainJobs(env);
+    expect(
+      await db(env)
+        .select({ state: schema.sessions.state })
+        .from(schema.sessions)
+        .where(eq(schema.sessions.id, SESSION_ID))
+        .get(),
+    ).toMatchObject({ state: "PLAYED" });
+
+    globalThis.fetch = healthy;
+    posts = [];
+    await db(env).update(schema.jobs).set({ state: "pending", attempts: 0 });
+
+    await drainJobs(env);
+
+    // Returning nothing for an already-PLAYED session made the state write the
+    // thing that enforced "once", and left the organiser with a register they
+    // could never correct — assumed for everybody, with no post to flip anyone
+    // on. The claim in postNoticeOnce is what makes the post once.
+    const post = posts.at(-1);
+    expect(post?.path).toBe("/channels/thread-1/messages");
+    expect(String(post?.body.content)).toContain("Who came?");
+  });
+
+  it("still posts only one when the first attempt landed", async () => {
+    await member(GM, "gm", "in");
+    await armAssume(env, SESSION_ID, Math.floor(Date.now() / 1000) - 60);
+    await drainJobs(env);
+    posts = [];
+
+    await db(env).update(schema.jobs).set({ state: "pending", attempts: 0 });
+    await drainJobs(env);
+
+    expect(posts.filter((post) => post.path === "/channels/thread-1/messages")).toEqual([]);
+  });
+
+  it("does not rewrite a register the GM has already corrected", async () => {
+    await member(GM, "gm", "in");
+    await member("p-1", "player", "in");
+    await armAssume(env, SESSION_ID, Math.floor(Date.now() / 1000) - 60);
+    await drainJobs(env);
+
+    await click(toggleFor("p-1"), GM);
+    await db(env).update(schema.jobs).set({ state: "pending", attempts: 0 });
+
+    await drainJobs(env);
+
+    expect(await register("p-1")).toMatchObject({ attended: 0, attendedSource: "gm" });
+  });
+});
