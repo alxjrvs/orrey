@@ -13,6 +13,7 @@ import { gmOf } from "../campaigns/roster.ts";
 import { attendanceRows } from "../attendance/rows.ts";
 import { confirmedNotice, correctionPost, jeopardyNotice } from "../attendance/render.ts";
 import { postCloseNotice, postPollPost } from "../polls/post.ts";
+import { APPLY_JOB, applyFollowUp } from "../polls/canonise.ts";
 import { loadProjectionTarget } from "../projection/target.ts";
 
 const CLAIM_SECONDS = 60;
@@ -219,6 +220,28 @@ async function runJob(job: typeof schema.jobs.$inferSelect, env: Env): Promise<v
       if (!pollId) throw new Error(`poll.close job ${job.id} has no pollId`);
 
       await postCloseNotice(env, pollId);
+      return;
+    }
+
+    /**
+     * What closing a poll set in motion.
+     *
+     * Armed in the same batch as the close, so "this poll is closed" and "the
+     * move it decided on is owed" are one fact rather than two that a refused
+     * Discord call can pull apart. Retried with backoff like every other job,
+     * and written to be retried: the move re-arms with upserts and posts its
+     * notice under a claim.
+     */
+    case APPLY_JOB: {
+      const { pollId, sessionId, wasStartsAt } = job.payload as {
+        pollId?: string;
+        sessionId?: string;
+        wasStartsAt?: number;
+      };
+      if (!pollId) throw new Error(`${APPLY_JOB} job ${job.id} has no pollId`);
+      if (!sessionId) return;
+
+      await applyFollowUp(env, pollId, sessionId, wasStartsAt);
       return;
     }
 
