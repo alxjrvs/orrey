@@ -6,6 +6,7 @@ import { rosterOf } from "../campaigns/roster.ts";
 import { decide } from "./win-rule.ts";
 import { pollView } from "./rows.ts";
 import { moveSession } from "./move.ts";
+import { carryOver } from "./carry-over.ts";
 import type { PollView } from "./render.ts";
 import type { Interaction } from "../discord/types.ts";
 
@@ -289,7 +290,15 @@ export async function applyFollowUp(
   );
   if (!winner) return false;
 
-  return moveSession(env, sessionId, winner, wasStartsAt);
+  const moved = await moveSession(env, sessionId, winner, wasStartsAt);
+
+  // Only when the date actually changed. A re-apply that settles on the date the
+  // session is already on must not wipe everybody's answers — and `moveSession`
+  // returns false for exactly that case, including on a retry, because the date
+  // it moved *from* comes out of the job's payload rather than off the session.
+  if (moved) await carryOver(env, sessionId, winner.id);
+
+  return moved;
 }
 
 async function earliestOf(env: Env, ids: string[]) {
