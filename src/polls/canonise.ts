@@ -6,6 +6,7 @@ import { rosterOf } from "../campaigns/roster.ts";
 import { decide } from "./win-rule.ts";
 import { pollView } from "./rows.ts";
 import { moveSession } from "./move.ts";
+import { carryOver } from "./carry-over.ts";
 import type { PollView } from "./render.ts";
 import type { Interaction } from "../discord/types.ts";
 
@@ -205,7 +206,13 @@ export async function applyOutcomes(
   // organiser's own pick, and the earliest of it is the session's new date.
   if (poll.targetSessionId && won.length > 0) {
     const winner = await earliestOf(env, won);
-    if (winner) await moveSession(env, poll.targetSessionId, winner);
+    if (winner) {
+      const moved = await moveSession(env, poll.targetSessionId, winner);
+      // Only when the date actually changed. A re-apply that settles on the date
+      // the session is already on must not wipe everybody's answers and post a
+      // second time.
+      if (moved) await carryOver(env, poll.targetSessionId, winner.id);
+    }
   }
 
   return pollView(env, pollId, new Date());
