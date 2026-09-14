@@ -1,11 +1,11 @@
 import { eq, sql } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
-import { requireGuildId } from "../db/settings.ts";
+import { SETTING_KEYS, getSetting, requireGuildId } from "../db/settings.ts";
 import { throughGovernor } from "../discord/governor.ts";
 import { asDiscordFailure, postMessage } from "../discord/rest.ts";
 import { claim, record, recordFailure, release } from "../projection/publications.ts";
-import { pollClosedNotice, renderPollPost } from "./render.ts";
+import { gameDayAnnouncement, pollClosedNotice, renderPollPost } from "./render.ts";
 import { pollView } from "./rows.ts";
 
 /**
@@ -139,6 +139,55 @@ export async function postCloseNotice(env: Env, pollId: string): Promise<string 
     message = await throughGovernor(env, guildId, () =>
       postMessage(env, poll.discordChannelId as string, payload),
     );
+  } catch (error) {
+    if (refused(error)) await release(env, ref);
+    else await recordFailure(env, ref, String(error));
+    throw error;
+  }
+
+  await record(env, ref, message.id);
+  return message.id;
+}
+
+/**
+ * Announcing a game day. One message, once.
+ *
+ * Guarded by a labelled ledger row keyed on the day, so a redelivered job posts
+ * nothing further — but the id it returns is **not** written anywhere. Nothing
+ * will ever reconcile this message, and storing an id Orrey will never use is
+ * storing a promise it does not make.
+ */
+export async function announceGameDay(env: Env, gameDayId: string): Promise<string | undefined> {
+  const day = await db(env)
+    .select()
+    .from(schema.gameDays)
+    .where(eq(schema.gameDays.id, gameDayId))
+    .get();
+  if (!day) return undefined;
+
+  const channelId = await getSetting<string>(env, SETTING_KEYS.schedulingChannelId);
+  if (!channelId) {
+    throw new Error(
+      `setting ${SETTING_KEYS.schedulingChannelId} is not seeded — there is nowhere to announce`,
+    );
+  }
+
+  const ref = {
+    surface: "discord",
+    kind: "message",
+    targetId: gameDayId,
+    label: "gameday",
+  } as const;
+
+  const payload = gameDayAnnouncement(day);
+  const guildId = await requireGuildId(env);
+
+  const { mine, publication } = await claim(env, ref, channelId);
+  if (!mine) return publication.remoteId ?? undefined;
+
+  let message;
+  try {
+    message = await throughGovernor(env, guildId, () => postMessage(env, channelId, payload));
   } catch (error) {
     if (refused(error)) await release(env, ref);
     else await recordFailure(env, ref, String(error));
