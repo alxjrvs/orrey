@@ -418,6 +418,10 @@ export const campaignMembers = sqliteTable(
  * someone who has stopped thinking about what it is for. `game_days` arrives in
  * phase 5; until then nothing can write a row that points at one, because
  * nothing mints that kind of id.
+ *
+ * Phase 5 arrived and that foresight held: `src/game-days/signups.ts` writes the
+ * second kind of row without a migration, and the CHECK is byte-for-byte the one
+ * `0006_roster_and_audit.sql` created.
  */
 export const signups = sqliteTable(
   "signups",
@@ -431,7 +435,16 @@ export const signups = sqliteTable(
     state: text("state", { enum: ["in", "waitlisted", "out"] })
       .notNull()
       .default("in"),
-    /** Waitlist order. Null for anyone who is not on the waitlist. */
+    /**
+     * Arrival order within a target: assigned when the claim is made and never
+     * touched again while it stands.
+     *
+     * Phase 2 wrote it as "waitlist order, null for anyone else"; phase 5 is the
+     * phase that reads it, and reads it as arrival order for everyone who claims
+     * a place at a game day, seated or queued. That is what lets a promotion be
+     * one column changing — see `src/game-days/signups.ts`. A forming campaign
+     * has no capacity and so no queue, so its signups still leave this null.
+     */
     position: integer("position"),
     characterName: text("character_name"),
     createdAt: integer("created_at").notNull().default(now),
