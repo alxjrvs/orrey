@@ -132,11 +132,48 @@ describe("delete-my-data", () => {
       "INSERT INTO attendance (session_id, user_id, intent, note) VALUES ('age-of-umbra-s12', '1001', 'in', 'bringing snacks')",
     ).run();
 
-    const receipt = await deleteUserData(env, "1001");
-    expect(Object.keys(receipt.removed).sort()).toEqual(["attendance", "users"]);
-    expect(receipt.removed).toEqual({ users: 1, attendance: 1 });
+    // Phase 2's two. This test is the reason they are not missed: it names the
+    // table set, so adding one without adding its delete fails here.
+    await env.DB.prepare(
+      "INSERT INTO campaign_members (campaign_id, user_id, role, character_name) VALUES ('age-of-umbra', '1001', 'player', 'Hollow')",
+    ).run();
+    await env.DB.prepare(
+      "INSERT INTO signups (target_type, target_id, user_id, state) VALUES ('campaign_forming', 'age-of-umbra', '1001', 'in')",
+    ).run();
 
-    const left = await env.DB.prepare("SELECT COUNT(*) AS n FROM attendance").first<{ n: number }>();
-    expect(left?.n).toBe(0);
+    const receipt = await deleteUserData(env, "1001");
+    expect(Object.keys(receipt.removed).sort()).toEqual([
+      "attendance",
+      "campaign_members",
+      "signups",
+      "users",
+    ]);
+    expect(receipt.removed).toEqual({
+      users: 1,
+      attendance: 1,
+      campaign_members: 1,
+      signups: 1,
+    });
+
+    for (const table of ["attendance", "campaign_members", "signups"]) {
+      const left = await env.DB.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first<{ n: number }>();
+      expect(left?.n, table).toBe(0);
+    }
+  });
+
+  it("forgets the person in the audit log without erasing what happened", async () => {
+    await seedUser("1001");
+    await env.DB.prepare(
+      "INSERT INTO audit_log (id, actor_user_id, action, target_type, target_id) VALUES ('a1', '1001', 'campaign.conclude', 'campaign', 'age-of-umbra')",
+    ).run();
+
+    await deleteUserData(env, "1001");
+
+    // The actor is `set null` on delete: the person is forgotten, the fact that
+    // the campaign was concluded is not. Deleting the entry outright would erase
+    // somebody else's history as well as their own.
+    const row = await env.DB.prepare("SELECT actor_user_id, action FROM audit_log WHERE id = 'a1'")
+      .first<{ actor_user_id: string | null; action: string }>();
+    expect(row).toMatchObject({ actor_user_id: null, action: "campaign.conclude" });
   });
 });
