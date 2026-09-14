@@ -16,6 +16,7 @@ import {
 import { authorizeUrl, exchangeCode, identify, storeTokens } from "../console/oauth.ts";
 import { sessionFrom } from "../console/session.ts";
 import { NotConfigured, isOrganiser } from "../console/roles.ts";
+import { readLoginToken } from "../console/link.ts";
 
 export function createApp() {
   const app = new Hono<{ Bindings: Env; Variables: { userId: string } }>();
@@ -51,7 +52,14 @@ export function createApp() {
    * hand somebody a callback URL carrying their own code and have the victim's
    * browser log in as them.
    */
-  app.get("/console/login", (c) => {
+  app.get("/console/login", async (c) => {
+    // The console has no public front door. A redirect to Discord's authorize
+    // endpoint that anybody can trigger is a phishing primitive rather than a
+    // convenience, so the link has to have come from `/console` just now.
+    if (!(await readLoginToken(c.env, c.req.query("t"), new Date()))) {
+      return c.text("That login link has expired. Run /console in Discord again.", 400);
+    }
+
     const state = mintState();
     c.header("set-cookie", stateCookie(state));
     return c.redirect(authorizeUrl(c.env, new URL(c.req.url).origin, state), 302);

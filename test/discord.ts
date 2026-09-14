@@ -55,7 +55,13 @@ export async function fakeDiscord(): Promise<FakeDiscord> {
       });
     },
     env(base) {
-      return { ...base, DISCORD_PUBLIC_KEY: publicKeyHex };
+      // A real deploy has both. `/console` mints a signed login link, so a test
+      // env without the secret makes every command look broken.
+      return {
+        ...base,
+        DISCORD_PUBLIC_KEY: publicKeyHex,
+        CONSOLE_SESSION_SECRET: base.CONSOLE_SESSION_SECRET || "test-console-secret",
+      };
     },
   };
 }
