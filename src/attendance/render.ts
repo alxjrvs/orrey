@@ -268,3 +268,61 @@ export function jeopardyNotice({
     },
   };
 }
+
+/**
+ * The nudge, as a DM. It carries no buttons, because a DM is not the attendance
+ * post and every button in this repo sits on the thing it concerns — so it says
+ * where to answer instead, and the link takes them there.
+ */
+export function remindDm(target: ProjectionTarget, hours: number): MessagePayload {
+  const { session, campaign } = target;
+  const where =
+    campaign?.discordChannelId && session.discordMessageId
+      ? `https://discord.com/channels/${GUILD_PLACEHOLDER}/${session.threadId ?? campaign.discordChannelId}/${session.discordMessageId}`
+      : undefined;
+
+  return {
+    content: [
+      `**${escapeMarkdown(sessionTitle(target))}** — ${inWords(hours)}.`,
+      `<t:${session.startsAt}:F>. You have not said whether you are coming.`,
+      ...(where ? [where] : ["Answer on the attendance post."]),
+    ].join("\n"),
+    components: [],
+    allowed_mentions: { parse: [], roles: [] },
+  };
+}
+
+/**
+ * The same nudge for everybody Orrey could not DM, as one message in the thread.
+ * One message and not one each: the thread is shared, so three separate mentions
+ * of three people is three notifications for all of them.
+ */
+export function remindInThread(
+  target: ProjectionTarget,
+  hours: number,
+  userIds: string[],
+): MessagePayload {
+  return {
+    content: [
+      `${userIds.map((id) => `<@${id}>`).join(" ")} — ${inWords(hours)}.`,
+      `**${escapeMarkdown(sessionTitle(target))}**, <t:${target.session.startsAt}:F>.`,
+      "Answering on the post above is what changes it.",
+    ].join("\n"),
+    components: [],
+    allowed_mentions: { parse: [], roles: [], users: [...new Set(userIds)] },
+  };
+}
+
+/**
+ * Discord needs a guild id in a message link and the renderer is pure, so the
+ * link is built with a placeholder Discord accepts: `@me` resolves to whatever
+ * guild the channel is in when somebody clicks it.
+ */
+const GUILD_PLACEHOLDER = "@me";
+
+function inWords(hours: number): string {
+  if (hours >= 48) return `in ${Math.round(hours / 24)} days`;
+  if (hours >= 24) return "tomorrow";
+  if (hours === 1) return "in an hour";
+  return `in ${hours} hours`;
+}
