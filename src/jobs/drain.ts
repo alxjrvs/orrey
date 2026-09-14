@@ -12,7 +12,7 @@ import { sendReminder } from "../attendance/reminders.ts";
 import { gmOf } from "../campaigns/roster.ts";
 import { attendanceRows } from "../attendance/rows.ts";
 import { confirmedNotice, correctionPost, jeopardyNotice } from "../attendance/render.ts";
-import { postPollPost } from "../polls/post.ts";
+import { postCloseNotice, postPollPost } from "../polls/post.ts";
 import { loadProjectionTarget } from "../projection/target.ts";
 
 const CLAIM_SECONDS = 60;
@@ -208,7 +208,21 @@ async function runJob(job: typeof schema.jobs.$inferSelect, env: Env): Promise<v
       return;
     }
 
-    // poll.close, horizon.extend — each added in the phase that needs it.
+    /**
+     * Answering has stopped. Post a notice saying where the tallies landed —
+     * the poll post cannot be disarmed and cannot say so itself, and under
+     * send-only there is nothing to edit. The select is refused by the handler
+     * from here on.
+     */
+    case "poll.close": {
+      const { pollId } = job.payload as { pollId?: string };
+      if (!pollId) throw new Error(`poll.close job ${job.id} has no pollId`);
+
+      await postCloseNotice(env, pollId);
+      return;
+    }
+
+    // horizon.extend — added in the phase that needs it.
     default:
       throw new Error(`unknown job kind: ${job.kind}`);
   }
