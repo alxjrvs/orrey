@@ -169,7 +169,16 @@ describe("the move", () => {
     await canoniseWith(dates[0]!.id);
 
     expect(await jobs()).toEqual(
-      ["attendance.assume", "jeopardy.check", "reminder.step", "reminder.step", "reminder.step", "session.project"].sort(),
+      [
+        "attendance.assume",
+        "jeopardy.check",
+        "reminder.step",
+        "reminder.step",
+        "reminder.step",
+        "session.project",
+        // The carry-over's fresh attendance post, added one slice up.
+        "session.post-attendance",
+      ].sort(),
     );
   });
 
