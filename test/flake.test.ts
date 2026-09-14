@@ -108,17 +108,44 @@ describe("the count", () => {
     });
   });
 
-  it("counts a session nobody wrote a register row for as missed", async () => {
+  it("leaves out a session the register was never written for", async () => {
     await member("ana");
     for (const n of [1, 2, 3, 4]) await session(n);
     await attended("ana", [1, 2]);
 
-    // No row means nothing is known, and the honest denominator is still the
-    // number of sessions that were played.
+    // No row is missing data, not a miss. "Came to 2 of 4" about somebody nobody
+    // ever ticked off is an accusation Orrey invented — sessions played before
+    // the register existed belong to nobody's number.
+    expect(await flakeFor(env, CAMPAIGN, "ana")).toMatchObject({
+      played: 2,
+      attended: 2,
+    });
+  });
+
+  it("counts somebody the register marked absent", async () => {
+    await member("ana");
+    for (const n of [1, 2, 3, 4]) await session(n);
+    await attended("ana", [1, 2]);
+    await register(3, "ana", "in", 0);
+    await register(4, "ana", null, 0);
+
+    // A written zero is an answer. Only the absence of a row is silence.
     expect(await flakeFor(env, CAMPAIGN, "ana")).toMatchObject({
       played: 4,
       attended: 2,
     });
+  });
+
+  it("says nothing about somebody with no register rows at all", async () => {
+    await member("ana");
+    await member("bo");
+    for (const n of [1, 2, 3, 4]) await session(n);
+    await attended("ana", [1, 2, 3, 4]);
+
+    // Bo joined and the sessions happened, but nothing was ever recorded about
+    // them. No number is the honest answer, never 0%.
+    expect(await flakeFor(env, CAMPAIGN, "bo")).toMatchObject({ played: 0, attended: 0 });
+    expect(flakeLine(await flakeFor(env, CAMPAIGN, "bo"))).toBeUndefined();
   });
 
   it("starts when they joined, not when the campaign did", async () => {
@@ -208,14 +235,26 @@ describe("the streak", () => {
     expect((await flakeFor(env, CAMPAIGN, "bo")).noShowStreak).toBe(1);
   });
 
-  it("is ended by a session they said nothing about", async () => {
+  it("is ended by a session nobody recorded", async () => {
     await member("bo");
     for (const n of [1, 2, 3]) await session(n);
     await register(1, "bo", "in", 0);
     await register(3, "bo", "in", 0);
 
-    // Session two has no row: they did not say they were coming, so it is not
-    // part of a run of broken promises.
+    // Session two has no register row. Joining the two no-shows either side of
+    // it into a run of two would claim something the register cannot support.
+    expect((await flakeFor(env, CAMPAIGN, "bo")).noShowStreak).toBe(1);
+  });
+
+  it("is ended by a session they were recorded for but said nothing about", async () => {
+    await member("bo");
+    for (const n of [1, 2, 3]) await session(n);
+    await register(1, "bo", "in", 0);
+    await register(2, "bo", null, 0);
+    await register(3, "bo", "in", 0);
+
+    // They did not say they were coming, so not turning up is not a broken
+    // promise and not part of a run of them.
     expect((await flakeFor(env, CAMPAIGN, "bo")).noShowStreak).toBe(1);
   });
 });
@@ -265,7 +304,7 @@ describe("the roster", () => {
     expect(flakes).toHaveLength(3);
     expect(flakes.find((f) => f.userId === "gm-1")).toMatchObject({ attended: 4 });
     expect(flakes.find((f) => f.userId === "ana")).toMatchObject({ attended: 2 });
-    expect(flakes.find((f) => f.userId === "bo")).toMatchObject({ attended: 0 });
+    expect(flakes.find((f) => f.userId === "bo")).toMatchObject({ played: 0, attended: 0 });
   });
 
   it("does not touch a seat, a reminder, or anything else", async () => {

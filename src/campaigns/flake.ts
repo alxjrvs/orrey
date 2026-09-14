@@ -21,7 +21,11 @@ import { db, schema } from "../db/index.ts";
  */
 export interface Flake {
   userId: string;
-  /** Sessions of this campaign that have been played since they joined. */
+  /**
+   * Played sessions of this campaign, since they joined, that the register was
+   * actually written for. A session Orrey holds no answer about is not one they
+   * failed to come to.
+   */
   played: number;
   /** How many of those they were marked as attending. */
   attended: number;
@@ -79,11 +83,27 @@ export async function flakeFor(
     .orderBy(desc(schema.sessions.startsAt))
     .all();
 
+  let played = 0;
   let attended = 0;
   let noShowStreak = 0;
   let streakOpen = true;
 
   for (const row of rows) {
+    // A session with no register row for this person is one Orrey knows nothing
+    // about — a session played before the register existed, or before the assume
+    // job ran. Counting it as a miss turns missing data into an accusation, and
+    // "came to 0 of 4" about somebody nobody ever ticked off is the worst thing
+    // this module could say. Once a session has been assumed, everybody on the
+    // roster has a row, so the only rows missing are the ones that never existed.
+    if (row.attended === null) {
+      // And it closes the streak rather than being skipped over: joining two
+      // no-shows across a session nobody recorded would claim a run that the
+      // register cannot support.
+      streakOpen = false;
+      continue;
+    }
+
+    played++;
     const came = row.attended === 1;
     if (came) attended++;
 
@@ -96,7 +116,7 @@ export async function flakeFor(
     }
   }
 
-  return { userId, played: rows.length, attended, noShowStreak };
+  return { userId, played, attended, noShowStreak };
 }
 
 /** Everybody on the roster, in one pass per person. */
