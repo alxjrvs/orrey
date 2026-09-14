@@ -23,6 +23,7 @@ import { readLoginToken } from "../console/link.ts";
 import { campaignSummaries, gameDaySummaries, gameSummaries } from "../console/api.ts";
 import { campaignPage } from "../console/campaign.ts";
 import { campaignHistory } from "../console/campaign-history.ts";
+import { campaignStats, gameDayStats } from "../console/stats.ts";
 import { campaignPolls } from "../console/campaign-polls.ts";
 import { gameDayPage } from "../console/game-day.ts";
 import { monthGrid } from "../console/month.ts";
@@ -381,6 +382,21 @@ export function createApp() {
    * with a different failure mode — and because a page that has to hold the plan
    * and the record at once is a page where neither is legible.
    */
+  /**
+   * The two stats views, both behind the console session like every other
+   * `/api/*` route.
+   *
+   * Read-only in the strict sense: no write, no queue message, no Discord call.
+   * #47's third checkbox says nothing here posts to Discord, and these are
+   * exactly the routes a weekly summary post would later be hung off — so the
+   * absence is tested rather than assumed.
+   */
+  app.get("/api/campaigns/:id/stats", async (c) =>
+    c.json(await campaignStats(c.env, c.req.param("id"))),
+  );
+
+  app.get("/api/game-days/stats", async (c) => c.json(await gameDayStats(c.env)));
+
   app.get("/api/campaigns/:id/history", async (c) =>
     c.json(await campaignHistory(c.env, c.req.param("id"))),
   );
