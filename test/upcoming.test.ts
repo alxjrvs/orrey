@@ -5,7 +5,12 @@ import { db, schema } from "../src/db/index.ts";
 import { createApp } from "../src/http/app.ts";
 import { InteractionType } from "../src/discord/types.ts";
 import { fakeDiscord } from "./discord.ts";
-import { renderUpcoming, upcomingFor, type UpcomingEntry } from "../src/commands/upcoming.ts";
+import {
+  renderUpcoming,
+  upcomingFor,
+  upcomingWithTotal,
+  type UpcomingEntry,
+} from "../src/commands/upcoming.ts";
 
 /**
  * The agenda. One list across every campaign, read fresh, ephemeral — and the
@@ -268,5 +273,32 @@ describe("the command", () => {
     expect(
       await db(env).select().from(schema.sessions).where(eq(schema.sessions.id, "umbra-s1")).get(),
     ).toMatchObject({ state: "SCHEDULED" });
+  });
+});
+
+describe("a list longer than the command shows", () => {
+  it("heads the answer with the real total, not the length of what it cut", async () => {
+    await campaign("umbra", "Age of Umbra");
+    await member("umbra", "ada");
+    for (let n = 1; n <= 14; n++) await session("umbra", n, n);
+
+    const { entries, total } = await upcomingWithTotal(env, "ada", ASOF);
+    const content = renderUpcoming(entries, ASOF, total);
+
+    // "10 sessions" over a list of ten when there are fourteen is a wrong answer
+    // to the question the command asks.
+    expect(entries).toHaveLength(10);
+    expect(total).toBe(14);
+    expect(content).toContain("**Upcoming — 14 sessions**");
+    expect(content).toContain("4 more beyond these");
+  });
+
+  it("says nothing about more when there is no more", async () => {
+    await campaign("umbra", "Age of Umbra");
+    await member("umbra", "ada");
+    await session("umbra", 1, 3);
+
+    const { entries, total } = await upcomingWithTotal(env, "ada", ASOF);
+    expect(renderUpcoming(entries, ASOF, total)).not.toContain("beyond these");
   });
 });

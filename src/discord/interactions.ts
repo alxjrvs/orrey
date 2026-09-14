@@ -3,7 +3,7 @@ import { decodeCustomId, encodeCustomId } from "./custom-id.ts";
 import { deleteUserData, describeReceipt } from "../privacy/delete.ts";
 import { renderAttendancePost } from "../attendance/render.ts";
 import { loadProjectionTarget } from "../projection/target.ts";
-import { renderUpcoming, upcomingFor } from "../commands/upcoming.ts";
+import { renderUpcoming, upcomingWithTotal } from "../commands/upcoming.ts";
 import type { SmokeTally } from "../do/session-lock.ts";
 import {
   ButtonStyle,
@@ -109,7 +109,8 @@ async function upcoming(interaction: Interaction, env: Env): Promise<Json> {
   if (!actor) return ephemeral("Orrey could not tell who asked.");
 
   const asOf = new Date();
-  return ephemeral(renderUpcoming(await upcomingFor(env, actor.id, asOf), asOf));
+  const { entries, total } = await upcomingWithTotal(env, actor.id, asOf);
+  return ephemeral(renderUpcoming(entries, asOf, total));
 }
 
 /**

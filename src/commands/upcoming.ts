@@ -28,11 +28,21 @@ export interface UpcomingEntry {
   mine: "in" | "out" | "maybe" | null;
 }
 
-export async function upcomingFor(
+export interface Upcoming {
+  entries: UpcomingEntry[];
+  /** How many there were before the list was cut to `HOW_MANY`. */
+  total: number;
+}
+
+export async function upcomingFor(env: Env, userId: string, asOf: Date): Promise<UpcomingEntry[]> {
+  return (await upcomingWithTotal(env, userId, asOf)).entries;
+}
+
+export async function upcomingWithTotal(
   env: Env,
   userId: string,
   asOf: Date,
-): Promise<UpcomingEntry[]> {
+): Promise<Upcoming> {
   const now = Math.floor(asOf.getTime() / 1000);
 
   // The caller's campaigns, and the sessions of those still to come. A session
@@ -56,7 +66,7 @@ export async function upcomingFor(
     .all();
 
   const wanted = rows.slice(0, HOW_MANY);
-  if (wanted.length === 0) return [];
+  if (wanted.length === 0) return { entries: [], total: 0 };
 
   // One query for every register row of every session on the list, rather than
   // one query per session. Quorum is a count of `in`, so this is all it needs.
@@ -75,7 +85,7 @@ export async function upcomingFor(
     )
     .all();
 
-  return wanted.map(({ session, campaign }) => {
+  const entries = wanted.map(({ session, campaign }) => {
     const rowsForSession = attendance
       .filter((row) => row.sessionId === session.id)
       .map((row) => ({ userId: row.userId, name: row.userId, intent: row.intent, note: null }));
@@ -89,6 +99,8 @@ export async function upcomingFor(
       mine: rowsForSession.find((row) => row.userId === userId)?.intent ?? null,
     };
   });
+
+  return { entries, total: rows.length };
 }
 
 /**
@@ -99,7 +111,7 @@ export async function upcomingFor(
  * for a table spread over three of them. Orrey never renders a wall-clock time
  * into a message it cannot take back.
  */
-export function renderUpcoming(entries: UpcomingEntry[], asOf: Date): string {
+export function renderUpcoming(entries: UpcomingEntry[], asOf: Date, total?: number): string {
   if (entries.length === 0) {
     return [
       "**Nothing upcoming.**",
@@ -109,9 +121,16 @@ export function renderUpcoming(entries: UpcomingEntry[], asOf: Date): string {
   }
 
   const lines = entries.map((entry) => `- ${line(entry)}`);
+  // The heading is the caller's total, not the length of a list this function
+  // silently cut. Saying "six sessions" over a list of six when there are eleven
+  // is a wrong answer to the question the command asks.
+  const shown = total ?? entries.length;
+  const dropped = shown - entries.length;
+
   return [
-    `**Upcoming — ${entries.length} ${entries.length === 1 ? "session" : "sessions"}**`,
+    `**Upcoming — ${shown} ${shown === 1 ? "session" : "sessions"}**`,
     ...lines,
+    ...(dropped > 0 ? [`-# ${dropped} more beyond these. Ask again nearer the time.`] : []),
     `-# As of <t:${Math.floor(asOf.getTime() / 1000)}:t>. Read fresh every time you ask.`,
   ].join("\n");
 }
