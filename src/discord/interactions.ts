@@ -7,6 +7,7 @@ import { isGm } from "../campaigns/roster.ts";
 import { loadProjectionTarget } from "../projection/target.ts";
 import { loginLink } from "../console/link.ts";
 import { renderUpcoming, upcomingWithTotal } from "../commands/upcoming.ts";
+import { renderWhosIn, sessionChoices, whosIn } from "../commands/whos-in.ts";
 import type { SmokeTally } from "../do/session-lock.ts";
 import {
   ButtonStyle,
@@ -64,10 +65,7 @@ export async function handleInteraction(
       return handleCommand(interaction, env, ctx);
 
     case InteractionType.APPLICATION_COMMAND_AUTOCOMPLETE:
-      return {
-        type: InteractionResponseType.APPLICATION_COMMAND_AUTOCOMPLETE_RESULT,
-        data: { choices: [] },
-      };
+      return handleAutocomplete(interaction, env);
 
     case InteractionType.MESSAGE_COMPONENT:
       return handleComponent(interaction, env, ctx);
@@ -91,12 +89,65 @@ async function handleCommand(
     case "reschedule":
       return ephemeral("Date polls arrive in phase 4.");
     case "whos-in":
-      return ephemeral("Rosters arrive in phase 2.");
+      return whosInCommand(interaction, env);
     case "console":
       return console_(interaction, env, ctx);
     default:
       return ephemeral("Unknown command.");
   }
+}
+
+/**
+ * The authoritative roster, for the named session or the caller's next one.
+ *
+ * Read from D1 at the moment it is asked and stamped with when that was — this
+ * command exists because an attendance post is a snapshot, so it must not be one
+ * itself. A session on a campaign the caller is not a member of is refused: the
+ * autocomplete offering only their own campaigns is a convenience, not the check.
+ */
+async function whosInCommand(interaction: Interaction, env: Env): Promise<Json> {
+  const actor = actorOf(interaction);
+  if (!actor) return ephemeral("Orrey could not tell who asked.");
+
+  const asOf = new Date();
+  const answer = await whosIn(env, actor.id, optionOf(interaction, "event"), asOf);
+
+  switch (answer) {
+    case "no-session":
+      return ephemeral(
+        "Nothing to show. Name a session, or wait until one of your campaigns has one scheduled.",
+      );
+    case "not-yours":
+      return ephemeral("That session is not on a campaign you are on.");
+    default:
+      return ephemeral(renderWhosIn(answer, asOf));
+  }
+}
+
+/**
+ * `/whos-in`'s `event` option was declared with `autocomplete: true` at cutover
+ * and has answered `{ choices: [] }` ever since. It resolves against upcoming
+ * sessions on the caller's own rosters, capped at Discord's 25 — one indexed
+ * scan, because an autocomplete has three seconds.
+ */
+async function handleAutocomplete(interaction: Interaction, env: Env): Promise<Json> {
+  const actor = actorOf(interaction);
+  const focused = interaction.data?.options?.find((option) => option.focused);
+
+  const choices =
+    actor && focused?.name === "event"
+      ? await sessionChoices(env, actor.id, String(focused.value ?? ""), new Date())
+      : [];
+
+  return {
+    type: InteractionResponseType.APPLICATION_COMMAND_AUTOCOMPLETE_RESULT,
+    data: { choices },
+  };
+}
+
+function optionOf(interaction: Interaction, name: string): string | undefined {
+  const value = interaction.data?.options?.find((option) => option.name === name)?.value;
+  return typeof value === "string" && value !== "" ? value : undefined;
 }
 
 /**
