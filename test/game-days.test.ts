@@ -122,6 +122,11 @@ describe("what this PR does not do", () => {
       "title",
       "updated_at",
       "venue",
+      // Added by p7/6, which records how deep the queue was when the table
+      // settled. The list is exact on purpose — a column arriving unannounced
+      // is the thing this test is here to notice — so a later phase adding one
+      // says so here.
+      "waitlist_at_lock",
     ]);
   });
 });
