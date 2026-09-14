@@ -6,7 +6,13 @@ import { registerRows } from "../attendance/assume.ts";
 import { isGm } from "../campaigns/roster.ts";
 import { loadProjectionTarget } from "../projection/target.ts";
 import { loginLink } from "../console/link.ts";
-import { answerPoll, refreshPoll } from "../polls/respond.ts";
+import {
+  answerPoll,
+  refreshPoll,
+  applyOverride,
+  openOverride,
+  pickWinners,
+} from "../polls/respond.ts";
 import { renderUpcoming, upcomingWithTotal } from "../commands/upcoming.ts";
 import { renderWhosIn, sessionChoices, whosIn } from "../commands/whos-in.ts";
 import type { SmokeTally } from "../do/session-lock.ts";
@@ -346,9 +352,10 @@ async function handleAttended(
  * The response is `UPDATE_MESSAGE` rendering what was just written: the click is
  * the re-render. The message itself is never read.
  *
- * **Canonise** is on the post already and falls through to the retired-post
- * response until the slice that implements it. That is a loose end, and it is
- * loose in a branch rather than in a channel.
+ * **Canonise**, **Apply** and the override select are the organiser's half. They
+ * are refused ephemerally for everybody else: a player clicking Canonise on a
+ * post the whole server can see must not change what everybody else is looking
+ * at.
  */
 async function handlePoll(
   interaction: Interaction,
@@ -361,17 +368,32 @@ async function handlePoll(
   const actor = actorOf(interaction);
   if (!actor) return ephemeral("Orrey could not tell who clicked that.");
 
+  const values = interaction.data?.values ?? [];
   const answer =
     arg === "select"
-      ? await answerPoll(env, pollId, actor, interaction.data?.values ?? [])
+      ? await answerPoll(env, pollId, actor, values)
       : arg === "refresh"
         ? await refreshPoll(env, pollId, actor)
-        : undefined;
+        : arg === "canon"
+          ? await openOverride(env, pollId, actor, interaction)
+          : arg === "pick"
+            ? await pickWinners(env, pollId, actor, interaction, values)
+            : arg === "apply"
+              ? await applyOverride(env, pollId, actor, interaction)
+              : undefined;
 
-  // Anything else on a poll post — Canonise, until its slice lands — is an id
-  // Orrey minted but cannot yet act on, which is the retired-post case.
+  // An id Orrey minted but does not act on is the retired-post case, the same as
+  // an id it never minted at all.
   if (!answer) return retiredPost();
-  if (!answer.ok) return retiredPost();
+
+  if (!answer.ok) {
+    // Refusal is ephemeral and rewrites nothing. A player clicking Canonise on a
+    // post the whole server can see must not change what everybody else is
+    // looking at.
+    return answer.reason === "refused"
+      ? ephemeral("Only the person who opened this poll, or an organiser, can close it.")
+      : retiredPost();
+  }
 
   return { type: InteractionResponseType.UPDATE_MESSAGE, data: answer.payload };
 }
