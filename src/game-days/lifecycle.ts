@@ -10,6 +10,7 @@ import { assumeJob } from "../attendance/assume.ts";
 import { jeopardyJob } from "../attendance/jeopardy.ts";
 import { reminderJobs } from "../attendance/reminders.ts";
 import { rearm, rearmStatement, type ArmedJob } from "../jobs/arm.ts";
+import { escapeMarkdown } from "../discord/markdown.ts";
 import { POST_SIGNUP_JOB } from "./post.ts";
 import { gameDayTitle } from "../projection/target.ts";
 import type { MessagePayload } from "../attendance/render.ts";
@@ -350,8 +351,8 @@ export function cancelledNotice(
 ): MessagePayload {
   return {
     content: [
-      `**It's off.** ${gameDayTitle(day, game)} is not happening.`,
-      `It was <t:${day.startsAt}:F>${day.venue ? `, ${day.venue}` : ""}.`,
+      `**It's off.** ${escapeMarkdown(gameDayTitle(day, game))} is not happening.`,
+      `It was <t:${day.startsAt}:F>${day.venue ? `, ${escapeMarkdown(day.venue)}` : ""}.`,
       "",
       "-# The calendar entries have been taken down.",
     ].join("\n"),
