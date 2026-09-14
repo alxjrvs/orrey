@@ -652,7 +652,14 @@ async function handleAttended(
   const target = await loadProjectionTarget(env, sessionId);
   if (!target) return retiredPost();
 
-  if (!target.campaign || !(await isGm(env, target.campaign.id, actor.id))) {
+  // Whichever parent the session has answers this. A campaign's is its GM; a
+  // day's is its host. A game day's session carries `campaign_id` null, so a
+  // campaign-only guard refuses the host of every day there is. A day with no
+  // host set fails closed — nobody claimed to have run it.
+  const allowed = target.campaign
+    ? await isGm(env, target.campaign.id, actor.id)
+    : target.gameDay?.hostUserId != null && target.gameDay.hostUserId === actor.id;
+  if (!allowed) {
     return ephemeral("Only whoever ran the session can correct the register.");
   }
 
