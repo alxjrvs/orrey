@@ -521,3 +521,26 @@ function rowsOf(buttons: Record<string, unknown>[]): Record<string, unknown>[] {
   }
   return rows;
 }
+
+/**
+ * "It's off." One new message in the session's thread.
+ *
+ * Never an edit of the attendance post. That post renders from D1, so the next
+ * click on it shows the new state on its own — and under send-only there is no
+ * rewriting it from outside anyway. This is what "anything changing from outside
+ * posts a new notice" means for a cancellation.
+ */
+export function cancelledSessionNotice(target: ProjectionTarget): MessagePayload {
+  const { session, campaign } = target;
+  return {
+    content: [
+      `**It's off.** ${escapeMarkdown(sessionTitle(target))} is not happening.`,
+      `It was <t:${session.startsAt}:F>${session.location ? `, ${escapeMarkdown(session.location)}` : ""}.`,
+      "",
+      "-# The calendar entries have been taken down.",
+    ].join("\n"),
+    components: [],
+    // The roster, because they were going to turn up. Nothing else can fire.
+    allowed_mentions: { parse: [], roles: campaign?.discordRoleId ? [campaign.discordRoleId] : [] },
+  };
+}

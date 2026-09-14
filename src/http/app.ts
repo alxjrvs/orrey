@@ -20,6 +20,7 @@ import { readLoginToken } from "../console/link.ts";
 import { campaignSummaries, gameDaySummaries, gameSummaries } from "../console/api.ts";
 import { agendaBetween, windowAround } from "../console/agenda.ts";
 import { sessionDetail } from "../console/session-detail.ts";
+import { cancelSession, lockSession } from "../sessions/lifecycle.ts";
 import { SETTING_DEFAULTS, SETTING_KEYS, settingOr } from "../db/settings.ts";
 import { openPollFromConsole } from "../console/polls.ts";
 import { InvalidCampaign, createCampaign, updateCampaign } from "../campaigns/write.ts";
@@ -218,6 +219,47 @@ export function createApp() {
     const detail = await sessionDetail(c.env, c.req.param("id"));
     return detail ? c.json(detail) : c.json({ error: "Orrey does not know that session." }, 404);
   });
+
+  /**
+   * The three writes #43 asks for, each a thin wrapper over the domain function
+   * the bot calls. Opening a poll is #36's path invoked from a different
+   * surface, not a second implementation of it.
+   */
+  app.post("/api/sessions/:id/poll", async (c) =>
+    refusable(c, async () => {
+      const body = (await c.req.json()) as Record<string, unknown>;
+      const result = await openPollFromConsole(
+        c.env,
+        { ...body, targetSessionId: c.req.param("id") },
+        c.get("userId"),
+      );
+      return result.ok
+        ? c.json({ id: result.pollId }, 201)
+        : c.json({ error: result.error }, result.status);
+    }),
+  );
+
+  app.post("/api/sessions/:id/lock", async (c) =>
+    refusable(c, async () => {
+      const outcome = await lockSession(c.env, c.req.param("id"), c.get("userId"));
+      return outcome === "no-session"
+        ? c.json({ error: "Orrey does not know that session." }, 404)
+        : outcome === "too-late"
+          ? c.json({ error: "That session is over, or already off." }, 400)
+          : c.json({ outcome });
+    }),
+  );
+
+  app.post("/api/sessions/:id/cancel", async (c) =>
+    refusable(c, async () => {
+      const outcome = await cancelSession(c.env, c.req.param("id"), c.get("userId"));
+      return outcome === "no-session"
+        ? c.json({ error: "Orrey does not know that session." }, 404)
+        : outcome === "too-late"
+          ? c.json({ error: "That session has already been played." }, 400)
+          : c.json({ outcome });
+    }),
+  );
 
   app.get("/api/campaigns/:id/roster", async (c) =>
     c.json({ roster: await rosterRows(c.env, c.req.param("id")) }),
