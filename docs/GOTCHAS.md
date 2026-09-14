@@ -47,3 +47,10 @@ the trap is gone.
   existing row is given the literal text `'game_id'`, `'interval_weeks'`, and so
   on. No error, and the rows are wrong. Rule: if you ever have to hand-write a
   rebuild, cut every column the migration adds out of *both* lists.
+- **Adding weeks in seconds moves the clock, not the date.** A fortnightly 19:00
+  game stepped forward as `+ 14 * 86400` becomes an 18:00 game the moment the
+  series crosses a DST change, and stays wrong until the next one. Days are not
+  a fixed number of seconds. Rule: recurrence steps in *calendar days* in the
+  guild's zone (`src/campaigns/recurrence.ts`), converting back to an instant
+  afterwards; dividing elapsed seconds by an interval has the same bug and drifts
+  further the older the anchor is.
