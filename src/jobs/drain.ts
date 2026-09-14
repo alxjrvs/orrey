@@ -15,6 +15,8 @@ import { confirmedNotice, correctionPost, jeopardyNotice } from "../attendance/r
 import { announceGameDay, postCloseNotice, postPollPost } from "../polls/post.ts";
 import { APPLY_JOB, applyFollowUp } from "../polls/canonise.ts";
 import { POST_SIGNUP_JOB, postSignupPost, startDayThread } from "../game-days/post.ts";
+import { PROMOTED_JOB } from "../game-days/promote.ts";
+import { postDayNoticeOnce, promotedNotice } from "../game-days/notice.ts";
 import { loadProjectionTarget } from "../projection/target.ts";
 
 const CLAIM_SECONDS = 60;
@@ -282,6 +284,43 @@ async function runJob(job: typeof schema.jobs.$inferSelect, env: Env): Promise<v
       if (!messageId) return;
 
       await startDayThread(env, gameDayId);
+      return;
+    }
+
+    /**
+     * Somebody came off the waitlist. One new message in the day's thread saying
+     * so, addressed to them — never a rewrite of the signup post, because
+     * anything changing from outside posts a new message.
+     *
+     * The job carries who moved: by the time this runs they are simply seated,
+     * and indistinguishable from everybody else at the table.
+     */
+    case PROMOTED_JOB: {
+      const { gameDayId, noticeId, userIds } = job.payload as {
+        gameDayId?: string;
+        noticeId?: string;
+        userIds?: string[];
+      };
+      if (!gameDayId) throw new Error(`${PROMOTED_JOB} job ${job.id} has no gameDayId`);
+      if (!userIds?.length) return;
+
+      const row = await db(env)
+        .select({ day: schema.gameDays, game: schema.games })
+        .from(schema.gameDays)
+        .leftJoin(schema.games, eq(schema.gameDays.gameId, schema.games.id))
+        .where(eq(schema.gameDays.id, gameDayId))
+        .get();
+      // The day is gone, or it was called off between the promotion and this —
+      // and a message saying "you're in" about a day nobody is running is worse
+      // than no message at all.
+      if (!row || row.day.state === "CANCELLED") return;
+
+      await postDayNoticeOnce(
+        env,
+        gameDayId,
+        `promoted:${noticeId ?? userIds.join(",")}`,
+        promotedNotice(row.day, row.game, userIds),
+      );
       return;
     }
 

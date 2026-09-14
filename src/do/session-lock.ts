@@ -13,6 +13,7 @@ import {
   withdraw,
   type DaySignup,
 } from "../game-days/signups.ts";
+import { promoteFromWaitlist } from "../game-days/promote.ts";
 import type { AttendanceRow } from "../attendance/render.ts";
 import type { InteractionUser } from "../discord/types.ts";
 
@@ -158,11 +159,21 @@ export class SessionLock extends DurableObject<Env> {
     });
   }
 
-  /** Giving the place back. Nothing is promoted yet — that is `p5/7`'s. */
+  /**
+   * Giving the place back, and whoever the freed seat lets in.
+   *
+   * The promotion runs inside this chain rather than after it, which is the
+   * reason the chain exists at all here: two people going Out at once, each
+   * promoting outside the lock, both read "one seat free" and both promote the
+   * head of the queue.
+   */
   async leaveSeat({ gameDayId, actor }: Omit<SeatClick, "prefer">): Promise<SeatState> {
     return this.serialise(async () => {
       await rememberUser(this.env, actor);
-      await withdraw(this.env, gameDayId, actor.id);
+      const gave = await withdraw(this.env, gameDayId, actor.id);
+      // Nothing was given back, so nothing came free. Promoting here would be
+      // reading a table that has not changed.
+      if (gave === "withdrawn") await promoteFromWaitlist(this.env, gameDayId);
       return this.seats(gameDayId);
     });
   }
