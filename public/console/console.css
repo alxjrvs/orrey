@@ -88,3 +88,27 @@ tbody tr[aria-selected="true"] { background: var(--surface-inset, #1e1f22); }
 .state[data-state="JEOPARDY"] { color: var(--amber-500, #d9a441); }
 .state[data-state="CANCELLED"] { color: var(--danger-500, #d84b4b); }
 .state[data-state="SCHEDULED"], .state[data-state="PLAYED"] { color: var(--text-secondary); }
+
+/* The list and the rail, side by side. The rail is 300px because the design
+   says so: it is a glance, not a page. */
+.split { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: var(--space-5, 20px); align-items: start; }
+@media (max-width: 900px) { .split { grid-template-columns: minmax(0, 1fr); } }
+
+.rail { border-left: var(--border-structural); padding-left: var(--space-4, 16px); }
+.rail h2 { font: var(--type-heading, inherit); margin: 0 0 var(--space-2, 8px); }
+.rail p { margin: var(--space-2, 8px) 0; }
+.rail a { color: var(--signal-500, #5865f2); }
+
+.roster { display: grid; grid-template-columns: auto 1fr; gap: var(--space-1, 4px) var(--space-3, 12px); margin: var(--space-4, 16px) 0; }
+.roster dt { color: var(--text-secondary); }
+.roster dd { margin: 0; font: var(--type-caption, inherit); }
+.roster dd[data-intent="in"] { color: var(--signal-500, #5865f2); }
+.roster dd[data-intent="maybe"] { color: var(--amber-500, #d9a441); }
+.roster dd[data-intent="out"] { color: var(--danger-500, #d84b4b); }
+.roster dd[data-intent="none"] { color: var(--text-muted, #8b8d91); }
+
+/* Projection state is ambient. "Not projected" is a state, not an error. */
+.sync { font: var(--type-caption, inherit); }
+.sync[data-state="not-projected"] { color: var(--text-muted, #8b8d91); }
+.sync[data-state="synced"] { color: var(--text-secondary); }
+.sync[data-state="failing"] { color: var(--danger-500, #d84b4b); }
