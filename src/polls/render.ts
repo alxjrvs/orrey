@@ -242,3 +242,32 @@ export function pollClosedNotice(view: PollView): MessagePayload {
     allowed_mentions: { parse: [], roles: [] },
   };
 }
+
+/**
+ * The announcement for a game day that now exists.
+ *
+ * It says the day exists and nothing else. A PROPOSED day has no capacity, no
+ * host and no signup buttons — those are phase 5's, and announcing a seat that
+ * cannot be claimed would be worse than saying less.
+ *
+ * Send-only, and its message id is deliberately not stored: nothing will ever
+ * reconcile it, so keeping the id would be keeping a promise Orrey does not make.
+ */
+export function gameDayAnnouncement(day: {
+  title: string | null;
+  kind: "single" | "multi";
+  startsAt: number;
+  endsAt: number;
+}): MessagePayload {
+  return {
+    content: [
+      `**A day is on.**${day.title ? ` ${escapeMarkdown(day.title)}` : ""}`,
+      `<t:${day.startsAt}:F> → <t:${day.endsAt}:t>`,
+      day.kind === "multi" ? "Several tables." : "One table.",
+      "",
+      "-# Seats open when the day is set up.",
+    ].join("\n"),
+    components: [],
+    allowed_mentions: { parse: [], roles: [] },
+  };
+}
