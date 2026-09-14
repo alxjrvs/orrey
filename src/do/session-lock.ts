@@ -6,6 +6,13 @@ import { rememberUser } from "../db/users.ts";
 import { attendanceRows } from "../attendance/rows.ts";
 import { crossesThreshold, quorumOf } from "../attendance/quorum.ts";
 import { loadProjectionTarget } from "../projection/target.ts";
+import {
+  capacityOf,
+  claimSeat,
+  signupsForDay,
+  withdraw,
+  type DaySignup,
+} from "../game-days/signups.ts";
 import type { AttendanceRow } from "../attendance/render.ts";
 import type { InteractionUser } from "../discord/types.ts";
 
@@ -125,6 +132,54 @@ export class SessionLock extends DurableObject<Env> {
   }
 
   /**
+   * A seat at a game day, taken by the same object under a different name.
+   *
+   * No new class and no new binding: the lock is per clickable thing, and a day
+   * and a session are different things, clicked by different people at different
+   * times. `idFromName(gameDayId)` is a different object from
+   * `idFromName(sessionId)` even though both come from `SESSION_LOCK`, and a new
+   * class would be a wrangler migration bought for nothing.
+   *
+   * The *write* does not need this lock — `claimSeat` decides capacity inside a
+   * single INSERT, so two clicks for one seat serialise in D1 whether or not
+   * anything else does. What needs it is the pair: the click that takes the last
+   * seat has to be the click that renders the full post, and `p5/7`'s promotion
+   * has to run in the same chain as the withdrawal that freed the seat, or two
+   * people going Out at once promote the same person twice.
+   */
+  async takeSeat({ gameDayId, actor, prefer }: SeatClick): Promise<SeatState> {
+    return this.serialise(async () => {
+      // Identity is the Discord id; the names are a cache this refreshes. It
+      // also has to happen before the claim: `signups.user_id` references
+      // `users`, and somebody clicking for the first time has no row yet.
+      await rememberUser(this.env, actor);
+      await claimSeat(this.env, gameDayId, actor.id, { prefer });
+      return this.seats(gameDayId);
+    });
+  }
+
+  /** Giving the place back. Nothing is promoted yet — that is `p5/7`'s. */
+  async leaveSeat({ gameDayId, actor }: Omit<SeatClick, "prefer">): Promise<SeatState> {
+    return this.serialise(async () => {
+      await rememberUser(this.env, actor);
+      await withdraw(this.env, gameDayId, actor.id);
+      return this.seats(gameDayId);
+    });
+  }
+
+  /** Refresh, on the same queue and for the same reason as `readIntents`. */
+  async readSeats(gameDayId: string): Promise<SeatState> {
+    return this.serialise(() => this.seats(gameDayId));
+  }
+
+  private async seats(gameDayId: string): Promise<SeatState> {
+    return {
+      signups: await signupsForDay(this.env, gameDayId),
+      capacity: await capacityOf(this.env, gameDayId),
+    };
+  }
+
+  /**
    * Read the rows back, and confirm the session if this click is the one that
    * crossed the threshold.
    *
@@ -215,6 +270,18 @@ export interface AttendanceIntent {
   sessionId: string;
   actor: InteractionUser;
   intent: "in" | "out" | "maybe";
+}
+
+export interface SeatClick {
+  gameDayId: string;
+  actor: InteractionUser;
+  prefer?: "seat" | "waitlist";
+}
+
+/** Everything the signup post renders, as of the click that just wrote it. */
+export interface SeatState {
+  signups: DaySignup[];
+  capacity: number | null;
 }
 
 export interface AttendanceNote {

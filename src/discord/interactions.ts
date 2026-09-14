@@ -1,4 +1,7 @@
+import { eq } from "drizzle-orm";
 import type { Env } from "../env.ts";
+import { db, schema } from "../db/index.ts";
+import { renderSignupPost } from "../game-days/render.ts";
 import { decodeCustomId, encodeCustomId } from "./custom-id.ts";
 import { deleteUserData, describeReceipt } from "../privacy/delete.ts";
 import { correctionPost, renderAttendancePost } from "../attendance/render.ts";
@@ -468,6 +471,8 @@ async function handleComponent(
       return handlePrivacy(interaction, env, ctx, id.arg);
     case "poll":
       return handlePoll(interaction, env, id.arg, id.target);
+    case "seat":
+      return handleSeat(interaction, env, id.arg, id.target);
     case "suggest":
       return handleSuggest(interaction, env, id.target);
     default:
@@ -529,6 +534,99 @@ async function handleAttend(
     type: InteractionResponseType.UPDATE_MESSAGE,
     data: renderAttendancePost({ target: settled, rows, asOf: new Date() }),
   };
+}
+
+/**
+ * Take a seat / Waitlist / Out / Refresh on a game day's signup post.
+ *
+ * The same shape as `handleAttend`, which is the point: serialise behind the
+ * day's lock, write to D1, re-render from what was just written, and answer with
+ * UPDATE_MESSAGE so the click rewrites the message it came from. The
+ * interaction's own `message` is never parsed — a post is a snapshot of D1,
+ * never a record of anything.
+ *
+ * Overflow is not refused. **Take a seat** on a full day becomes a waitlist
+ * place at the next position, and the person is told which they got by the post
+ * they get back — being shown the answer is kinder than being shown an error.
+ *
+ * Everyone else in the channel goes on seeing the post as it was until their own
+ * next Refresh. That is the design and not a gap: the alternative is editing a
+ * message from the outside, which is the one thing send-only forbids.
+ */
+async function handleSeat(
+  interaction: Interaction,
+  env: Env,
+  arg: string | undefined,
+  gameDayId: string | undefined,
+): Promise<Json> {
+  if (!gameDayId) return retiredPost();
+
+  const actor = actorOf(interaction);
+  if (!actor) return ephemeral("Orrey could not tell who clicked that.");
+
+  const day = await db(env)
+    .select({ day: schema.gameDays, game: schema.games })
+    .from(schema.gameDays)
+    .leftJoin(schema.games, eq(schema.gameDays.gameId, schema.games.id))
+    .where(eq(schema.gameDays.id, gameDayId))
+    .get();
+
+  // The day is gone, so the post in front of them is about nothing.
+  if (!day) return retiredPost();
+
+  const lock = env.SESSION_LOCK.get(env.SESSION_LOCK.idFromName(gameDayId));
+
+  // A click on a day that has stopped taking seats. The post cannot say so —
+  // Orrey never edits one from the outside — so the person is told directly and
+  // the message is left exactly as it was rather than rewritten to look current
+  // when it is not.
+  const writing = arg === "in" || arg === "wait" || arg === "out";
+  if (writing && day.day.state !== "SEATING") {
+    return ephemeral(seatingClosed(day.day.state));
+  }
+
+  let state;
+  switch (arg) {
+    case "in":
+      state = await lock.takeSeat({ gameDayId, actor, prefer: "seat" });
+      break;
+    case "wait":
+      state = await lock.takeSeat({ gameDayId, actor, prefer: "waitlist" });
+      break;
+    case "out":
+      state = await lock.leaveSeat({ gameDayId, actor });
+      break;
+    case "refresh":
+      state = await lock.readSeats(gameDayId);
+      break;
+    default:
+      return retiredPost();
+  }
+
+  return {
+    type: InteractionResponseType.UPDATE_MESSAGE,
+    data: renderSignupPost({
+      day: day.day,
+      game: day.game,
+      signups: state.signups,
+      capacity: state.capacity,
+      asOf: new Date(),
+    }),
+  };
+}
+
+/** Why the click did nothing, in the words that say what happens next. */
+function seatingClosed(state: string): string {
+  switch (state) {
+    case "PROPOSED":
+      return "Seating for this day has not opened yet.";
+    case "LOCKED":
+      return "The table for this day is settled — talk to whoever is running it.";
+    case "CANCELLED":
+      return "This day was called off.";
+    default:
+      return "This day has already been played.";
+  }
 }
 
 /**
