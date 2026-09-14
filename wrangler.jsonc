@@ -37,10 +37,17 @@
   "durable_objects": {
     "bindings": [
       { "name": "GUILD", "class_name": "GuildGovernor" },
-      { "name": "SESSION_LOCK", "class_name": "SessionLock" }
+      { "name": "SESSION_LOCK", "class_name": "SessionLock" },
+      { "name": "POLL_LOCK", "class_name": "PollLock" }
     ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["GuildGovernor", "SessionLock"] }],
+  // A class cannot be added to an existing tag — v1 is already applied to the
+  // deployed Worker, so PollLock arrives under its own. Getting this wrong is a
+  // deploy-time failure, not a test-time one.
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["GuildGovernor", "SessionLock"] },
+    { "tag": "v2", "new_sqlite_classes": ["PollLock"] }
+  ],
 
   // One trigger; src/cron/scheduled.ts derives the hourly and daily work from
   // the time. Workers Free allows five cron triggers per *account*.
