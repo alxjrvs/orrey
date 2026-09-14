@@ -21,6 +21,12 @@ export const SETTING_KEYS = {
   horizonSessions: "horizon.sessions",
   /** How long before a session starts its attendance post goes up, in days. */
   attendanceLeadDays: "attendance.lead_days",
+  /**
+   * The role that may administer. Read with the bot token against the guild
+   * member endpoint — never from the user's own OAuth token, which is why the
+   * console never asks for the `guilds` scope.
+   */
+  organiserRoleId: "discord.organiser_role_id",
 } as const;
 
 /** Used when the setting has not been written. Stated here, next to the key. */
