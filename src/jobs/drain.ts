@@ -4,6 +4,8 @@ import { db, schema } from "../db/index.ts";
 import { enqueueProjection } from "../projection/outbox.ts";
 import { surfacesFor } from "../campaigns/event-cap.ts";
 import { postAttendancePost } from "../attendance/post.ts";
+import { startSessionThread } from "../attendance/thread.ts";
+import { loadProjectionTarget } from "../projection/target.ts";
 
 const CLAIM_SECONDS = 60;
 const BATCH = 25;
@@ -71,7 +73,18 @@ async function runJob(job: typeof schema.jobs.$inferSelect, env: Env): Promise<v
     case "session.post-attendance": {
       const { sessionId } = job.payload as { sessionId?: string };
       if (!sessionId) throw new Error(`session.post-attendance job ${job.id} has no sessionId`);
-      await postAttendancePost(env, sessionId);
+
+      const messageId = await postAttendancePost(env, sessionId);
+      // No post, no thread to hang off it. The job re-runs, and a post that
+      // went up but was not recorded heals on the next drain — at which point
+      // this runs too, because the thread is started from the *recorded* id
+      // rather than from the one this call returned.
+      if (!messageId) return;
+
+      // Re-read: `postAttendancePost` has just written the message id, and the
+      // thread hangs off it.
+      const target = await loadProjectionTarget(env, sessionId);
+      if (target) await startSessionThread(env, target);
       return;
     }
 
