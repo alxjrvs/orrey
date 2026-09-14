@@ -6,6 +6,7 @@ import { rosterOf } from "../campaigns/roster.ts";
 import { decide } from "./win-rule.ts";
 import { pollView } from "./rows.ts";
 import { mintGameDays } from "./game-days.ts";
+import { anchorFrom, isFormingPoll } from "./anchor.ts";
 import type { PollView } from "./render.ts";
 import type { Interaction } from "../discord/types.ts";
 
@@ -196,12 +197,27 @@ export async function applyOutcomes(
   // One batch. A poll marked closed with half its dates still `open` is a poll
   // whose consequences would fire against a record nobody can read. `closed`
   // leads so the tuple is non-empty however the dates fall.
+  /**
+   * An anchor is decided before anything closes, because it is the one outcome
+   * that can be refused. A rule that returned a tie has to go back to the
+   * organiser, and a poll that closed first could not.
+   */
+  const forming = !poll.targetSessionId && (await isFormingPoll(env, poll.campaignId));
+  if (forming && won.length > 0) {
+    const anchored = await anchorFrom(env, poll.campaignId as string, won);
+    // Two dates cannot both be the slot. The poll stays open and the organiser
+    // picks one.
+    if (anchored === "too-many") return pollView(env, pollId, new Date());
+  }
+
   await d.batch([closed, lost, ...marked]);
 
   // A poll with no target was looking for a day rather than moving one, so what
   // its winners become is a game day — one per winning date, because a
   // multi-kind poll can win more than one and then that is genuinely two days.
-  if (!poll.targetSessionId && won.length > 0) {
+  // Unless it was looking for a *slot*, which is the branch above: a campaign
+  // that has not started needs an anchor, not a Saturday.
+  if (!poll.targetSessionId && !forming && won.length > 0) {
     await mintGameDays(env, pollId, won);
   }
 
