@@ -231,6 +231,21 @@ export const sessions = sqliteTable(
     /** The attendance post. Recorded, then forgotten — messages are send-only. */
     discordMessageId: text("discord_message_id"),
     threadId: text("thread_id"),
+    /**
+     * RFC 5545 `SEQUENCE` for the ICS feed: how many times this session has
+     * moved or been called off since subscribers first saw it.
+     *
+     * A stored counter rather than `updated_at`, which was the obvious
+     * alternative and is wrong: RFC 5545 caps `SEQUENCE` at a signed 32-bit
+     * integer, and unix seconds cross that in 2038. A client that will not take
+     * the number stops taking the update.
+     *
+     * It rises in one place — `bumpIcsSequence` in `src/ics/sequence.ts` — and a
+     * roster change is not one of them. `SEQUENCE` is about the event, and a
+     * client re-prompting every attendee because somebody clicked Maybe is a
+     * client nobody keeps subscribed.
+     */
+    icsSequence: integer("ics_sequence").notNull().default(0),
     createdAt: integer("created_at").notNull().default(now),
     updatedAt: integer("updated_at").notNull().default(now),
   },
