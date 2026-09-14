@@ -145,6 +145,20 @@ export async function release(env: Env, ref: PublicationRef): Promise<void> {
     );
 }
 
+/**
+ * Drop the row entirely, because the thing it describes is being replaced on
+ * purpose.
+ *
+ * Distinct from `retract`, which keeps the row and its remote id so a later
+ * reconcile can account for an object it finds. This is for the case where Orrey
+ * has *decided* to stop tracking what is up there — a moved session's old
+ * attendance post — and the next claim must be allowed to succeed. Everything
+ * else that clears a claim is `release`, which only touches unpublished ones.
+ */
+export async function forget(env: Env, ref: PublicationRef): Promise<void> {
+  await db(env).delete(schema.publications).where(eq(schema.publications.id, publicationId(ref)));
+}
+
 export async function recordFailure(
   env: Env,
   ref: PublicationRef,
