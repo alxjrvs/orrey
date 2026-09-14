@@ -363,6 +363,60 @@ async function act(work) {
   }
 }
 
+/**
+ * Your feeds.
+ *
+ * One URL per campaign, plus everything. The token is in the path, so these URLs
+ * are credentials: the panel is the holder's own and nothing here hands one to a
+ * third party.
+ */
+function feedsSection(panel) {
+  const section = document.createElement("section");
+
+  const list = document.createElement("dl");
+  list.className = "roster";
+  for (const link of panel.links) {
+    const label = document.createElement("dt");
+    label.textContent = link.label;
+    const value = document.createElement("dd");
+    const input = document.createElement("input");
+    input.type = "text";
+    input.readOnly = true;
+    input.value = link.url;
+    input.addEventListener("focus", () => input.select());
+    value.append(input);
+    list.append(label, value);
+  }
+  section.append(list);
+
+  // On the panel rather than in a tooltip: somebody who does not know a
+  // subscribed feed refreshes overnight reads a correct feed as a broken one.
+  const lag = document.createElement("p");
+  lag.className = "note";
+  lag.textContent = panel.lag;
+  section.append(lag);
+
+  const warning = document.createElement("p");
+  warning.className = "note";
+  warning.textContent =
+    "Regenerating mints a new token. Every URL above stops working immediately, and every calendar client you have subscribed has to be re-pointed by hand.";
+  section.append(warning);
+
+  const rotate = document.createElement("button");
+  rotate.type = "button";
+  rotate.textContent = "Regenerate";
+  rotate.addEventListener("click", async () => {
+    if (!confirm("Regenerate? Every subscribed calendar stops updating until you re-point it.")) {
+      return;
+    }
+    rotate.disabled = true;
+    await act(() => api("/console/me/feeds/rotate", { method: "POST", body: "{}" }));
+  });
+  section.append(rotate);
+
+  return section;
+}
+
 function heading(label) {
   const h = document.createElement("h2");
   h.textContent = label;
@@ -371,17 +425,19 @@ function heading(label) {
 
 async function load() {
   try {
-    const [me, { campaigns }, { games }, { gameDays }] = await Promise.all([
+    const [me, { campaigns }, { games }, { gameDays }, feeds] = await Promise.all([
       api("/api/me"),
       api("/api/campaigns"),
       api("/api/games"),
       api("/api/game-days"),
+      api("/console/me/feeds").catch(() => null),
     ]);
 
     who.textContent = `signed in as ${me.userId}`;
     main.replaceChildren(heading("Campaigns"), campaignsTable(campaigns));
     main.append(heading("Game days"), gameDaysTable(gameDays));
     main.append(heading("Games"), gamesTable(games), createForm());
+    if (feeds) main.append(heading("Your feeds"), feedsSection(feeds));
   } catch (error) {
     const message =
       error instanceof Refusal ? error.message : "Orrey could not load that. Try again.";

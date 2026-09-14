@@ -16,6 +16,7 @@ import {
 import { authorizeUrl, exchangeCode, identify, storeTokens } from "../console/oauth.ts";
 import { sessionFrom } from "../console/session.ts";
 import { feedFor, icsResponse } from "../ics/feed.ts";
+import { feedsPanel, rotateFeedToken } from "../ics/feeds-panel.ts";
 import { NotConfigured, isOrganiser } from "../console/roles.ts";
 import { readLoginToken } from "../console/link.ts";
 import { campaignSummaries, gameDaySummaries, gameSummaries } from "../console/api.ts";
@@ -281,6 +282,39 @@ export function createApp() {
   );
 
   /** Logging out is forgetting the cookie. The token pair is dropped with it. */
+  /**
+   * The holder's own feed URLs, and the rotate.
+   *
+   * **Not under `/api/*`**: these are everybody's feeds, not an organiser's
+   * page. The id comes off the session cookie and never off the query string — a
+   * panel that took an id would be a panel that shows somebody else's
+   * credentials.
+   */
+  app.get("/console/me/feeds", async (c) => {
+    const session = await sessionFrom(c.env, c.req.header("cookie"), new Date());
+    if (!session) return c.json({ error: "Not signed in. Run /console in Discord." }, 401);
+
+    // The request's own origin, so a copied URL works on the environment it was
+    // copied from. A hardcoded host is wrong everywhere but one place, and the
+    // person copying it has no way to tell.
+    const panel = await feedsPanel(c.env, session.userId, new URL(c.req.url).origin);
+    return panel ? c.json(panel) : c.json({ error: "Orrey does not know you yet." }, 404);
+  });
+
+  app.post("/console/me/feeds/rotate", async (c) => {
+    const session = await sessionFrom(c.env, c.req.header("cookie"), new Date());
+    if (!session) return c.json({ error: "Not signed in. Run /console in Discord." }, 401);
+
+    const rotated = await rotateFeedToken(c.env, session.userId);
+    if (!rotated) return c.json({ error: "Orrey does not know you yet." }, 404);
+
+    // The panel is re-read rather than the new token returned on its own: what
+    // somebody needs is the URLs, and handing back a bare credential invites it
+    // into a paste buffer that outlives the tab.
+    const panel = await feedsPanel(c.env, session.userId, new URL(c.req.url).origin);
+    return c.json(panel);
+  });
+
   app.post("/console/logout", (c) => {
     c.header("set-cookie", clear(SESSION_COOKIE));
     return c.redirect("/", 302);
