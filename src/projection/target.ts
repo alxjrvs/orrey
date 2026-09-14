@@ -46,6 +46,18 @@ export function discordProjectedContent(target: ProjectionTarget) {
   const { session, campaign } = target;
   return {
     ...googleProjectedContent(target),
+    /**
+     * The event's description carries `orrey:session:<id>`, which is how an
+     * event Orrey already made is recognised when every record of its id has
+     * been lost (#73). It is in the fingerprint because it is in the body: the
+     * fingerprint covers exactly what the remote object shows, and leaving it
+     * out would mean every event that predates the marker keeps a matching
+     * fingerprint, never gets rewritten, and stays unrecognisable forever.
+     *
+     * Constant per session, so this moves each live event's fingerprint exactly
+     * once — one PATCH each, on the first upsert after this lands.
+     */
+    sessionId: session.id,
     // Decides EXTERNAL vs VOICE, and which of the two fields the event carries.
     locationType: campaign?.locationType ?? "external",
     voiceChannelId: campaign?.discordVoiceChannelId ?? null,
