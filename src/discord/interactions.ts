@@ -188,6 +188,14 @@ async function handleSuggest(
   const target = await loadProjectionTarget(env, sessionId);
   if (!target) return retiredPost();
 
+  // The same guard `/reschedule` has. This button sits on a post in a campaign's
+  // own channel, which is close to an access check and is not one: a `custom_id`
+  // is a string the client sends, and anybody who can read one post can send
+  // another post's id.
+  if (target.campaign && !(await isOnRoster(env, target.campaign.id, actor.id))) {
+    return ephemeral("That session is not on a campaign you are on.");
+  }
+
   return datesModal(sessionId, sessionTitle(target));
 }
 
