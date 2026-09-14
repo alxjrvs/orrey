@@ -5,6 +5,7 @@ import { correctionPost, renderAttendancePost } from "../attendance/render.ts";
 import { registerRows } from "../attendance/assume.ts";
 import { isGm } from "../campaigns/roster.ts";
 import { loadProjectionTarget } from "../projection/target.ts";
+import { renderUpcoming, upcomingWithTotal } from "../commands/upcoming.ts";
 import { renderWhosIn, sessionChoices, whosIn } from "../commands/whos-in.ts";
 import type { SmokeTally } from "../do/session-lock.ts";
 import {
@@ -83,7 +84,7 @@ async function handleCommand(
 ): Promise<Json> {
   switch (interaction.data?.name) {
     case "upcoming":
-      return ephemeral("Nothing scheduled yet — Orrey is still being built.");
+      return upcoming(interaction, env);
     case "reschedule":
       return ephemeral("Date polls arrive in phase 4.");
     case "whos-in":
@@ -93,6 +94,24 @@ async function handleCommand(
     default:
       return ephemeral("Unknown command.");
   }
+}
+
+/**
+/**
+ * The agenda. Ephemeral, read from D1 at the moment it is asked, and ordered
+ * across campaigns rather than grouped by them — one list is the point.
+ *
+ * It answers the caller and nobody else, so it needs no roster check beyond the
+ * one the query already does: a person sees the sessions of the campaigns they
+ * are a member of, which is exactly the set `campaign_members` describes.
+ */
+async function upcoming(interaction: Interaction, env: Env): Promise<Json> {
+  const actor = actorOf(interaction);
+  if (!actor) return ephemeral("Orrey could not tell who asked.");
+
+  const asOf = new Date();
+  const { entries, total } = await upcomingWithTotal(env, actor.id, asOf);
+  return ephemeral(renderUpcoming(entries, asOf, total));
 }
 
 /**
