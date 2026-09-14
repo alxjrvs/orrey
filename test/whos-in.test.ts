@@ -71,6 +71,51 @@ async function said(
   await db(env).insert(schema.attendance).values({ sessionId, userId, intent, note });
 }
 
+/**
+ * A roster of `size` people, in a handful of statements rather than one per row.
+ *
+ * The size is the point of the test that uses this; the round trips are not, and
+ * three hundred and sixty of them put a five-second test within a slow runner of
+ * its own timeout. Twenty rows a statement keeps every insert inside D1's
+ * hundred-bound-parameter ceiling.
+ */
+async function bigRoster(campaignId: string, sessionId: string, size: number) {
+  const everyone = Array.from({ length: size }, (_, i) => i);
+  for (let from = 0; from < size; from += 20) {
+    const chunk = everyone.slice(from, from + 20);
+    await db(env)
+      .insert(schema.users)
+      .values(
+        chunk.map((i) => ({
+          discordId: `p${i}`,
+          username: `p${i}`,
+          globalName: `A Player With A Rather Long Display Name ${i}`,
+          feedToken: `t-p${i}`,
+        })),
+      );
+    await db(env)
+      .insert(schema.campaignMembers)
+      .values(
+        chunk.map((i) => ({
+          campaignId,
+          userId: `p${i}`,
+          role: "player" as const,
+          joinedAt: NOW - 365 * DAY,
+        })),
+      );
+    await db(env)
+      .insert(schema.attendance)
+      .values(
+        chunk.map((i) => ({
+          sessionId,
+          userId: `p${i}`,
+          intent: "in" as const,
+          note: `and a note that goes on for a while too ${i}`,
+        })),
+      );
+  }
+}
+
 function command(userId: string, options?: { name: string; value: string }[]) {
   return discord.request({
     type: InteractionType.APPLICATION_COMMAND,
@@ -318,10 +363,7 @@ describe("a roster too big to send", () => {
   it("shortens rather than being rejected outright", async () => {
     await campaign("umbra", "Age of Umbra");
     const id = await session("umbra", 1, 3);
-    for (let i = 0; i < 120; i++) {
-      await member("umbra", `p${i}`, `A Player With A Rather Long Display Name ${i}`);
-      await said(id, `p${i}`, "in", `and a note that goes on for a while too ${i}`);
-    }
+    await bigRoster("umbra", id, 120);
 
     const answer = await whosIn(env, "p0", id, ASOF);
     if (typeof answer === "string") throw new Error(answer);
@@ -333,7 +375,11 @@ describe("a roster too big to send", () => {
     // The counts are the part that must survive.
     expect(content).toContain("**In** — 120");
     expect(content).toContain("not from any post");
-  });
+
+    // The only test in the repo that needs longer than the five-second default.
+    // A hundred and twenty people is the whole point of it, and a loaded runner
+    // turning that into a timeout is a red suite that has found nothing.
+  }, 20_000);
 });
 
 describe("autocomplete past the first twenty-five", () => {
