@@ -1,6 +1,7 @@
 import type { Env } from "../env.ts";
 import { drainJobs } from "../jobs/drain.ts";
 import { materialiseHorizon } from "../campaigns/materialise.ts";
+import { renewWatchIfDue } from "../google/watch.ts";
 
 /**
  * The clock. One cron expression, every minute, and the four logical schedules
@@ -36,7 +37,11 @@ export async function handleScheduled(event: ScheduledController, env: Env): Pro
         break;
 
       case "watch-renew":
-        // Google `events.watch` channels have a ~7-day TTL and do not auto-renew.
+        // Google `events.watch` channels have a ~7-day TTL and do not auto-renew,
+        // so this opens one when there is none and replaces one before it
+        // lapses. Daily against a weekly TTL and a two-day window, so a tick
+        // that fails has two more before anything is missed.
+        await renewWatchIfDue(env, Math.floor(event.scheduledTime / 1000));
         break;
 
       case "reconcile":

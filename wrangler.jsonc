@@ -55,6 +55,12 @@
 
   // The deployed value. `wrangler dev` overrides it from .dev.vars.
   "vars": {
-    "ENVIRONMENT": "production"
+    "ENVIRONMENT": "production",
+    // Where Google pushes calendar notifications. The cron has no request to
+    // take an origin from, so it is stated here. Google refuses to deliver to
+    // an unverified domain — this hostname has to be verified once in the
+    // Google console before a real channel can be opened, which is not code and
+    // no test can stand in for it.
+    "PUBLIC_ORIGIN": "https://orrey.alxjrvs.workers.dev"
   }
 }

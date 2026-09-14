@@ -42,6 +42,15 @@ export const SETTING_KEYS = {
    * by hand, and nothing unlocks.
    */
   gameDayLockLeadHours: "gameday.lock_lead_hours",
+  /**
+   * The open push channel on the Orrey calendar: its id, resource id, shared
+   * token and expiry.
+   *
+   * One row because there is exactly one calendar. The token is the channel's
+   * shared secret — it is what the webhook compares an incoming push against —
+   * so it is stored here and appears in no log line.
+   */
+  googleWatch: "google.watch",
 } as const;
 
 /** Used when the setting has not been written. Stated here, next to the key. */
