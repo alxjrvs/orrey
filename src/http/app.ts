@@ -24,6 +24,7 @@ import { campaignPolls } from "../console/campaign-polls.ts";
 import { gameDayPage } from "../console/game-day.ts";
 import { monthGrid } from "../console/month.ts";
 import { deleteGame, gameRows } from "../console/games.ts";
+import { InvalidSetting, putSetting, settingsView } from "../console/settings.ts";
 import { agendaBetween, windowAround } from "../console/agenda.ts";
 import { sessionDetail } from "../console/session-detail.ts";
 import { cancelSession, lockSession } from "../sessions/lifecycle.ts";
@@ -170,6 +171,20 @@ export function createApp() {
    * afterwards.
    */
   app.get("/api/games/usage", async (c) => c.json({ games: await gameRows(c.env) }));
+
+  /**
+   * The settings page's fields: every key something in the Worker already reads,
+   * with its value, its default, and what changing it costs.
+   */
+  app.get("/api/settings", async (c) => c.json({ settings: await settingsView(c.env) }));
+
+  app.put("/api/settings/:key{.+}", async (c) =>
+    refusable(c, async () => {
+      const { value } = (await c.req.json()) as { value?: unknown };
+      await putSetting(c.env, c.req.param("key"), value, c.get("userId"));
+      return c.json({ ok: true });
+    }),
+  );
   app.get("/api/game-days", async (c) => c.json({ gameDays: await gameDaySummaries(c.env) }));
 
   /**
@@ -476,7 +491,8 @@ async function refusable(
     if (
       error instanceof InvalidCampaign ||
       error instanceof IllegalTransition ||
-      error instanceof InvalidGame
+      error instanceof InvalidGame ||
+      error instanceof InvalidSetting
     ) {
       return c.json({ error: error.message }, 400);
     }

@@ -1224,6 +1224,81 @@ function gameActions(row, game) {
   row.append(td);
 }
 
+/**
+ * The settings page, in the same form shell the campaign form uses.
+ *
+ * One form per key rather than one form for all of them: the fields have nothing
+ * to do with each other, a single Save would make one bad value refuse nine good
+ * ones, and the audit row is per key anyway.
+ */
+function settingsSection(settings) {
+  const section = document.createElement("section");
+
+  for (const field of settings) {
+    const form = document.createElement("form");
+    form.className = "stack setting";
+
+    const label = document.createElement("label");
+    label.textContent = field.label;
+    const input = document.createElement("input");
+    input.name = "value";
+    input.type = field.kind === "number" ? "number" : "text";
+    input.value = field.value === null || field.value === undefined ? "" : asText(field.value);
+    // A blank box is not a mystery: the placeholder is what the Worker actually
+    // uses when nothing is written.
+    if (field.fallback !== null && field.fallback !== undefined) {
+      input.placeholder = asText(field.fallback);
+    }
+    input.disabled = !field.writable;
+    label.append(input);
+    form.append(label);
+
+    const help = document.createElement("p");
+    help.className = "note";
+    help.textContent = field.help;
+    form.append(help);
+
+    // What it costs, on the page and not only in a commit message. A number that
+    // quietly stops being true is worse than one nobody touched.
+    if (field.caveat) {
+      const caveat = document.createElement("p");
+      caveat.className = "note";
+      caveat.textContent = field.caveat;
+      form.append(caveat);
+    }
+
+    if (field.writable) {
+      const save = document.createElement("button");
+      save.type = "submit";
+      save.textContent = "Save";
+      form.append(save);
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        save.disabled = true;
+        const raw = input.value.trim();
+        const value =
+          field.kind === "number"
+            ? Number(raw)
+            : field.kind === "list"
+              ? raw.split(/[,\s]+/).filter(Boolean).map(Number)
+              : raw;
+        await act(() =>
+          api(`/api/settings/${field.key}`, { method: "PUT", body: JSON.stringify({ value }) }),
+        );
+      });
+    }
+
+    section.append(form);
+  }
+
+  return section;
+}
+
+function asText(value) {
+  return Array.isArray(value) ? value.join(", ") : String(value);
+}
+
 function heading(label) {
   const h = document.createElement("h2");
   h.textContent = label;
@@ -1232,7 +1307,7 @@ function heading(label) {
 
 async function load() {
   try {
-    const [me, agenda, { campaigns }, { games }, { gameDays }] = await Promise.all([
+    const [me, agenda, { campaigns }, { games }, { gameDays }, settings] = await Promise.all([
       api("/api/me"),
       api("/api/agenda"),
       api("/api/campaigns"),
@@ -1240,6 +1315,7 @@ async function load() {
       // delete, and a delete needs to know what it would break.
       api("/api/games/usage"),
       api("/api/game-days"),
+      api("/api/settings"),
     ]);
 
     // The rail is a second read rather than part of the agenda's: one session's
@@ -1274,6 +1350,7 @@ async function load() {
     if (plan) main.append(campaignPageSection(plan.campaign, history, polls));
     main.append(heading("Game days"), gameDaysTable(gameDays));
     main.append(heading("Games"), gamesTable(games), createForm());
+    main.append(heading("Settings"), settingsSection(settings.settings));
   } catch (error) {
     const message =
       error instanceof Refusal ? error.message : "Orrey could not load that. Try again.";
