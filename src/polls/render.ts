@@ -85,7 +85,7 @@ function tally(date: PollDateRow, rosterSize: number | null): string {
 }
 
 function components(view: PollView): Record<string, unknown>[] {
-  const { poll, dates, chosen = [] } = view;
+  const { poll, dates } = view;
 
   const select = {
     type: ComponentType.STRING_SELECT,
@@ -94,10 +94,25 @@ function components(view: PollView): Record<string, unknown>[] {
     // Zero is an answer. See MAX_DATES above.
     min_values: 0,
     max_values: Math.max(1, Math.min(dates.length, MAX_DATES)),
+    /**
+     * **No `default`.** It is tempting — "the select comes back prefilled with
+     * what this person already said" — and it is wrong on this message, because
+     * this message is not this person's.
+     *
+     * A click answers with UPDATE_MESSAGE, which rewrites the one shared post
+     * everybody in the channel is looking at. A `default` computed from the
+     * clicker's own rows would be written into that shared post and stay there:
+     * the next person to open the select would find somebody else's answer
+     * ticked, and clicking Refresh would stamp their own over it. There is no
+     * per-viewer rendering of a channel message to hang a prefill on.
+     *
+     * Each person's answer is in D1, and the tallies above are where it shows.
+     * `renderOverride`'s `default` stays as it is — that one renders staged
+     * poll-level state, which is the same for every viewer.
+     */
     options: dates.slice(0, MAX_DATES).map((date) => ({
       label: label(date),
       value: date.id,
-      default: chosen.includes(date.id),
     })),
   };
 
