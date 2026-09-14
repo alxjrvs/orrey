@@ -293,6 +293,12 @@ export interface RegisterRow {
   attended: boolean;
   /** Whether a person said so, as opposed to Orrey having assumed it. */
   corrected: boolean;
+  /**
+   * What they played on a multi day, in whoever ran it's own words. Null
+   * everywhere else, and null on a multi day nobody has filled it in for —
+   * which is most of them, because it is optional and meant to be.
+   */
+  tablesPlayed?: string | null;
 }
 
 /**
@@ -307,14 +313,35 @@ export interface RegisterRow {
  * bigger table than that says so rather than silently dropping the rest — the
  * whole point of this post is that the register is complete.
  */
+/**
+ * Twenty-five toggles is five rows, which is every row Discord allows — so a
+ * post that also carries the **Tables played** button has room for twenty.
+ *
+ * Dropping five names rather than dropping the button is the right way round on
+ * a multi day: the console corrects a register and there is a line on the post
+ * saying so, but nothing else can record what somebody played.
+ */
 const MAX_TOGGLES = 25;
+const MAX_TOGGLES_WITH_TABLES = 20;
+
+export interface CorrectionOptions {
+  /**
+   * Whether this session is a multi game day's. Passed in rather than read off
+   * the target, because the renderer is pure and because `ProjectionTarget` does
+   * not know about game days until `p5/4` — this slice forks below that and has
+   * no business waiting for it.
+   */
+  multiDay?: boolean | undefined;
+}
 
 export function correctionPost(
   target: ProjectionTarget,
   register: RegisterRow[],
   asOf: Date,
+  options: CorrectionOptions = {},
 ): MessagePayload {
-  const shown = register.slice(0, MAX_TOGGLES);
+  const tables = options.multiDay === true;
+  const shown = register.slice(0, tables ? MAX_TOGGLES_WITH_TABLES : MAX_TOGGLES);
   const dropped = register.length - shown.length;
 
   const came = register.filter((row) => row.attended);
@@ -325,6 +352,20 @@ export function correctionPost(
     "Orrey guessed this from what people said. Tap anybody it got wrong.",
   ];
 
+  // Somebody else's free text on a post Orrey can never edit, so it is escaped
+  // exactly like a note is — a stray backtick would break this post's layout
+  // permanently.
+  const played = tables ? register.filter((row) => row.tablesPlayed) : [];
+  if (played.length > 0) {
+    lines.push(
+      "",
+      "**Tables**",
+      ...played.map(
+        (row) => `${escapeMarkdown(row.name)} — ${escapeMarkdown(row.tablesPlayed as string)}`,
+      ),
+    );
+  }
+
   if (dropped > 0) {
     lines.push(
       `-# ${dropped} more on the roster than there are buttons; correct those in the console.`,
@@ -334,8 +375,38 @@ export function correctionPost(
 
   return {
     content: lines.join("\n"),
-    components: rowsOf(shown.map((row) => toggle(target.session.id, row))),
+    components: [
+      ...rowsOf(shown.map((row) => toggle(target.session.id, row))),
+      ...(tables ? [tablesRow(target.session.id)] : []),
+    ],
     allowed_mentions: { parse: [], roles: [] },
+  };
+}
+
+/**
+ * One button, and a chain that is ephemeral from there on.
+ *
+ * The post has already spent its component budget on one toggle per person, and
+ * a modal holds five inputs — which a multi day's roster outgrows immediately.
+ * So this opens an ephemeral select of the people marked attended, that select
+ * opens a modal, and the modal answers ephemerally.
+ *
+ * The correction post itself is never rewritten by any of it. Rewriting it would
+ * replace the toggles everyone else is using with one organiser's select, for
+ * good. The line appears on the post's next Refresh, which is how every stale
+ * reading in this repo becomes current.
+ */
+export function tablesRow(sessionId: string): Record<string, unknown> {
+  return {
+    type: ComponentType.ACTION_ROW,
+    components: [
+      {
+        type: ComponentType.BUTTON,
+        style: ButtonStyle.SECONDARY,
+        label: "Tables played",
+        custom_id: encodeCustomId({ action: "tables", target: sessionId }),
+      },
+    ],
   };
 }
 
