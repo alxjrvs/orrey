@@ -2,6 +2,7 @@ import { env } from "cloudflare:test";
 import { asc, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { db, schema } from "../src/db/index.ts";
+import { mintStatements } from "../src/polls/game-days.ts";
 import { SETTING_KEYS, setSetting } from "../src/db/settings.ts";
 import { mintId } from "../src/db/ids.ts";
 import { createApp } from "../src/http/app.ts";
@@ -145,6 +146,34 @@ describe("the mint", () => {
       title: "Blades in the Dark",
     });
     expect(await announceJobs()).toHaveLength(2);
+  });
+
+  it("carries the poll's game onto the day it mints", async () => {
+    await seed();
+
+    await canoniseWith(dates[0]!);
+
+    // The game was read once for a title and then dropped, so every day this
+    // path minted had `game_id` NULL — which `dayWithCapacity` reads as "however
+    // many turn up". A six-player table seated nine, and the waitlist never
+    // engaged on any day the product actually creates.
+    expect((await days())[0]).toMatchObject({ gameId: "blades" });
+  });
+
+  it("refuses to mint a single day with no game", async () => {
+    await seed({ gameDayKind: "single", gameId: null });
+
+    // `singleNamesGame`'s docstring says the rule lives in the one place that
+    // writes the row, because SQLite cannot add the CHECK without a rebuild and
+    // D1 would cascade the signups away. Until now it lived nowhere.
+    //
+    // Asserted against `mintStatements` rather than through a click, because a
+    // throw inside an interaction is a 500 and this is a guard against a row
+    // `openPoll` already refuses to create — `needs-game` on an untargeted poll.
+    await expect(mintStatements(env, POLL, [dates[0]!])).rejects.toThrow(
+      /single day with no game/,
+    );
+    expect(await days()).toEqual([]);
   });
 
   it("points each poll_date at the day it minted", async () => {
