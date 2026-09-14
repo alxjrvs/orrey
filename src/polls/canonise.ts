@@ -6,6 +6,7 @@ import { rosterOf } from "../campaigns/roster.ts";
 import { decide } from "./win-rule.ts";
 import { pollView } from "./rows.ts";
 import { mintStatements } from "./game-days.ts";
+import { anchorFrom, isFormingPoll } from "./anchor.ts";
 import type { PollView } from "./render.ts";
 import type { Interaction } from "../discord/types.ts";
 
@@ -197,9 +198,29 @@ export async function applyOutcomes(
     ? [d.update(schema.pollDates).set({ outcome: "won" }).where(inArray(schema.pollDates.id, won))]
     : [];
 
+  /**
+   * An anchor is decided before anything closes, because it is the one outcome
+   * that can be refused. A rule that returned a tie has to go back to the
+   * organiser, and a poll that closed first could not.
+   *
+   * Writing it before the close is also the safe way round the other way: a
+   * crash between the two leaves a campaign anchored with its poll still open,
+   * and Apply can simply be pressed again. The reverse would leave it closed
+   * with no anchor and no way to make one.
+   */
+  const forming = !poll.targetSessionId && (await isFormingPoll(env, poll.campaignId));
+  if (forming && won.length > 0) {
+    const anchored = await anchorFrom(env, poll.campaignId as string, won);
+    // Two dates cannot both be the slot. The poll stays open and the organiser
+    // picks one.
+    if (anchored === "too-many") return pollView(env, pollId, new Date());
+  }
+
   // A poll with no target was looking for a day rather than moving one, so what
   // its winners become is a game day — one per winning date, because a
   // multi-kind poll can win more than one and then that is genuinely two days.
+  // Unless it was looking for a *slot*, which is the branch above: a campaign
+  // that has not started needs an anchor, not a Saturday.
   //
   // The statements go in the batch below rather than being run after it. Minting
   // afterwards meant the close committed first, and Apply's own guard refuses a
@@ -208,7 +229,7 @@ export async function applyOutcomes(
   // one. Nothing in the mint talks to Discord, so there is no reason for it to
   // be anywhere but here.
   const mint =
-    !poll.targetSessionId && won.length > 0
+    !poll.targetSessionId && !forming && won.length > 0
       ? (await mintStatements(env, pollId, won)).statements
       : [];
 
