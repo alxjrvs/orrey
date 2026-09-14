@@ -31,7 +31,12 @@ export interface AttendanceView {
 export interface MessagePayload {
   content: string;
   components: Record<string, unknown>[];
-  allowed_mentions: { parse: never[]; roles: string[] };
+  /**
+   * `parse: []` is the important half: it turns off @everyone, @here and every
+   * role mention Orrey did not name on purpose. `roles` and `users` are then the
+   * exhaustive list of what may actually fire.
+   */
+  allowed_mentions: { parse: never[]; roles: string[]; users?: string[] };
 }
 
 export function renderAttendancePost({ target, rows, asOf }: AttendanceView): MessagePayload {
@@ -195,5 +200,71 @@ export function confirmedNotice(target: ProjectionTarget): MessagePayload {
     ].join("\n"),
     components: [],
     allowed_mentions: { parse: [], roles: campaign?.discordRoleId ? [campaign.discordRoleId] : [] },
+  };
+}
+
+/**
+ * The jeopardy notice. A new message in the thread, with its own as-of line,
+ * posted when the clock found the session short a day out.
+ *
+ * It names who has not answered, because "we are two short" is a fact nobody can
+ * act on and "we are two short and it is these three who have not said" is a
+ * fact three people can. It mentions the roster role so the people who can fix it
+ * see it, and it names the GM because the decision is theirs.
+ *
+ * Phase 4 gives it a *Suggest another day* button. Until then it says who to
+ * talk to, which is the honest version of the same thing.
+ */
+export function jeopardyNotice({
+  target,
+  rows,
+  gmId,
+  required,
+  asOf,
+}: {
+  target: ProjectionTarget;
+  rows: AttendanceRow[];
+  gmId: string | undefined;
+  required: number;
+  asOf: Date;
+}): MessagePayload {
+  const { session, campaign } = target;
+  const saidIn = rows.filter((row) => row.intent === "in").length;
+  const silent = rows.filter((row) => row.intent === null);
+
+  const lines = [
+    `**Is this one happening?** ${escapeMarkdown(sessionTitle(target))}`,
+    `<t:${session.startsAt}:F> — ${saidIn} of ${required} in.`,
+  ];
+
+  if (silent.length > 0) {
+    lines.push(
+      "",
+      `Not heard from: ${silent.map((row) => `<@${row.userId}>`).join(", ")}`,
+    );
+  }
+
+  lines.push(
+    "",
+    gmId
+      ? `<@${gmId}> decides whether it runs. Answering on the post above is what changes it.`
+      : "Whoever is running it decides. Answering on the post above is what changes it.",
+    `-# As of <t:${Math.floor(asOf.getTime() / 1000)}:R>.`,
+  );
+
+  return {
+    content: lines.join("\n"),
+    components: [],
+    // The roster, and the people named. Nothing else — a notice that could fire
+    // @everyone because somebody's display name looked like one is a notice
+    // nobody trusts.
+    allowed_mentions: {
+      parse: [],
+      roles: campaign?.discordRoleId ? [campaign.discordRoleId] : [],
+      // Deduplicated: a GM who has not answered is in both lists, and Discord
+      // caps this at 100 ids — a list that repeats people runs out sooner than
+      // the number of people in it suggests.
+      users: [...new Set([...silent.map((row) => row.userId), ...(gmId ? [gmId] : [])])],
+    },
   };
 }
