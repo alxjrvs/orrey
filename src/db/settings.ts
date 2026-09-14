@@ -51,6 +51,14 @@ export const SETTING_KEYS = {
    * so it is stored here and appears in no log line.
    */
   googleWatch: "google.watch",
+  /**
+   * Google's own cursor into the Orrey calendar.
+   *
+   * Absent means "list everything next time", which is the honest starting
+   * state and also the recovery: Google expires these on its own schedule, and
+   * a `410 Gone` clears this row rather than raising anything.
+   */
+  googleSyncToken: "google.sync_token",
 } as const;
 
 /** Used when the setting has not been written. Stated here, next to the key. */
@@ -82,6 +90,16 @@ export async function setSetting(env: Env, key: SettingKey, value: unknown): Pro
 }
 
 /** Reads the guild id, or says plainly that cutover has not seeded it yet. */
+/**
+ * Take a setting away, as opposed to writing an empty one.
+ *
+ * `settings.value` is NOT NULL, so "no value" is an absent row rather than a
+ * null in one — and absent is what every reader already treats as "not set".
+ */
+export async function clearSetting(env: Env, key: SettingKey): Promise<void> {
+  await db(env).delete(schema.settings).where(eq(schema.settings.key, key));
+}
+
 export async function requireGuildId(env: Env): Promise<string> {
   const guildId = await getSetting<string>(env, SETTING_KEYS.guildId);
   if (!guildId) throw new Error(`setting ${SETTING_KEYS.guildId} is not seeded — run the cutover`);
