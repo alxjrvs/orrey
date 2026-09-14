@@ -15,6 +15,11 @@ import type { WinRule } from "../polls/win-rule.ts";
  * the same pure function the modal does, and hands over.
  */
 export interface ConsolePollBody {
+  /**
+   * The session this poll is about moving. Set for the session rail's action;
+   * absent for the untargeted poll that goes looking for a game day.
+   */
+  targetSessionId?: unknown;
   gameId?: unknown;
   gameDayKind?: unknown;
   campaignId?: unknown;
@@ -108,6 +113,9 @@ export async function openPollFromConsole(
     ...(gameId ? { gameId } : {}),
     ...(gameDayKind ? { gameDayKind } : {}),
     ...(typeof body.campaignId === "string" ? { campaignId: body.campaignId } : {}),
+    ...(typeof body.targetSessionId === "string"
+      ? { targetSessionId: body.targetSessionId }
+      : {}),
     ...(winRule ? { winRule } : {}),
     ...(typeof body.winThreshold === "number" ? { winThreshold: body.winThreshold } : {}),
     channelId: (await getSetting<string>(env, SETTING_KEYS.schedulingChannelId)) ?? undefined,
@@ -125,6 +133,8 @@ export async function openPollFromConsole(
     case "no-dates":
       return { ok: false, error: "say which days might work", status: 400 };
     case "already-open":
+      // The same sentence the bot gives, because it is the same refusal coming
+      // from the same partial unique index.
       return { ok: false, error: "there is already a poll open for that", status: 409 };
     default:
       return {
