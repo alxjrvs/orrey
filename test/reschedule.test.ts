@@ -295,3 +295,54 @@ describe("the submission", () => {
     expect(((await res.json()) as { data: { content: string } }).data.content).toContain("retired");
   });
 });
+
+describe("whose session it is", () => {
+  it("refuses the command for somebody not on the campaign", async () => {
+    await campaign("age-of-umbra", "Age of Umbra");
+    await member("age-of-umbra", "ada");
+    const id = await session("age-of-umbra", 12, 14);
+    await db(env)
+      .insert(schema.users)
+      .values({ discordId: "stranger", username: "stranger", feedToken: "t-s" });
+
+    const res = await app.fetch(await command(id, "stranger"), discord.env(env));
+    const answer = (await res.json()) as { type: number; data: { content: string } };
+
+    // The autocomplete only offers your own campaigns, and that is a
+    // convenience: session ids are `<slug>-s<n>` and anybody can type one.
+    expect(answer.data.content).toContain("not on a campaign you are on");
+    expect(answer.type).toBe(InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE);
+  });
+
+  it("refuses the modal submit too, not only the command", async () => {
+    await campaign("age-of-umbra", "Age of Umbra");
+    await member("age-of-umbra", "ada");
+    const id = await session("age-of-umbra", 12, 14);
+    await db(env)
+      .insert(schema.users)
+      .values({ discordId: "stranger", username: "stranger", feedToken: "t-s" });
+
+    const res = await app.fetch(
+      await submit(id, "2026-12-01 19:00", "stranger"),
+      discord.env(env),
+    );
+    const answer = (await res.json()) as { data: { content: string } };
+
+    // The modal's custom_id is the only state carried across the round trip, and
+    // it is a string the client sends. Trusting it would be trusting the caller
+    // with the guard.
+    expect(answer.data.content).toContain("not on a campaign you are on");
+    expect(await db(env).select().from(schema.datePolls).all()).toEqual([]);
+  });
+
+  it("still lets a member through", async () => {
+    await campaign("age-of-umbra", "Age of Umbra");
+    await member("age-of-umbra", "ada");
+    const id = await session("age-of-umbra", 12, 14);
+
+    const res = await app.fetch(await command(id, "ada"), discord.env(env));
+    const answer = (await res.json()) as { type: number };
+
+    expect(answer.type).toBe(InteractionResponseType.MODAL);
+  });
+});
