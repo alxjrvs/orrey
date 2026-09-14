@@ -173,6 +173,31 @@ export function isThreadAlreadyStarted(error: unknown): boolean {
   return asDiscordFailure(error)?.code === 160004;
 }
 
+/**
+ * Open (or re-open) the DM channel with one person. Discord returns the same
+ * channel every time, so this is safe to call before every DM and there is
+ * nothing to cache — the channel id is not the thing that can go wrong.
+ *
+ * What can go wrong is that they do not accept DMs from the bot, and **there is
+ * no way to ask**. This call succeeds regardless; the refusal arrives on the
+ * message.
+ */
+export function openDm(env: BotAuth, userId: string) {
+  return discordFetch<{ id: string }>(env, "/users/@me/channels", {
+    method: "POST",
+    body: { recipient_id: userId },
+  });
+}
+
+/**
+ * 50007 — cannot send messages to this user. The only way to learn somebody's
+ * DMs were never open to Orrey, and it arrives after the attempt rather than
+ * before it. Treated as permanent: it is a setting they chose, not a blip.
+ */
+export function isClosedDm(error: unknown): boolean {
+  return asDiscordFailure(error)?.code === 50007;
+}
+
 /** Fire-and-forget. Record the id if you want it; never reconcile it. */
 export function postMessage(env: BotAuth, channelId: string, body: unknown) {
   return discordFetch<{ id: string; channel_id: string }>(env, `/channels/${channelId}/messages`, {
