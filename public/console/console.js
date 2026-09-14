@@ -1299,6 +1299,101 @@ function asText(value) {
   return Array.isArray(value) ? value.join(", ") : String(value);
 }
 
+/** The log's paging state. Cursors only — there is no page number to hold. */
+const auditState = { cursor: null, actor: null, rows: [] };
+
+/**
+ * Who changed what.
+ *
+ * Rendered in the register `design/readme.md` sets out for the log and for
+ * nothing else: lower case, no full stop, newest first, 24h times, arrows for
+ * transitions. That register is deliberately unlike every other surface in the
+ * console, and this is the one screen allowed to be curt.
+ */
+function auditSection(page, actors) {
+  const section = document.createElement("section");
+
+  const filter = document.createElement("p");
+  const select = document.createElement("select");
+  const anyone = document.createElement("option");
+  anyone.value = "";
+  anyone.textContent = "anyone";
+  select.append(anyone);
+  for (const actor of actors) {
+    const option = document.createElement("option");
+    option.value = actor.userId;
+    option.textContent = actor.name;
+    if (auditState.actor === actor.userId) option.selected = true;
+    select.append(option);
+  }
+  select.addEventListener("change", () => {
+    auditState.actor = select.value || null;
+    // A new filter is a new reading, so the cursor and the rows behind it go.
+    auditState.cursor = null;
+    auditState.rows = [];
+    load();
+  });
+  filter.append(select);
+  section.append(filter);
+
+  const list = document.createElement("ul");
+  list.className = "log";
+  for (const row of [...auditState.rows, ...page.rows]) {
+    const item = document.createElement("li");
+    item.textContent = auditLine(row);
+    list.append(item);
+  }
+  section.append(list);
+
+  if (page.cursor) {
+    const more = document.createElement("button");
+    more.type = "button";
+    more.textContent = "Older";
+    more.addEventListener("click", () => {
+      // Keep what is on screen and append: the cursor is where the next page
+      // starts, not which page it is.
+      auditState.rows = [...auditState.rows, ...page.rows];
+      auditState.cursor = page.cursor;
+      load();
+    });
+    section.append(more);
+  }
+
+  return section;
+}
+
+/**
+ * The same line the server renders in tests, in the browser's own zone — this is
+ * a log of when things happened to the reader, not a schedule the table shares.
+ */
+function auditLine(row) {
+  const time = new Date(row.createdAt * 1000).toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  const who = row.actorName ?? row.actorUserId ?? "orrey";
+  const action = row.action.includes(".") ? row.action.slice(row.action.indexOf(".") + 1) : row.action;
+  const parts = [time, who, "→", row.targetType, row.targetId, action];
+
+  const detail = row.detail;
+  if (detail && typeof detail === "object" && "after" in detail) {
+    const after = scalarOf(detail.after);
+    const before = scalarOf(detail.before);
+    // No arrow with nothing on the left of it.
+    if (after !== null) parts.push(before === null ? after : `${before} → ${after}`);
+  }
+
+  return parts.join(" ");
+}
+
+function scalarOf(value) {
+  if (value === null || value === undefined) return null;
+  const kind = typeof value;
+  if (kind === "string" || kind === "number" || kind === "boolean") return String(value).toLowerCase();
+  return null;
+}
+
 function heading(label) {
   const h = document.createElement("h2");
   h.textContent = label;
@@ -1307,7 +1402,8 @@ function heading(label) {
 
 async function load() {
   try {
-    const [me, agenda, { campaigns }, { games }, { gameDays }, settings] = await Promise.all([
+    const [me, agenda, { campaigns }, { games }, { gameDays }, settings, log, { actors }] =
+      await Promise.all([
       api("/api/me"),
       api("/api/agenda"),
       api("/api/campaigns"),
@@ -1316,6 +1412,12 @@ async function load() {
       api("/api/games/usage"),
       api("/api/game-days"),
       api("/api/settings"),
+      api(
+        `/api/audit?limit=50${auditState.actor ? `&actor=${encodeURIComponent(auditState.actor)}` : ""}${
+          auditState.cursor ? `&cursor=${encodeURIComponent(auditState.cursor)}` : ""
+        }`,
+      ).catch(() => null),
+      api("/api/audit/actors").catch(() => ({ actors: [] })),
     ]);
 
     // The rail is a second read rather than part of the agenda's: one session's
@@ -1351,6 +1453,7 @@ async function load() {
     main.append(heading("Game days"), gameDaysTable(gameDays));
     main.append(heading("Games"), gamesTable(games), createForm());
     main.append(heading("Settings"), settingsSection(settings.settings));
+    if (log) main.append(heading("Log"), auditSection(log, actors));
   } catch (error) {
     const message =
       error instanceof Refusal ? error.message : "Orrey could not load that. Try again.";
