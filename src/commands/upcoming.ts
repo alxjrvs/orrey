@@ -3,7 +3,7 @@ import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
 import { quorumOf } from "../attendance/quorum.ts";
 import type { Quorum } from "../attendance/quorum.ts";
-import { sessionTitle } from "../projection/target.ts";
+import { campaignTarget, sessionTitle } from "../projection/target.ts";
 
 /**
  * The agenda: everything on the calendar, for you, right now.
@@ -92,10 +92,10 @@ export async function upcomingWithTotal(
 
     return {
       sessionId: session.id,
-      title: sessionTitle({ session, campaign }),
+      title: sessionTitle(campaignTarget(session, campaign)),
       startsAt: session.startsAt,
       state: session.state as UpcomingEntry["state"],
-      quorum: quorumOf({ session, campaign }, rowsForSession),
+      quorum: quorumOf(campaignTarget(session, campaign), rowsForSession),
       mine: rowsForSession.find((row) => row.userId === userId)?.intent ?? null,
     };
   });
