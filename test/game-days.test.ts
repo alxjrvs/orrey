@@ -107,14 +107,21 @@ describe("what this PR does not do", () => {
   it("adds no column phase 4 reads nothing from", async () => {
     const columns = await env.DB.prepare("PRAGMA table_info(game_days)").all();
     expect((columns.results as { name: string }[]).map((c) => c.name).sort()).toEqual([
+      "capacity",
       "created_at",
+      "discord_channel_id",
+      "discord_message_id",
       "ends_at",
+      "game_id",
+      "host_user_id",
       "id",
       "kind",
       "starts_at",
       "state",
+      "thread_id",
       "title",
       "updated_at",
+      "venue",
     ]);
   });
 });
