@@ -1,5 +1,6 @@
 import { asc, eq, inArray, sql } from "drizzle-orm";
 import type { Env } from "../env.ts";
+import type { BatchItem } from "drizzle-orm/batch";
 import { db, schema } from "../db/index.ts";
 import { mintId } from "../db/ids.ts";
 
@@ -19,15 +20,30 @@ import { mintId } from "../db/ids.ts";
  */
 export const ANNOUNCE_JOB = "gameday.announce";
 
-export async function mintGameDays(env: Env, pollId: string, wonIds: string[]): Promise<string[]> {
-  if (wonIds.length === 0) return [];
+/**
+ * The statements that mint the days, for a caller to put in **its own** batch.
+ *
+ * Split out from `mintGameDays` because this file's own claim — "the mint
+ * happens inside the same batch that writes the outcomes, so a poll cannot end
+ * up closed with winners and no days" — was not true of the code: the close
+ * committed in one batch and this ran in another. A crash, an eviction or a D1
+ * error in between left a poll permanently closed with winning dates and no day,
+ * and no retry, because Apply's own guard refuses a closed poll.
+ *
+ * Nothing here talks to Discord, so unlike a session move there is no reason for
+ * it to be a job. The reads happen first and the writes go back to the caller,
+ * which is what lets the claim be true.
+ */
+export async function mintStatements(env: Env, pollId: string, wonIds: string[]) {
+  const empty = { statements: [] as BatchItem<"sqlite">[], dayIds: [] as string[] };
+  if (wonIds.length === 0) return empty;
 
   const poll = await db(env)
     .select()
     .from(schema.datePolls)
     .where(eq(schema.datePolls.id, pollId))
     .get();
-  if (!poll) return [];
+  if (!poll) return empty;
 
   const dates = await db(env)
     .select()
@@ -39,7 +55,9 @@ export async function mintGameDays(env: Env, pollId: string, wonIds: string[]): 
   // Already minted. A redelivery or a second Apply finds the link written and
   // does nothing, rather than producing a second Saturday.
   const fresh = dates.filter((date) => date.gameDayId === null);
-  if (fresh.length === 0) return dates.map((date) => date.gameDayId!).filter(Boolean);
+  if (fresh.length === 0) {
+    return { statements: [], dayIds: dates.map((date) => date.gameDayId!).filter(Boolean) };
+  }
 
   const title = poll.gameId
     ? ((
@@ -54,7 +72,7 @@ export async function mintGameDays(env: Env, pollId: string, wonIds: string[]): 
   const d = db(env);
   const minted = fresh.map((date) => ({ dayId: mintId(), date }));
 
-  await d.batch([
+  const statements: BatchItem<"sqlite">[] = [
     d.insert(schema.gameDays).values(
       minted.map(({ dayId, date }) => ({
         id: dayId,
@@ -79,7 +97,15 @@ export async function mintGameDays(env: Env, pollId: string, wonIds: string[]): 
         runAt: sql`(unixepoch())`,
       })),
     ),
-  ]);
+  ];
 
-  return minted.map(({ dayId }) => dayId);
+  return { statements, dayIds: minted.map(({ dayId }) => dayId) };
+}
+
+/** Mint them on their own, for a caller with no batch of its own to join. */
+export async function mintGameDays(env: Env, pollId: string, wonIds: string[]): Promise<string[]> {
+  const { statements, dayIds } = await mintStatements(env, pollId, wonIds);
+  const [first, ...rest] = statements;
+  if (first) await db(env).batch([first, ...rest]);
+  return dayIds;
 }
