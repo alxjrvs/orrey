@@ -451,6 +451,8 @@ async function runJob(job: typeof schema.jobs.$inferSelect, env: Env): Promise<v
       // Google says something on the calendar changed. What changed is whatever
       // the list call says changed — the push carried no body and this job
       // holds none either, only the minute it collapsed a burst into.
+      //
+      // Lists and classifies; acting on a verdict is the PR above.
       await runSync(env);
       return;
     }

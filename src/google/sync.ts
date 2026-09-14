@@ -1,8 +1,14 @@
-import { sql } from "drizzle-orm";
+import { inArray, sql } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
 import { SETTING_KEYS, clearSetting, getSetting, setSetting } from "../db/settings.ts";
 import { GoogleError, accessToken, watchCalendarId } from "./calendar.ts";
+import {
+  classifyEvent,
+  sessionIdOf,
+  type SessionShape,
+  type Verdict,
+} from "./classify.ts";
 
 /**
  * Asking Google what is on the calendar.
@@ -130,14 +136,72 @@ async function pages(env: Env, syncToken: string | undefined): Promise<Listing> 
 }
 
 /**
- * What the sync job does: ask, and — for now — nothing else.
+ * What the sync job does: ask, and say what each answer is — and still write
+ * nothing.
  *
- * Interpreting the answer arrives in `p7/11`. Listing is worth landing on its
- * own because it is the half that talks to Google, and a review of "does this
- * page correctly" is a different review from "does this mean what we think".
+ * Acting on a verdict arrives in the two PRs above. Classification lands on its
+ * own because it is the one function in the loop that can stop it terminating,
+ * and it deserves a review nobody is reading past.
  */
-export async function runSync(env: Env): Promise<void> {
-  await listCalendar(env);
+export interface Classified {
+  event: CalendarEvent;
+  sessionId: string | undefined;
+  verdict: Verdict;
+}
+
+export async function runSync(env: Env): Promise<Classified[]> {
+  const listing = await listCalendar(env);
+  return classifyAll(env, listing.events);
+}
+
+export async function classifyAll(env: Env, events: CalendarEvent[]): Promise<Classified[]> {
+  if (events.length === 0) return [];
+
+  const d = db(env);
+  // Every link at once. A link lookup per event would be a query per event on a
+  // full list, which the nightly pass runs over the whole calendar.
+  const links = await d
+    .select({
+      sessionId: schema.calendarLinks.sessionId,
+      gcalEventId: schema.calendarLinks.gcalEventId,
+      fingerprint: schema.calendarLinks.fingerprint,
+    })
+    .from(schema.calendarLinks)
+    .all();
+  const linkBySession = new Map(links.map((link) => [link.sessionId, link]));
+
+  const wanted = [
+    ...new Set(events.map((event) => sessionIdOf(event, links)).filter((id): id is string => !!id)),
+  ];
+
+  const sessions = new Map<string, SessionShape>();
+  for (let from = 0; from < wanted.length; from += 90) {
+    const rows = await d
+      .select({
+        id: schema.sessions.id,
+        startsAt: schema.sessions.startsAt,
+        endsAt: schema.sessions.endsAt,
+        location: schema.sessions.location,
+        state: schema.sessions.state,
+      })
+      .from(schema.sessions)
+      .where(inArray(schema.sessions.id, wanted.slice(from, from + 90)))
+      .all();
+    for (const row of rows) sessions.set(row.id, row);
+  }
+
+  const out: Classified[] = [];
+  for (const event of events) {
+    const sessionId = sessionIdOf(event, links);
+    const link = sessionId ? linkBySession.get(sessionId) : undefined;
+    const session = sessionId ? sessions.get(sessionId) : undefined;
+    out.push({
+      event,
+      sessionId,
+      verdict: await classifyEvent(event, link, session),
+    });
+  }
+  return out;
 }
 
 async function googleFetch(env: Env, path: string): Promise<unknown> {
