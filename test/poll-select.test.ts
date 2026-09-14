@@ -197,7 +197,7 @@ describe("the click", () => {
     expect((await answers("ada")).map((row) => row.pollDateId)).toEqual([dates[0]!]);
   });
 
-  it("comes back prefilled with what this person chose", async () => {
+  it("never writes one person's answer into the post everybody shares", async () => {
     await lock().select({ pollId: POLL, actor: actor("ada"), pollDateIds: [dates[2]!] });
 
     const res = await app.fetch(
@@ -206,11 +206,15 @@ describe("the click", () => {
     );
 
     const json = (await res.json()) as {
-      data: { components: { components: { options: { value: string; default: boolean }[] }[] }[] };
+      data: { components: { components: { options: { value: string; default?: boolean }[] }[] }[] };
     };
     const options = json.data.components[0]?.components[0]?.options ?? [];
-    expect(options.find((o) => o.value === dates[2])?.default).toBe(true);
-    expect(options.find((o) => o.value === dates[0])?.default).toBe(false);
+
+    // This answer is an UPDATE_MESSAGE: it rewrites the one post in the channel.
+    // A prefill computed from whoever clicked would be stamped into it, and the
+    // next person to open the select would find somebody else's answer ticked.
+    // Their own answer is in D1 and shows in the tallies.
+    for (const option of options) expect(option.default).toBeUndefined();
   });
 
   it("answers the retired-post response for a poll that no longer exists", async () => {
