@@ -366,8 +366,68 @@ function detailRail(detail) {
       : `${detail.quorum.saidIn} of ${detail.quorum.required} in`;
   rail.append(quorum);
 
-  rail.append(rosterList(detail.roster), syncLog(detail.sync), railLinks(detail));
+  rail.append(
+    rosterList(detail.roster),
+    syncLog(detail.sync),
+    railLinks(detail),
+    railActions(detail),
+  );
   return rail;
+}
+
+/**
+ * The three writes, each behind one sentence of confirmation — the same shape
+ * the campaign lifecycle actions use, and for the same reason: all three are
+ * hard to take back. Cancelling posts a message nobody can unpost; locking does
+ * not unlock; opening a poll claims the session until it closes.
+ *
+ * Each calls the domain function the bot calls. There is no second cancel here.
+ */
+function railActions(detail) {
+  const box = document.createElement("p");
+  // Nothing left to do to a session that is over or already off.
+  if (detail.state === "PLAYED" || detail.state === "CANCELLED") return box;
+
+  const id = encodeURIComponent(detail.sessionId);
+
+  if (detail.state !== "LOCKED") {
+    box.append(
+      action("Lock", `Lock ${detail.title}? Nothing unlocks.`, () =>
+        api(`/api/sessions/${id}/lock`, { method: "POST", body: "{}" }),
+      ),
+    );
+  }
+
+  box.append(
+    action("Suggest another day", `Open a poll to move ${detail.title}?`, () => {
+      const dates = prompt("Which days might work? One per line.");
+      if (!dates) return null;
+      return api(`/api/sessions/${id}/poll`, {
+        method: "POST",
+        body: JSON.stringify({ dates }),
+      });
+    }),
+    action("Cancel", `Call off ${detail.title}? The thread is told and the calendar cleared.`, () =>
+      api(`/api/sessions/${id}/cancel`, { method: "POST", body: "{}" }),
+    ),
+  );
+
+  return box;
+}
+
+function action(label, confirmation, work) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = label;
+  button.addEventListener("click", async () => {
+    if (!confirm(confirmation)) return;
+    button.disabled = true;
+    await act(async () => {
+      const started = work();
+      if (started) await started;
+    });
+  });
+  return button;
 }
 
 /** Intent and attended side by side. No reply is its own answer, never "out". */

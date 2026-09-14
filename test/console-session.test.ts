@@ -1,9 +1,13 @@
 import { env } from "cloudflare:test";
+import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { db, schema } from "../src/db/index.ts";
 import { SETTING_KEYS, setSetting } from "../src/db/settings.ts";
 import { createApp } from "../src/http/app.ts";
 import { SESSION_COOKIE, issueSession } from "../src/console/cookies.ts";
+import { InteractionResponseType, InteractionType } from "../src/discord/types.ts";
+import { encodeCustomId } from "../src/discord/custom-id.ts";
+import { fakeDiscord } from "./discord.ts";
 import { sessionDetail, syncStateOf } from "../src/console/session-detail.ts";
 
 /**
@@ -12,6 +16,7 @@ import { sessionDetail, syncStateOf } from "../src/console/session-detail.ts";
  * three are ordinary states and none of them is an error.
  */
 const app = createApp();
+const discord = await fakeDiscord();
 const realFetch = globalThis.fetch;
 const NOW = new Date("2026-11-01T12:00:00Z");
 const START = Math.floor(NOW.getTime() / 1000) + 86_400;
@@ -231,5 +236,183 @@ describe("the route", () => {
       consoleEnv(),
     );
     expect(res.status).toBe(401);
+  });
+});
+
+describe("the three writes", () => {
+  let calls: { path: string; body: Record<string, unknown> }[] = [];
+
+  async function post(path: string, body: unknown = {}) {
+    return app.fetch(
+      new Request(`https://orrey.test${path}`, {
+        method: "POST",
+        headers: {
+          cookie: `${SESSION_COOKIE}=${await issueSession(consoleEnv(), "1001", NOW)}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(body),
+      }),
+      consoleEnv(),
+    );
+  }
+
+  function audit() {
+    return db(env).select().from(schema.auditLog).all();
+  }
+
+  beforeEach(async () => {
+    calls = [];
+    await env.DB.prepare("DELETE FROM audit_log").run();
+    await env.DB.prepare("DELETE FROM publications").run();
+    await env.DB.prepare("DELETE FROM date_polls").run();
+    await env.DB.prepare("DELETE FROM poll_dates").run();
+
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(
+        typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+      );
+      if (url.pathname.includes("/members/")) return Response.json({ roles: [ORGANISER_ROLE] });
+      calls.push({
+        path: url.pathname.replace("/api/v10", ""),
+        body: JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>,
+      });
+      return Response.json({ id: "msg-1", channel_id: "chan-1" });
+    }) as typeof fetch;
+  });
+
+  it("locks, and writes exactly one audit row", async () => {
+    await seed();
+
+    expect((await post("/api/sessions/s/lock")).status).toBe(200);
+
+    expect(
+      await db(env).select().from(schema.sessions).where(eq(schema.sessions.id, "s")).get(),
+    ).toMatchObject({ state: "LOCKED" });
+    expect(await audit()).toMatchObject([
+      { actorUserId: "1001", action: "session.lock", targetId: "s" },
+    ]);
+  });
+
+  it("refuses an intent change once locked, and does not touch the post", async () => {
+    await seed();
+    await post("/api/sessions/s/lock");
+
+    const res = await app.fetch(
+      await discord.request({
+        type: InteractionType.MESSAGE_COMPONENT,
+        data: {
+          custom_id: encodeCustomId({ action: "attend", arg: "in", target: "s" }),
+          component_type: 2,
+        },
+        member: { user: { id: "a", username: "a", global_name: null }, roles: [] },
+        message: { id: "msg-1", channel_id: "chan-1" },
+      }),
+      discord.env(env),
+    );
+    const answer = (await res.json()) as { type: number; data: { content: string } };
+
+    // Ephemeral, and the post is left as it was: rewriting it would make a stale
+    // reading look fresh, and Orrey cannot edit it back.
+    expect(answer.type).toBe(InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE);
+    expect(answer.data.content).toContain("settled");
+    expect(await db(env).select().from(schema.attendance).all()).toEqual([]);
+  });
+
+  it("still lets somebody refresh a locked session's post", async () => {
+    await seed();
+    await post("/api/sessions/s/lock");
+
+    const res = await app.fetch(
+      await discord.request({
+        type: InteractionType.MESSAGE_COMPONENT,
+        data: {
+          custom_id: encodeCustomId({ action: "attend", arg: "refresh", target: "s" }),
+          component_type: 2,
+        },
+        member: { user: { id: "a", username: "a", global_name: null }, roles: [] },
+        message: { id: "msg-1", channel_id: "chan-1" },
+      }),
+      discord.env(env),
+    );
+    expect(((await res.json()) as { type: number }).type).toBe(
+      InteractionResponseType.UPDATE_MESSAGE,
+    );
+  });
+
+  it("cancels: one audit row, one notice, both deletes, and no edit", async () => {
+    await seed({ threadId: "thread-1" });
+
+    expect((await post("/api/sessions/s/cancel")).status).toBe(200);
+
+    expect(
+      await db(env).select().from(schema.sessions).where(eq(schema.sessions.id, "s")).get(),
+    ).toMatchObject({ state: "CANCELLED" });
+    expect(await audit()).toMatchObject([{ action: "session.cancel", actorUserId: "1001" }]);
+
+    // A new message in the thread, never an edit of the attendance post.
+    const posts = calls.filter((call) => call.path === "/channels/thread-1/messages");
+    expect(posts).toHaveLength(1);
+    expect(posts[0]?.body.content).toContain("It's off.");
+    expect(calls.some((call) => call.path.match(/\/messages\/[^/]+$/))).toBe(false);
+  });
+
+  it("cancels once, however often it is asked", async () => {
+    await seed({ threadId: "thread-1" });
+    await post("/api/sessions/s/cancel");
+    calls = [];
+
+    const again = await post("/api/sessions/s/cancel");
+
+    expect(((await again.json()) as { outcome: string }).outcome).toBe("already");
+    expect(calls.filter((call) => call.path.includes("/messages"))).toEqual([]);
+    expect(await audit()).toHaveLength(1);
+  });
+
+  it("refuses to lock or cancel a session that has been played", async () => {
+    await seed({ state: "PLAYED" });
+
+    expect((await post("/api/sessions/s/lock")).status).toBe(400);
+    expect((await post("/api/sessions/s/cancel")).status).toBe(400);
+    expect(await audit()).toEqual([]);
+  });
+
+  it("opens a targeted poll through the same path the bot uses", async () => {
+    await seed();
+    await setSetting(env, SETTING_KEYS.schedulingChannelId, "chan-1");
+
+    const res = await post("/api/sessions/s/poll", { dates: "2027-01-09 19:00" });
+
+    expect(res.status).toBe(201);
+    expect(await db(env).select().from(schema.datePolls).all()).toMatchObject([
+      { targetSessionId: "s", openedBy: "1001" },
+    ]);
+  });
+
+  it("refuses a second poll with the sentence the bot gives", async () => {
+    await seed();
+    await setSetting(env, SETTING_KEYS.schedulingChannelId, "chan-1");
+    await post("/api/sessions/s/poll", { dates: "2027-01-09 19:00" });
+
+    const res = await post("/api/sessions/s/poll", { dates: "2027-01-16 19:00" });
+
+    expect(res.status).toBe(409);
+    expect((await res.json()) as { error: string }).toMatchObject({
+      error: "there is already a poll open for that",
+    });
+  });
+
+  it("gives a non-organiser 403, and writes nothing anywhere", async () => {
+    await seed();
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("/members/")) return Response.json({ roles: [] });
+      return new Response("unexpected", { status: 500 });
+    }) as typeof fetch;
+
+    expect((await post("/api/sessions/s/cancel")).status).toBe(403);
+    expect(await audit()).toEqual([]);
+    expect(
+      await db(env).select().from(schema.sessions).where(eq(schema.sessions.id, "s")).get(),
+    ).toMatchObject({ state: "SCHEDULED" });
   });
 });

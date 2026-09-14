@@ -13,6 +13,7 @@ import {
   tablesPlayedFor,
 } from "../attendance/tables.ts";
 import { isGm } from "../campaigns/roster.ts";
+import { takesIntent } from "../sessions/lifecycle.ts";
 import { loadProjectionTarget, sessionTitle } from "../projection/target.ts";
 import { loginLink } from "../console/link.ts";
 import {
@@ -515,6 +516,16 @@ async function handleAttend(
   if (!target) return retiredPost();
 
   const lock = env.SESSION_LOCK.get(env.SESSION_LOCK.idFromName(sessionId));
+
+  // A locked session has stopped taking answers, and a cancelled or played one
+  // never will again. The post's buttons outlive all three — a post is never
+  // edited — so this is where a late click is told what happened, ephemerally,
+  // leaving the post exactly as it was. Refresh is never refused.
+  const writing = arg === "in" || arg === "out" || arg === "maybe" || arg === "note";
+  if (writing && !takesIntent(target.session)) {
+    return ephemeral(intentClosed(target.session.state));
+  }
+
   let rows;
   switch (arg) {
     case "in":
@@ -638,6 +649,18 @@ function seatingClosed(state: string): string {
       return "This day was called off.";
     default:
       return "This day has already been played.";
+  }
+}
+
+/** Why the click did nothing, in the words that say what happened. */
+function intentClosed(state: string): string {
+  switch (state) {
+    case "LOCKED":
+      return "This session is settled — talk to whoever is running it.";
+    case "CANCELLED":
+      return "This session was called off.";
+    default:
+      return "This session has already been played.";
   }
 }
 
