@@ -19,6 +19,7 @@ import { NotConfigured, isOrganiser } from "../console/roles.ts";
 import { readLoginToken } from "../console/link.ts";
 import { campaignSummaries, gameDaySummaries, gameSummaries } from "../console/api.ts";
 import { agendaBetween, windowAround } from "../console/agenda.ts";
+import { SETTING_DEFAULTS, SETTING_KEYS, settingOr } from "../db/settings.ts";
 import { openPollFromConsole } from "../console/polls.ts";
 import { InvalidCampaign, createCampaign, updateCampaign } from "../campaigns/write.ts";
 import { IllegalTransition, transition, type CampaignState } from "../campaigns/lifecycle.ts";
@@ -176,7 +177,16 @@ export function createApp() {
       return c.json({ error: "from and to are unix seconds, and to comes after from" }, 400);
     }
 
-    return c.json(await agendaBetween(c.env, from, to, asOf));
+    // The guild's zone, not the server's and not the reader's: the day a
+    // session falls on is a fact about the table, and two people in two zones
+    // must not see it on different days.
+    const timeZone = await settingOr<string>(
+      c.env,
+      SETTING_KEYS.timezone,
+      SETTING_DEFAULTS[SETTING_KEYS.timezone],
+    );
+
+    return c.json(await agendaBetween(c.env, from, to, asOf, timeZone));
   });
 
   /**

@@ -344,3 +344,57 @@ describe("windowAround", () => {
     expect(windowAround(NOW, 14)).toEqual({ from: START, to: START + 14 * DAY });
   });
 });
+
+describe("grouping by day", () => {
+  it("puts two sessions on the same local day under one header", async () => {
+    await campaign("umbra");
+    // 23:30 UTC and 00:30 UTC the next day are the same evening in New York.
+    await session("early", "umbra", Date.parse("2026-11-07T23:30:00Z") / 1000);
+    await session("late", "umbra", Date.parse("2026-11-08T00:30:00Z") / 1000);
+
+    const { rows } = await agendaBetween(
+      env,
+      START,
+      START + 30 * DAY,
+      NOW,
+      "America/New_York",
+    );
+
+    expect(rows.map((row) => row.day)).toEqual(["2026-11-07", "2026-11-07"]);
+    expect(rows[0]?.dayLabel).toBe("Saturday 7 November");
+  });
+
+  it("puts them on different days in a zone where they are", async () => {
+    await campaign("umbra");
+    await session("early", "umbra", Date.parse("2026-11-07T23:30:00Z") / 1000);
+    await session("late", "umbra", Date.parse("2026-11-08T00:30:00Z") / 1000);
+
+    const { rows } = await agendaBetween(env, START, START + 30 * DAY, NOW, "Europe/London");
+    expect(rows.map((row) => row.day)).toEqual(["2026-11-07", "2026-11-08"]);
+  });
+
+  it("takes the zone from settings, not from the server", async () => {
+    await setSetting(env, SETTING_KEYS.timezone, "Pacific/Auckland");
+    await campaign("umbra");
+    const at = Date.parse("2026-11-07T23:30:00Z") / 1000;
+    await session("s", "umbra", at);
+
+    const res = await get(`/api/agenda?from=${START}&to=${START + 30 * DAY}`);
+    const body = (await res.json()) as { rows: { day: string }[] };
+
+    // Already the 8th in Auckland. Two people in two zones must not see a
+    // session fall on different days — the guild's zone is the one that decides.
+    expect(body.rows[0]?.day).toBe("2026-11-08");
+  });
+
+  it("falls back to the stated default rather than silently to UTC", async () => {
+    await campaign("umbra");
+    await session("s", "umbra", Date.parse("2026-11-07T23:30:00Z") / 1000);
+
+    // `SETTING_DEFAULTS` names Europe/London, and a default stated next to its
+    // key is not the same thing as a silent UTC.
+    const res = await get(`/api/agenda?from=${START}&to=${START + 30 * DAY}`);
+    const body = (await res.json()) as { rows: { day: string }[] };
+    expect(body.rows[0]?.day).toBe("2026-11-07");
+  });
+});
