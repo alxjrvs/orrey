@@ -1,4 +1,4 @@
-import { eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
 import { SETTING_DEFAULTS, SETTING_KEYS, settingOr } from "../db/settings.ts";
@@ -70,7 +70,15 @@ export async function checkJeopardy(
 
   // Already confirmed, already cancelled, already played. None of these is a
   // session waiting to find out whether it runs.
-  if (session.state !== "SCHEDULED") {
+  //
+  // **JEOPARDY is not one of them.** A session already marked short is one this
+  // check has run on before — and the run that marked it may well have failed to
+  // post the notice afterwards. Answering "not-waiting" here made the state
+  // write the thing that enforced "once", so a single refused Discord call lost
+  // the notice for ever: the retry could never reach the post again. The claim
+  // in `postNoticeOnce` is what makes it once; this only has to be honest about
+  // what it found.
+  if (session.state !== "SCHEDULED" && session.state !== "JEOPARDY") {
     return session.state === "CONFIRMED" ? "confirmed" : "not-waiting";
   }
 
@@ -81,10 +89,27 @@ export async function checkJeopardy(
   if (quorum.required === null) return "no-quorum-set";
   if (quorum.met) return "confirmed";
 
+  /**
+   * Guarded on the state this read saw.
+   *
+   * This is a read-modify-write on `sessions.state` running in the cron drain,
+   * entirely outside the session's Durable Object — so between the read above
+   * and this write, a click can have crossed quorum and `settle()` can have
+   * written CONFIRMED. An unguarded UPDATE would overwrite it, and the post
+   * would go on saying "Confirmed" over a row that says JEOPARDY.
+   *
+   * The clock loses that race on purpose: a person clicking In is newer
+   * information than a tally read a moment ago.
+   */
   await db(env)
     .update(schema.sessions)
     .set({ state: "JEOPARDY", updatedAt: sql`(unixepoch())` })
-    .where(eq(schema.sessions.id, session.id));
+    .where(
+      and(
+        eq(schema.sessions.id, session.id),
+        inArray(schema.sessions.state, ["SCHEDULED", "JEOPARDY"]),
+      ),
+    );
 
   return "in-jeopardy";
 }

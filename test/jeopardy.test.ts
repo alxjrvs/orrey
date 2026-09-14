@@ -201,6 +201,37 @@ describe("what the check writes", () => {
     expect(await stateOf()).not.toBe("CANCELLED");
   });
 
+  it("still answers in-jeopardy for a session it already marked", async () => {
+    await saidIn(1);
+    await db(env)
+      .update(schema.sessions)
+      .set({ state: "JEOPARDY" })
+      .where(eq(schema.sessions.id, SESSION_ID));
+
+    // The run that marked it may have failed to post the notice afterwards.
+    // Answering "not-waiting" here would make the state write the thing that
+    // enforces "once", and a single refused Discord call would lose the notice
+    // for ever. The claim in postNoticeOnce is what makes it once.
+    expect(await checkJeopardy(env, await target())).toBe("in-jeopardy");
+  });
+
+  it("does not overwrite a CONFIRMED written while it was reading", async () => {
+    await saidIn(1);
+    const stale = await target();
+
+    // A click crossed quorum between the read and the write.
+    await db(env)
+      .update(schema.sessions)
+      .set({ state: "CONFIRMED" })
+      .where(eq(schema.sessions.id, SESSION_ID));
+
+    await checkJeopardy(env, stale);
+
+    // The clock loses this race on purpose: a person clicking In is newer
+    // information than a tally read a moment ago.
+    expect(await stateOf()).toBe("CONFIRMED");
+  });
+
   it("does nothing at all to a session that is already over", async () => {
     await db(env)
       .update(schema.sessions)
