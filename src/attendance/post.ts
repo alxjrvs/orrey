@@ -1,12 +1,13 @@
 import { eq, sql } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
-import { SETTING_KEYS, getSetting, requireGuildId } from "../db/settings.ts";
+import { requireGuildId } from "../db/settings.ts";
 import { throughGovernor } from "../discord/governor.ts";
 import { asDiscordFailure, postMessage } from "../discord/rest.ts";
 import { loadProjectionTarget } from "../projection/target.ts";
 import { claim, record, recordFailure, release } from "../projection/publications.ts";
 import { renderAttendancePost } from "./render.ts";
+import { channelOf } from "./thread.ts";
 import { attendanceRows } from "./rows.ts";
 
 /**
@@ -31,11 +32,18 @@ export async function postAttendancePost(env: Env, sessionId: string): Promise<s
   if (!target) return undefined;
   if (target.session.discordMessageId) return target.session.discordMessageId;
 
-  const channelId =
-    target.campaign?.discordChannelId ??
-    (await getSetting<string>(env, SETTING_KEYS.schedulingChannelId));
+  // A campaign session's post is the message its thread hangs off, so it goes
+  // in the channel — never into a thread, its own least of all.
+  //
+  // A game day's is the other way round: the day's signup post is already the
+  // anchor and already has a thread, so this goes *into* that thread. Discord
+  // has no thread inside a thread, which is also why `startSessionThread` stops
+  // rather than trying to open a second one.
+  const channelId = target.gameDay?.threadId ?? (await channelOf(env, target));
   if (!channelId) {
-    throw new Error(`no channel to post ${sessionId} in — the campaign has none and neither does settings`);
+    throw new Error(
+      `no channel to post ${sessionId} in — its parent has none and neither does settings`,
+    );
   }
 
   const ref = { surface: "discord", kind: "message", targetId: sessionId } as const;
