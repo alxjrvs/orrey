@@ -78,12 +78,24 @@ export async function capacityOf(env: Env, gameDayId: string): Promise<number | 
   return day ? day.capacity : null;
 }
 
+export interface ClaimOptions {
+  characterName?: string | null | undefined;
+  /**
+   * `waitlist` is somebody choosing the queue while there are still seats —
+   * "I'll come if you need me". `seat` takes one if there is one and queues if
+   * there is not, so **Take a seat** on a full day and **Waitlist** land in the
+   * same place and the post they get back says which.
+   */
+  prefer?: "seat" | "waitlist" | undefined;
+}
+
 export async function claimSeat(
   env: Env,
   gameDayId: string,
   userId: string,
-  characterName: string | null = null,
+  options: ClaimOptions = {},
 ): Promise<SeatClaim> {
+  const characterName = options.characterName ?? null;
   const day = await dayWithCapacity(env, gameDayId);
   if (!day) return { outcome: "no-such-day", state: null, position: null };
 
@@ -112,7 +124,7 @@ export async function claimSeat(
       targetType: TARGET,
       targetId: gameDayId,
       userId,
-      state: seatOrQueue(gameDayId, day.capacity),
+      state: options.prefer === "waitlist" ? sql`'waitlisted'` : seatOrQueue(gameDayId, day.capacity),
       position: nextPosition(gameDayId),
       characterName,
     })
