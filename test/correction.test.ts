@@ -122,12 +122,15 @@ describe("the post", () => {
 
     const buttons = (post.body.components as { components: { custom_id: string }[] }[])
       .flatMap((row) => row.components);
-    expect(buttons).toHaveLength(3);
-    expect(buttons.map((b) => decodeCustomId(b.custom_id)?.arg).sort()).toEqual([
+    // A toggle each, and the Recap button underneath them.
+    expect(buttons).toHaveLength(4);
+    const toggles = buttons.filter((b) => decodeCustomId(b.custom_id)?.action !== "recap");
+    expect(toggles.map((b) => decodeCustomId(b.custom_id)?.arg).sort()).toEqual([
       GM,
       "p-1",
       "p-2",
     ]);
+    expect(buttons.some((b) => decodeCustomId(b.custom_id)?.action === "recap")).toBe(true);
   });
 
   it("says nothing for a session nobody was on", async () => {

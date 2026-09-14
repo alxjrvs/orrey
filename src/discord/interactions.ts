@@ -16,6 +16,7 @@ import { isGm } from "../campaigns/roster.ts";
 import { takesIntent } from "../sessions/lifecycle.ts";
 import { loadProjectionTarget, sessionTitle } from "../projection/target.ts";
 import { loginLink } from "../console/link.ts";
+import { mayRecap, writeRecap } from "../logs/recap.ts";
 import {
   answerPoll,
   refreshPoll,
@@ -482,6 +483,8 @@ async function handleComponent(
       return handlePoll(interaction, env, id.arg, id.target);
     case "seat":
       return handleSeat(interaction, env, id.arg, id.target);
+    case "recap":
+      return handleRecap(interaction, env, id.target);
     case "tables":
       return handleTables(interaction, env, id.target);
     case "tables-who":
@@ -939,6 +942,100 @@ function tablesModal(sessionId: string, userId: string, current: string): Json {
 const TABLES_INPUT = "tables";
 
 /** The one guard, in one place, so the button and the select cannot disagree. */
+const RECAP_INPUT = "recap";
+
+/**
+ * **Recap**, and the modal it opens.
+ *
+ * Not prefilled, unlike the note modal — and that is the difference worth
+ * naming. A note is prefilled because an empty box there means "clear it". A
+ * recap is appended and never replaced, so an empty box means nothing was
+ * written and there is nothing to clear. Submitting twice is two recaps, and
+ * that is correct.
+ */
+async function handleRecap(
+  interaction: Interaction,
+  env: Env,
+  sessionId: string | undefined,
+): Promise<Json> {
+  if (!sessionId) return retiredPost();
+
+  const actor = actorOf(interaction);
+  if (!actor) return ephemeral("Orrey could not tell who clicked that.");
+
+  // Asked before the modal opens, so somebody who may not write one is told so
+  // rather than typing a recap into a box that will refuse it. It is asked
+  // again on submit: a permission checked only at the first step of a
+  // multi-step interaction is a permission not checked at all.
+  const target = await loadProjectionTarget(env, sessionId);
+  if (!target) return retiredPost();
+
+  const may = await mayRecap(env, target.session.campaignId, sessionId, actor.id);
+  if (may === "no") return ephemeral("Only whoever ran it can write the recap.");
+  if (may === "no-host") {
+    return ephemeral("Nobody is down as running this day — set a host in the console first.");
+  }
+
+  return {
+    type: InteractionResponseType.MODAL,
+    data: {
+      custom_id: encodeCustomId({ action: "recap-body", target: sessionId }),
+      title: "Recap".slice(0, 45),
+      components: [
+        {
+          type: ComponentType.ACTION_ROW,
+          components: [
+            {
+              type: ComponentType.TEXT_INPUT,
+              custom_id: RECAP_INPUT,
+              style: TextInputStyle.PARAGRAPH,
+              label: "What happened?",
+              placeholder: "They took the Wreck. Then the tide came in.",
+              max_length: 4000,
+              required: false,
+            },
+          ],
+        },
+      ],
+    },
+  };
+}
+
+/**
+ * The submit. Ephemeral, because the recap is a new message in the thread and
+ * there is nothing for `UPDATE_MESSAGE` to rewrite — the correction post's
+ * toggles are still everybody else's to use.
+ */
+async function submitRecap(
+  interaction: Interaction,
+  env: Env,
+  sessionId: string | undefined,
+): Promise<Json> {
+  if (!sessionId) return retiredPost();
+
+  const actor = actorOf(interaction);
+  if (!actor) return ephemeral("Orrey could not tell who submitted that.");
+
+  const body =
+    interaction.data?.components
+      ?.flatMap((row) => row.components)
+      .find((input) => input.custom_id === RECAP_INPUT)?.value ?? "";
+
+  const result = await writeRecap(env, { sessionId, authorId: actor.id, body });
+  switch (result.outcome) {
+    case "written":
+      return ephemeral("Written, and posted in the thread.");
+    case "nothing-written":
+      return ephemeral("Nothing in the box, so nothing was written.");
+    case "not-yours":
+      return ephemeral("Only whoever ran it can write the recap.");
+    case "nobody-running-it":
+      return ephemeral("Nobody is down as running this day — set a host in the console first.");
+    default:
+      return retiredPost();
+  }
+}
+
 async function refuseUnlessHost(
   env: Env,
   interaction: Interaction,
@@ -977,6 +1074,7 @@ async function handleModal(interaction: Interaction, env: Env): Promise<Json> {
 
   if (id.action === "poll-open") return openDatePoll(interaction, env, id.target);
   if (id.action === "tables-line") return submitTablesPlayed(interaction, env, id.arg, id.target);
+  if (id.action === "recap-body") return submitRecap(interaction, env, id.target);
   if (id.action !== "attend-note") return retiredPost();
 
   const actor = actorOf(interaction);
