@@ -71,9 +71,20 @@ async function saidIn(count: number) {
   }
 }
 
+let posted: { path: string; body: Record<string, unknown> }[] = [];
+
 beforeEach(async () => {
-  globalThis.fetch = (async () =>
-    Response.json({ id: "msg-1", channel_id: "chan-1" })) as typeof fetch;
+  posted = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(
+      typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+    );
+    posted.push({
+      path: url.pathname.replace("/api/v10", ""),
+      body: JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>,
+    });
+    return Response.json({ id: `msg-${posted.length}`, channel_id: "chan-1" });
+  }) as typeof fetch;
 
   for (const table of ["publications", "attendance", "jobs", "sessions", "campaigns", "users", "settings"]) {
     await env.DB.prepare(`DELETE FROM ${table}`).run();
@@ -261,5 +272,100 @@ describe("the drain", () => {
     await drainJobs(env);
 
     expect((await checkJob())?.state).toBe("done");
+  });
+});
+
+describe("the notice", () => {
+  async function roster(gm: string, players: string[]) {
+    for (const id of [gm, ...players]) {
+      await db(env)
+        .insert(schema.users)
+        .values({ discordId: id, username: `u${id}`, feedToken: `tok${id}` })
+        .onConflictDoNothing();
+    }
+    await db(env)
+      .insert(schema.campaignMembers)
+      .values([
+        { campaignId: "age-of-umbra", userId: gm, role: "gm", joinedAt: 1 },
+        ...players.map((id, i) => ({
+          campaignId: "age-of-umbra",
+          userId: id,
+          role: "player" as const,
+          joinedAt: 2 + i,
+        })),
+      ]);
+  }
+
+  it("names who has not answered, and who decides", async () => {
+    await roster("gm-1", ["p-1", "p-2"]);
+    await db(env)
+      .insert(schema.attendance)
+      .values({ sessionId: SESSION_ID, userId: "p-1", intent: "in" });
+    await armJeopardyCheck(env, SESSION_ID, Math.floor(Date.now() / 1000) + 3600);
+
+    await drainJobs(env);
+
+    const notice = posted.at(-1)!;
+    expect(notice.body.content).toContain("Is this one happening?");
+    expect(notice.body.content).toContain("1 of 3 in");
+    // "We are two short" is a fact nobody can act on. "…and it is these two who
+    // have not said" is a fact two people can.
+    expect(notice.body.content).toContain("<@p-2>");
+    expect(notice.body.content).toContain("<@gm-1> decides whether it runs");
+  });
+
+  it("mentions the roster and the people it named, and nothing else", async () => {
+    await roster("gm-1", ["p-1"]);
+    await armJeopardyCheck(env, SESSION_ID, Math.floor(Date.now() / 1000) + 3600);
+
+    await drainJobs(env);
+
+    const mentions = posted.at(-1)!.body.allowed_mentions as {
+      parse: string[];
+      roles: string[];
+      users: string[];
+    };
+    // A notice that could fire @everyone because somebody's display name looked
+    // like one is a notice nobody trusts.
+    expect(mentions.parse).toEqual([]);
+    expect(mentions.roles).toEqual(["role-1"]);
+    expect(mentions.users.sort()).toEqual(["gm-1", "p-1"]);
+  });
+
+  it("says nothing when the session is not in jeopardy", async () => {
+    await roster("gm-1", ["p-1", "p-2"]);
+    await saidIn(3);
+    await armJeopardyCheck(env, SESSION_ID, Math.floor(Date.now() / 1000) + 3600);
+
+    await drainJobs(env);
+
+    // A notice asking whether a confirmed session is happening is worse than
+    // silence.
+    expect(posted).toEqual([]);
+  });
+
+  it("posts it once, however often the check runs", async () => {
+    await roster("gm-1", ["p-1", "p-2"]);
+    await armJeopardyCheck(env, SESSION_ID, Math.floor(Date.now() / 1000) + 3600);
+    await drainJobs(env);
+
+    await armJeopardyCheck(env, SESSION_ID, Math.floor(Date.now() / 1000) + 3600);
+    await drainJobs(env);
+
+    expect(posted).toHaveLength(1);
+  });
+
+  it("manages without a GM rather than inventing one", async () => {
+    await db(env)
+      .insert(schema.users)
+      .values({ discordId: "p-1", username: "p", feedToken: "t" });
+    await db(env)
+      .insert(schema.campaignMembers)
+      .values({ campaignId: "age-of-umbra", userId: "p-1" });
+    await armJeopardyCheck(env, SESSION_ID, Math.floor(Date.now() / 1000) + 3600);
+
+    await drainJobs(env);
+
+    expect(posted.at(-1)!.body.content).toContain("Whoever is running it decides");
   });
 });
