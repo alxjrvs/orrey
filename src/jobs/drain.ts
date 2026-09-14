@@ -7,6 +7,7 @@ import { postAttendancePost } from "../attendance/post.ts";
 import { startSessionThread } from "../attendance/thread.ts";
 import { postNoticeOnce } from "../attendance/notice.ts";
 import { checkJeopardy } from "../attendance/jeopardy.ts";
+import { sendReminder } from "../attendance/reminders.ts";
 import { gmOf } from "../campaigns/roster.ts";
 import { attendanceRows } from "../attendance/rows.ts";
 import { jeopardyNotice } from "../attendance/render.ts";
@@ -149,8 +150,24 @@ async function runJob(job: typeof schema.jobs.$inferSelect, env: Env): Promise<v
       return;
     }
 
-    // reminder.t-48h, reminder.t-24h, attendance.assume, poll.close,
-    // horizon.extend — each added in the phase that needs it.
+    /**
+     * One rung of the ladder. A DM to everybody who has not answered, and one
+     * shared message in the thread for everybody whose DMs are shut.
+     */
+    case "reminder.step": {
+      const { sessionId, hours } = job.payload as { sessionId?: string; hours?: number };
+      if (!sessionId) throw new Error(`reminder.step job ${job.id} has no sessionId`);
+      if (hours === undefined) throw new Error(`reminder.step job ${job.id} has no hours`);
+
+      const target = await loadProjectionTarget(env, sessionId);
+      if (!target) return;
+
+      await sendReminder(env, target, hours);
+      return;
+    }
+
+    // attendance.assume, poll.close, horizon.extend — each added in the phase
+    // that needs it.
     default:
       throw new Error(`unknown job kind: ${job.kind}`);
   }
