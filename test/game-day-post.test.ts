@@ -47,10 +47,20 @@ async function day(over: Partial<typeof schema.gameDays.$inferInsert> = {}) {
 
 async function people(count: number) {
   const ids = Array.from({ length: count }, (_, i) => `p${i}`);
-  for (const id of ids) {
+  // Twenty-five rows a statement rather than one round trip each, which keeps
+  // every insert inside D1's hundred-bound-parameter ceiling at three columns a
+  // row. The number of people is the point of the test that uses this; the
+  // number of round trips is not.
+  for (let from = 0; from < ids.length; from += 25) {
     await db(env)
       .insert(schema.users)
-      .values({ discordId: id, username: `Player ${id}`, feedToken: `t-${id}` })
+      .values(
+        ids.slice(from, from + 25).map((id) => ({
+          discordId: id,
+          username: `Player ${id}`,
+          feedToken: `t-${id}`,
+        })),
+      )
       .onConflictDoNothing();
   }
   return ids;
@@ -205,7 +215,13 @@ describe("what it says", () => {
     expect(content.length).toBeLessThanOrEqual(2000);
     // The line that answers the question survives every truncation pass.
     expect(content).toContain("Room for however many turn up.");
-  });
+
+    // A hundred and twenty seats claimed one at a time, because `claimSeat` is
+    // what produces a realistic seated-then-waitlisted split and a test that
+    // wrote the rows itself would be asserting against its own arithmetic. That
+    // is genuinely slower than the five-second default allows on a loaded
+    // runner, so it says so rather than going red on the machine's mood.
+  }, 20_000);
 });
 
 describe("the buttons", () => {
@@ -303,6 +319,27 @@ describe("sending it", () => {
     expect(await postSignupPost(env, "no-such-day")).toBeUndefined();
     expect(calls).toEqual([]);
   });
+
+  it("does nothing for a day that stopped seating while the job waited", async () => {
+    await day({ state: "CANCELLED" });
+
+    expect(await postSignupPost(env, DAY_ID)).toBeUndefined();
+
+    // The organiser opened seating on the wrong day and called it off before the
+    // cron came round. A signup post is permanent and carries live buttons, so
+    // one for a day nobody is running is the worst thing send-only can produce.
+    expect(calls).toEqual([]);
+    expect(await find(env, { surface: "discord", kind: "message", targetId: DAY_ID })).toBeUndefined();
+  });
+
+  it("does nothing for a day with no channel that stopped seating", async () => {
+    await day({ state: "CANCELLED", discordChannelId: null });
+
+    // Ahead of the channel resolution, so a called-off day with nowhere to post
+    // stops rather than throwing its way through a growing backoff for ever.
+    expect(await postSignupPost(env, DAY_ID)).toBeUndefined();
+    expect(calls).toEqual([]);
+  });
 });
 
 describe("the thread", () => {
@@ -382,5 +419,25 @@ describe("the job", () => {
       discordMessageId: "msg-1",
       threadId: "thread-1",
     });
+  });
+
+  it("drains to nothing at all for a day that was called off first", async () => {
+    await day({ state: "CANCELLED" });
+    await db(env)
+      .insert(schema.jobs)
+      .values({
+        id: `${POST_SIGNUP_JOB}:${DAY_ID}`,
+        kind: POST_SIGNUP_JOB,
+        payload: { gameDayId: DAY_ID },
+        idempotencyKey: `${POST_SIGNUP_JOB}:${DAY_ID}`,
+        runAt: sql`(unixepoch())`,
+      });
+
+    await drainJobs(env);
+
+    // No post means no thread, and the job is done rather than retried — there
+    // is nothing here that a later attempt could make go better.
+    expect(calls).toEqual([]);
+    expect(await dayRow()).toMatchObject({ discordMessageId: null, threadId: null });
   });
 });
