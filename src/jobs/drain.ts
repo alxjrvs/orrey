@@ -12,6 +12,7 @@ import { sendReminder } from "../attendance/reminders.ts";
 import { gmOf } from "../campaigns/roster.ts";
 import { attendanceRows } from "../attendance/rows.ts";
 import { confirmedNotice, correctionPost, jeopardyNotice } from "../attendance/render.ts";
+import { postPollPost } from "../polls/post.ts";
 import { loadProjectionTarget } from "../projection/target.ts";
 
 const CLAIM_SECONDS = 60;
@@ -191,6 +192,19 @@ async function runJob(job: typeof schema.jobs.$inferSelect, env: Env): Promise<v
       if (!target) return;
 
       await sendReminder(env, target, hours);
+      return;
+    }
+
+    /**
+     * Put the poll up. Guarded by the recorded message id rather than by the
+     * job, so a redelivery cannot produce a second post with a second live
+     * select.
+     */
+    case "poll.post": {
+      const { pollId } = job.payload as { pollId?: string };
+      if (!pollId) throw new Error(`poll.post job ${job.id} has no pollId`);
+
+      await postPollPost(env, pollId);
       return;
     }
 
