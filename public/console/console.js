@@ -138,6 +138,8 @@ function gamesTable(games) {
     ["Game", ""],
     ["Players", "numeric"],
     ["Usual length", "numeric"],
+    ["Held by", ""],
+    ["", ""],
   ]) {
     const th = document.createElement("th");
     th.textContent = label;
@@ -164,6 +166,8 @@ function gamesTable(games) {
       game.defaultDurationMinutes ? `${game.defaultDurationMinutes} min` : "—",
       "numeric",
     );
+    heldBy(row, game);
+    gameActions(row, game);
     body.append(row);
   }
   table.append(body);
@@ -1181,6 +1185,45 @@ function subheading(label) {
   return h;
 }
 
+/**
+ * Who is holding this game.
+ *
+ * Shown in the row rather than only in the refusal, so the cost of a delete is
+ * legible before anybody reaches for it.
+ */
+function heldBy(row, game) {
+  const usage = game.usage;
+  if (!usage) return cell(row, "—");
+
+  const names = usage.campaigns.map((held) => held.name);
+  if (usage.gameDays > 0) {
+    names.push(`${usage.gameDays} game ${usage.gameDays === 1 ? "day" : "days"}`);
+  }
+  const td = cell(row, names.length === 0 ? "nobody" : names.join(", "));
+  if (names.length === 0) td.className = "muted";
+  return td;
+}
+
+function gameActions(row, game) {
+  const td = document.createElement("td");
+  const usage = game.usage;
+  // No button at all while somebody holds it. The server refuses either way —
+  // the guard is a query there, not in here — but offering a button that always
+  // refuses trains people to ignore refusals.
+  if (usage && usage.campaigns.length === 0 && usage.gameDays === 0) {
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "Delete";
+    remove.addEventListener("click", async () => {
+      if (!confirm(`Delete ${game.name}?`)) return;
+      remove.disabled = true;
+      await act(() => api(`/api/games/${encodeURIComponent(game.id)}`, { method: "DELETE" }));
+    });
+    td.append(remove);
+  }
+  row.append(td);
+}
+
 function heading(label) {
   const h = document.createElement("h2");
   h.textContent = label;
@@ -1193,7 +1236,9 @@ async function load() {
       api("/api/me"),
       api("/api/agenda"),
       api("/api/campaigns"),
-      api("/api/games"),
+      // The admin list rather than the plain summaries: this page offers a
+      // delete, and a delete needs to know what it would break.
+      api("/api/games/usage"),
       api("/api/game-days"),
     ]);
 
