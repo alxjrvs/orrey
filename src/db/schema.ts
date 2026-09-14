@@ -644,6 +644,20 @@ export const gameDays = sqliteTable("game_days", {
   capacity: integer("capacity"),
   /** What is being played. Required on a `single` day — see `singleNamesGame`. */
   gameId: text("game_id").references(() => games.id, { onDelete: "set null" }),
+  /**
+   * How many people were queued when the table settled. Written once, by the
+   * LOCK transition, and never again.
+   *
+   * It is a record rather than a derivation because the queue does not stand
+   * still: a promotion during seating is exactly the thing that erases the fact
+   * that there *was* a queue, and `withdraw` has no day-state guard, so a click
+   * on a locked day's post can shorten it afterwards. A statistic read off the
+   * live table would report the depth of whatever is left, which is a different
+   * number wearing this one's name.
+   *
+   * Null on a day that has not locked. That is "not yet", never "nobody queued".
+   */
+  waitlistAtLock: integer("waitlist_at_lock"),
 
   /** The three ids a day accumulates. Recorded, then never read back from. */
   discordChannelId: text("discord_channel_id"),
