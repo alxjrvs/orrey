@@ -24,7 +24,7 @@ import { db, schema } from "../db/index.ts";
  */
 export interface PublicationRef {
   surface: "discord" | "google";
-  kind: "event" | "message";
+  kind: "event" | "message" | "thread";
   targetId: string;
 }
 
