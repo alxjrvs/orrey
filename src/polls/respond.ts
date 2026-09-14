@@ -122,6 +122,10 @@ export async function applyOverride(
     return { ok: false, reason: "refused" };
   }
 
-  const view = await applyOutcomes(env, pollId, await staged(env, pollId));
+  // Through the poll's own Durable Object, so the "is it still open" check and
+  // the close that follows it are one unit. Two Apply clicks landing together
+  // would otherwise both read `open` and both fire what closing enables.
+  const lock = env.POLL_LOCK.get(env.POLL_LOCK.idFromName(pollId));
+  const view = await lock.apply(pollId, await staged(env, pollId));
   return view ? { ok: true, payload: renderPollPost(view) } : { ok: false, reason: "unknown" };
 }
