@@ -1,4 +1,4 @@
-import { and, eq, lte, or } from "drizzle-orm";
+import { and, eq, lte, or, sql } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
 import { enqueueProjection } from "../projection/outbox.ts";
@@ -16,6 +16,7 @@ import { confirmedNotice, correctionPost, jeopardyNotice } from "../attendance/r
 import { announceGameDay, postCloseNotice, postPollPost } from "../polls/post.ts";
 import { APPLY_JOB, applyFollowUp } from "../polls/canonise.ts";
 import { POST_SIGNUP_JOB, postSignupPost, startDayThread } from "../game-days/post.ts";
+import { sessionIdFor } from "../game-days/lifecycle.ts";
 import { PROMOTED_JOB } from "../game-days/promote.ts";
 import { postDayNoticeOnce, promotedNotice } from "../game-days/notice.ts";
 import { loadProjectionTarget } from "../projection/target.ts";
@@ -308,7 +309,31 @@ async function runJob(job: typeof schema.jobs.$inferSelect, env: Env): Promise<v
       // thread is started from the *recorded* id rather than this call's.
       if (!messageId) return;
 
-      await startDayThread(env, gameDayId);
+      const threadId = await startDayThread(env, gameDayId);
+      if (!threadId) return;
+
+      // And now the attendance post, once the day has a thread to put it in.
+      //
+      // It is armed here rather than by the transition that armed this job
+      // because `postAttendancePost` sends into the day's thread if there is
+      // one and into the channel if there is not, and under send-only a post in
+      // the wrong place cannot be moved. Arming it a minute out would be a race
+      // this loses whenever the signup post has to retry; arming it from the
+      // thread's own creation cannot be. `onConflictDoNothing` because this
+      // job's own retry runs it again.
+      //
+      // Without it a game day has no surface anybody can say "I'm coming" on,
+      // and `attendance.assume` writes the whole seated table down as absent.
+      await db(env)
+        .insert(schema.jobs)
+        .values({
+          id: `session.post-attendance:${sessionIdFor(gameDayId)}`,
+          kind: "session.post-attendance",
+          payload: { sessionId: sessionIdFor(gameDayId) },
+          idempotencyKey: `session.post-attendance:${sessionIdFor(gameDayId)}`,
+          runAt: sql`(unixepoch())`,
+        })
+        .onConflictDoNothing();
       return;
     }
 

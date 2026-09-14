@@ -1,6 +1,7 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
+import { rearm, type ArmedJob } from "../jobs/arm.ts";
 import { SETTING_DEFAULTS, SETTING_KEYS, settingOr } from "../db/settings.ts";
 import { attendanceRows } from "./rows.ts";
 import { quorumOf } from "./quorum.ts";
@@ -24,34 +25,37 @@ export const JEOPARDY_JOB = "jeopardy.check";
  * fire a day after the wrong day — so the id is derived and re-arming is an
  * upsert that moves `run_at`.
  */
-export async function armJeopardyCheck(
+/**
+ * The row, described. The lead time is a settings read, so this is async even
+ * though nothing is written — a caller batching it with a state write needs the
+ * read done *before* the batch, which is the point.
+ */
+export async function jeopardyJob(
   env: Env,
   sessionId: string,
   startsAt: number,
-): Promise<void> {
+): Promise<ArmedJob> {
   const leadHours = await settingOr(
     env,
     SETTING_KEYS.jeopardyLeadHours,
     SETTING_DEFAULTS["jeopardy.lead_hours"],
   );
-  const runAt = startsAt - leadHours * 3600;
-  const id = `${JEOPARDY_JOB}:${sessionId}`;
+  return {
+    id: `${JEOPARDY_JOB}:${sessionId}`,
+    kind: JEOPARDY_JOB,
+    payload: { sessionId },
+    runAt: startsAt - leadHours * 3600,
+  };
+}
 
-  await db(env)
-    .insert(schema.jobs)
-    .values({
-      id,
-      kind: JEOPARDY_JOB,
-      payload: { sessionId },
-      idempotencyKey: id,
-      runAt,
-    })
-    .onConflictDoUpdate({
-      target: schema.jobs.id,
-      // A moved session is a moved check: pending again, at the new time, with
-      // the old failure forgotten.
-      set: { runAt, state: "pending", attempts: 0, lastError: null },
-    });
+export async function armJeopardyCheck(
+  env: Env,
+  sessionId: string,
+  startsAt: number,
+): Promise<void> {
+  // A moved session is a moved check: pending again, at the new time, with the
+  // old failure forgotten.
+  await rearm(db(env), [await jeopardyJob(env, sessionId, startsAt)]);
 }
 
 export type JeopardyOutcome = "confirmed" | "in-jeopardy" | "no-quorum-set" | "not-waiting";
