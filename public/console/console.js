@@ -798,7 +798,7 @@ const campaignState = { selected: null };
  * reasons that is. An empty table under a heading is the one thing this must
  * never render.
  */
-function campaignPageSection(plan, history, polls) {
+function campaignPageSection(plan, history, polls, stats) {
   const section = document.createElement("section");
   section.className = "campaign-page";
 
@@ -828,9 +828,130 @@ function campaignPageSection(plan, history, polls) {
   }
 
   if (history) section.append(historySection(history));
+  if (stats) section.append(statsSection(stats));
   if (polls) section.append(pollsSection(polls));
 
   return section;
+}
+
+/**
+ * The numbers, each next to a sentence saying what it counts.
+ *
+ * "Attendance rate 0.62" and "missed five of thirteen" are read very
+ * differently by the person they are about, and only one of them is a thing
+ * somebody can act on. So every figure here is a sentence, and a null renders as
+ * what it means — "not enough played yet" — never as a dash the reader has to
+ * guess at.
+ */
+function dayStatsSection(stats) {
+  const section = document.createElement("section");
+  section.append(subheading("How the days went"));
+
+  if (stats.days.length === 0) {
+    const note = document.createElement("p");
+    note.className = "note";
+    note.textContent = "No day has been run yet.";
+    section.append(note);
+    return section;
+  }
+
+  const average = document.createElement("p");
+  average.textContent =
+    stats.averageFillRate === null
+      ? "No day with a set number of seats yet, so there is nothing to fill."
+      : `Days with seats fill about ${Math.round(stats.averageFillRate * 100)}% of them.`;
+  section.append(average);
+
+  const table = document.createElement("table");
+  const head = document.createElement("tr");
+  for (const label of ["Day", "Seated", "How full", "Queued", "Tables"]) {
+    const th = document.createElement("th");
+    th.textContent = label;
+    head.append(th);
+  }
+  table.append(head);
+
+  for (const day of stats.days) {
+    const row = document.createElement("tr");
+    for (const text of [
+      day.title ?? when(day.startsAt),
+      day.capacity === null ? `${day.seated}` : `${day.seated} of ${day.capacity}`,
+      // A multi day has no capacity to be full of, so it says so rather than
+      // rendering a dash the reader has to interpret.
+      day.fillRate === null ? "open to everybody" : `${Math.round(day.fillRate * 100)}%`,
+      day.waitlistDepth === null ? "still seating" : `${day.waitlistDepth}`,
+      day.tablesRecorded === null ? "one game" : `${day.tablesRecorded}`,
+    ]) {
+      const td = document.createElement("td");
+      td.textContent = text;
+      row.append(td);
+    }
+    table.append(row);
+  }
+  section.append(table);
+  return section;
+}
+
+function statsSection(stats) {
+  const section = document.createElement("section");
+  section.append(subheading("Numbers"));
+
+  const list = document.createElement("dl");
+  list.className = "roster";
+  for (const member of stats.attendance.members) {
+    const name = document.createElement("dt");
+    name.textContent = member.name;
+    const said = document.createElement("dd");
+    said.textContent =
+      member.rate === null
+        ? "Not enough played yet."
+        : `${missed(member)}${streakLine(member)}`;
+    list.append(name, said);
+  }
+  if (stats.attendance.members.length > 0) section.append(list);
+
+  const played = document.createElement("p");
+  played.className = "muted";
+  played.textContent =
+    stats.attendance.sessionsPlayed === 1
+      ? "One session played."
+      : `${stats.attendance.sessionsPlayed} sessions played.`;
+  section.append(played);
+
+  const moved = document.createElement("p");
+  const most = stats.schedule.mostRescheduled;
+  moved.textContent = most
+    ? `Moved most: ${most.number === null ? most.sessionId : `session ${most.number}`}, ${most.moves} ${most.moves === 1 ? "time" : "times"}.`
+    : "Nothing has been moved.";
+  section.append(moved);
+
+  const lead = document.createElement("p");
+  lead.textContent =
+    stats.schedule.averageLeadSeconds === null
+      ? "No session has reached quorum yet."
+      : `Reaches quorum about ${hours(stats.schedule.averageLeadSeconds)} after it is made, over ${stats.schedule.confirmed} ${stats.schedule.confirmed === 1 ? "session" : "sessions"}.`;
+  section.append(lead);
+
+  return section;
+}
+
+/** The fraction, the way the person it is about would say it. */
+function missed(member) {
+  const absent = member.played - member.attended;
+  if (absent === 0) return `Came to all ${member.played}.`;
+  return `Missed ${absent} of ${member.played}.`;
+}
+
+function streakLine(member) {
+  if (member.streak === 0) return "";
+  return member.streak === 1 ? " Last one, yes." : ` ${member.streak} in a row.`;
+}
+
+function hours(seconds) {
+  const h = seconds / 3600;
+  if (h < 1) return `${Math.round(seconds / 60)} minutes`;
+  if (h < 48) return `${Math.round(h)} hours`;
+  return `${Math.round(h / 24)} days`;
 }
 
 function campaignFacts(plan) {
@@ -1189,12 +1310,13 @@ function heading(label) {
 
 async function load() {
   try {
-    const [me, agenda, { campaigns }, { games }, { gameDays }] = await Promise.all([
+    const [me, agenda, { campaigns }, { games }, { gameDays }, dayStats] = await Promise.all([
       api("/api/me"),
       api("/api/agenda"),
       api("/api/campaigns"),
       api("/api/games"),
       api("/api/game-days"),
+      api("/api/game-days/stats").catch(() => null),
     ]);
 
     // The rail is a second read rather than part of the agenda's: one session's
@@ -1206,7 +1328,7 @@ async function load() {
 
     // Likewise the campaign page: the summaries table needs none of it, and a
     // campaign nobody has opened is a query nobody has asked for.
-    const [plan, history, polls] = campaignState.selected
+    const [plan, history, polls, stats] = campaignState.selected
       ? await Promise.all([
           api(`/api/campaigns/${encodeURIComponent(campaignState.selected)}/page`).catch(
             () => null,
@@ -1217,8 +1339,11 @@ async function load() {
           api(`/api/campaigns/${encodeURIComponent(campaignState.selected)}/polls`).catch(
             () => null,
           ),
+          api(`/api/campaigns/${encodeURIComponent(campaignState.selected)}/stats`).catch(
+            () => null,
+          ),
         ])
-      : [null, null, null];
+      : [null, null, null, null];
 
     who.textContent = `signed in as ${me.userId}`;
     const split = document.createElement("div");
@@ -1226,8 +1351,9 @@ async function load() {
     split.append(agendaSection(agenda), detailRail(detail));
     main.replaceChildren(split);
     main.append(heading("Campaigns"), campaignsTable(campaigns));
-    if (plan) main.append(campaignPageSection(plan.campaign, history, polls));
+    if (plan) main.append(campaignPageSection(plan.campaign, history, polls, stats));
     main.append(heading("Game days"), gameDaysTable(gameDays));
+    if (dayStats) main.append(dayStatsSection(dayStats));
     main.append(heading("Games"), gamesTable(games), createForm());
   } catch (error) {
     const message =
