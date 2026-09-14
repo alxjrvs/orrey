@@ -34,6 +34,27 @@ const session = {
   location: "The Wreck",
 };
 
+async function member(userId: string) {
+  await db(env)
+    .insert(schema.users)
+    .values({ discordId: userId, username: userId, feedToken: `t-${userId}` })
+    .onConflictDoNothing();
+  await db(env)
+    .insert(schema.campaignMembers)
+    .values({ campaignId: "age-of-umbra", userId })
+    .onConflictDoNothing();
+}
+
+function clickSuggest(userId: string, target = SESSION_ID) {
+  return discord.request({
+    type: InteractionType.MESSAGE_COMPONENT,
+    data: { custom_id: encodeCustomId({ action: "suggest", target }), component_type: 2 },
+    member: { user: { id: userId, username: userId, global_name: null }, roles: [] },
+    guild_id: "g",
+    message: { id: "msg-1", channel_id: "chan-1" },
+  });
+}
+
 async function target() {
   return (await loadProjectionTarget(env, SESSION_ID))!;
 }
@@ -49,6 +70,7 @@ beforeEach(async () => {
     Response.json({ id: "msg-1", channel_id: "chan-1" })) as typeof fetch;
 
   for (const table of [
+    "campaign_members",
     "publications",
     "poll_dates",
     "date_polls",
@@ -65,6 +87,7 @@ beforeEach(async () => {
   for (const statement of seedStatements(campaign, session)) {
     await env.DB.prepare(statement).run();
   }
+  await member("ada");
 });
 
 describe("where the button sits", () => {
@@ -114,19 +137,7 @@ describe("where the button sits", () => {
 
 describe("the click", () => {
   it("opens the modal with the session already decided, and writes nothing", async () => {
-    const res = await app.fetch(
-      await discord.request({
-        type: InteractionType.MESSAGE_COMPONENT,
-        data: {
-          custom_id: encodeCustomId({ action: "suggest", target: SESSION_ID }),
-          component_type: 2,
-        },
-        member: { user: { id: "ada", username: "ada", global_name: null }, roles: [] },
-        guild_id: "g",
-        message: { id: "msg-1", channel_id: "chan-1" },
-      }),
-      discord.env(env),
-    );
+    const res = await app.fetch(await clickSuggest("ada"), discord.env(env));
 
     const json = (await res.json()) as { type: number; data: { custom_id: string } };
     expect(json.type).toBe(InteractionResponseType.MODAL);
@@ -157,5 +168,19 @@ describe("the click", () => {
     );
 
     expect(((await res.json()) as { data: { content: string } }).data.content).toContain("retired");
+  });
+});
+
+describe("whose session it is", () => {
+  it("refuses somebody who is not on the campaign", async () => {
+    const res = await app.fetch(await clickSuggest("stranger"), discord.env(env));
+    const json = (await res.json()) as { type: number; data: { content: string } };
+
+    // The button sits on a post in the campaign's own channel, which is close to
+    // an access check and is not one: a `custom_id` is a string the client
+    // sends, and anybody who can read one post can send another post's id.
+    expect(json.type).toBe(InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE);
+    expect(json.data.content).toContain("not on a campaign you are on");
+    expect(await db(env).select().from(schema.datePolls).all()).toEqual([]);
   });
 });
