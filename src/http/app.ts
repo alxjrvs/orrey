@@ -18,6 +18,7 @@ import { sessionFrom } from "../console/session.ts";
 import { NotConfigured, isOrganiser } from "../console/roles.ts";
 import { readLoginToken } from "../console/link.ts";
 import { campaignSummaries, gameDaySummaries, gameSummaries } from "../console/api.ts";
+import { auditActors, auditPage } from "../console/audit.ts";
 import { agendaBetween, windowAround } from "../console/agenda.ts";
 import { openPollFromConsole } from "../console/polls.ts";
 import { InvalidCampaign, createCampaign, updateCampaign } from "../campaigns/write.ts";
@@ -197,6 +198,27 @@ export function createApp() {
       return c.json({ ok: true });
     }),
   );
+
+  /**
+   * Who changed what. Read-only, newest first, keyset-paginated.
+   *
+   * The gate is the `/api/*` organiser check above, asked once for the request.
+   * Nothing below re-decides it per row: a gate asked once is a gate; a gate
+   * asked per row is a filter, and a filter with a bug shows one row too many.
+   */
+  app.get("/api/audit", async (c) =>
+    c.json(
+      await auditPage(c.env, {
+        actorUserId: c.req.query("actor"),
+        targetType: c.req.query("targetType"),
+        targetId: c.req.query("targetId"),
+        cursor: c.req.query("cursor"),
+        ...(c.req.query("limit") ? { limit: Number(c.req.query("limit")) } : {}),
+      }),
+    ),
+  );
+
+  app.get("/api/audit/actors", async (c) => c.json({ actors: await auditActors(c.env) }));
 
   app.get("/api/campaigns/:id/roster", async (c) =>
     c.json({ roster: await rosterRows(c.env, c.req.param("id")) }),

@@ -55,3 +55,7 @@ button {
 }
 button + button { margin-left: var(--space-2, 8px); }
 button[disabled] { opacity: .5; cursor: default; }
+
+/* The log, and the log only: lower case, curt, monospaced numbers. */
+ul.log { list-style: none; margin: 0; padding: 0; font-variant-numeric: tabular-nums; }
+ul.log li { padding: var(--space-1, 4px) 0; border-bottom: var(--border-hair); color: var(--text-secondary); }
