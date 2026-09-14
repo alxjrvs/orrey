@@ -5,6 +5,8 @@ import { enqueueProjection } from "../projection/outbox.ts";
 import { surfacesFor } from "../campaigns/event-cap.ts";
 import { postAttendancePost } from "../attendance/post.ts";
 import { startSessionThread } from "../attendance/thread.ts";
+import { postNoticeOnce } from "../attendance/notice.ts";
+import { confirmedNotice } from "../attendance/render.ts";
 import { loadProjectionTarget } from "../projection/target.ts";
 
 const CLAIM_SECONDS = 60;
@@ -85,6 +87,24 @@ async function runJob(job: typeof schema.jobs.$inferSelect, env: Env): Promise<v
       // thread hangs off it.
       const target = await loadProjectionTarget(env, sessionId);
       if (target) await startSessionThread(env, target);
+      return;
+    }
+
+    /**
+     * Quorum was reached. A short notice in the session's thread, posted once —
+     * the claim under its own label is what makes "once" true, not this job
+     * running once.
+     */
+    case "session.confirmed-notice": {
+      const { sessionId } = job.payload as { sessionId?: string };
+      if (!sessionId) throw new Error(`session.confirmed-notice job ${job.id} has no sessionId`);
+
+      const target = await loadProjectionTarget(env, sessionId);
+      // The session is gone, or it is no longer confirmed — a notice saying it
+      // is on would be worse than no notice at all.
+      if (!target || target.session.state !== "CONFIRMED") return;
+
+      await postNoticeOnce(env, target, "confirmed", confirmedNotice(target));
       return;
     }
 

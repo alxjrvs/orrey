@@ -12,6 +12,7 @@ import { throughGovernor } from "../discord/governor.ts";
 import { isThreadAlreadyStarted, postMessage, startThreadFromMessage } from "../discord/rest.ts";
 import { claim, find, record, release } from "../projection/publications.ts";
 import { sessionTitle, type ProjectionTarget } from "../projection/target.ts";
+import type { MessagePayload } from "./render.ts";
 
 /**
  * A thread per session.
@@ -97,7 +98,7 @@ export async function startSessionThread(
 export async function postToSession(
   env: Env,
   target: ProjectionTarget,
-  payload: Record<string, unknown>,
+  payload: MessagePayload,
 ): Promise<string | undefined> {
   const destination = target.session.threadId ?? (await channelOf(env, target));
   if (!destination) return undefined;

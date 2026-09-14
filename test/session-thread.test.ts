@@ -37,6 +37,11 @@ const session = {
   location: "The Wreck",
 };
 
+/** A message payload, the shape everything Orrey posts has. */
+function notice(content: string) {
+  return { content, components: [], allowed_mentions: { parse: [] as never[], roles: [] } };
+}
+
 async function target() {
   return (await loadProjectionTarget(env, SESSION_ID))!;
 }
@@ -147,13 +152,13 @@ describe("where a later post goes", () => {
     await startSessionThread(env, await target());
     calls = [];
 
-    await postToSession(env, await target(), { content: "quorum reached" });
+    await postToSession(env, await target(), notice("quorum reached"));
 
     expect(calls).toMatchObject([{ method: "POST", path: "/channels/thread-1/messages" }]);
   });
 
   it("into the campaign channel for a session that never got one", async () => {
-    await postToSession(env, await target(), { content: "a notice" });
+    await postToSession(env, await target(), notice("a notice"));
     expect(calls).toMatchObject([{ method: "POST", path: "/channels/chan-1/messages" }]);
   });
 });
