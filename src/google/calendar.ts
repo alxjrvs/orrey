@@ -231,6 +231,17 @@ async function googleFetch(
   return response.status === 204 ? undefined : await response.json();
 }
 
+/**
+ * The one calendar Orrey watches, which is the one calendar it writes to.
+ *
+ * Exported so `src/google/watch.ts` opens its channel under the same rule
+ * instead of restating it — one place that knows which calendar is Orrey's, and
+ * therefore one place that could ever get it wrong.
+ */
+export function watchCalendarId(env: Env): string {
+  return calendarId(env);
+}
+
 /** The one calendar Orrey writes to. Never a calendar id from anywhere else. */
 function calendarId(env: Env): string {
   if (!env.GOOGLE_CALENDAR_ID) throw new Error("GOOGLE_CALENDAR_ID is not set");
