@@ -123,3 +123,5 @@ dl.facts dd { margin: 0; }
 
 /* A name that opens something is a button, and reads as the name it opens. */
 button.link { background: none; border: 0; padding: 0; font: inherit; color: inherit; text-decoration: underline; cursor: pointer; }
+.poll { border: var(--border-hair); border-radius: var(--radius-sm); padding: var(--space-3, 12px); margin-block: var(--space-3, 12px); }
+.poll p { margin-block: var(--space-1, 4px); }
