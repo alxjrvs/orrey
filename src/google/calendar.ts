@@ -2,7 +2,13 @@ import { eq, sql } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
 import { googleFingerprint, sessionTitle, type ProjectionTarget } from "../projection/target.ts";
-import { find, record, retract, type PublicationRef } from "../projection/publications.ts";
+import {
+  find,
+  record,
+  retract,
+  standing,
+  type PublicationRef,
+} from "../projection/publications.ts";
 import { serviceAccountToken, type AccessToken } from "./auth.ts";
 import { eventIdFor } from "./event-id.ts";
 
@@ -218,6 +224,29 @@ function calendarId(env: Env): string {
 
 function isoOf(unixSeconds: number): string {
   return new Date(unixSeconds * 1000).toISOString();
+}
+
+/**
+ * The Google half of retracting without the session row. Google's id is derived
+ * from the session id, so this could be done from the id alone — but reading the
+ * ledger is what keeps the two surfaces answering the same question, and it is
+ * what stops Orrey issuing a DELETE for an event it never actually published.
+ */
+export async function unprojectOrphanedEvent(env: Env, sessionId: string): Promise<void> {
+  for (const row of await standing(env, sessionId)) {
+    if (row.surface !== "google" || !row.remoteId) continue;
+
+    try {
+      await googleFetch(env, `/calendars/${calendarId(env)}/events/${row.remoteId}`, {
+        method: "DELETE",
+      });
+    } catch (error) {
+      if (!(error instanceof GoogleError && (error.status === 404 || error.status === 410))) {
+        throw error;
+      }
+    }
+    await retract(env, { surface: "google", kind: "event", targetId: sessionId });
+  }
 }
 
 /**

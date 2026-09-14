@@ -110,6 +110,16 @@ export interface ScheduledEvent {
   id: string;
   name: string;
   status: number;
+  /** Carries Orrey's marker, which is how an event is recognised as a session's. */
+  description?: string | null;
+}
+
+/**
+ * Every scheduled event in the guild. Bounded by Discord's own cap of 100 per
+ * guild, which is what makes a scan affordable enough to do before creating.
+ */
+export function listScheduledEvents(env: BotAuth, guildId: string) {
+  return discordFetch<ScheduledEvent[]>(env, `/guilds/${guildId}/scheduled-events`);
 }
 
 export function createScheduledEvent(env: BotAuth, guildId: string, body: unknown) {
