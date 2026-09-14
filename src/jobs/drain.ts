@@ -11,6 +11,7 @@ import { assumeAttendance, registerRows } from "../attendance/assume.ts";
 import { sendReminder } from "../attendance/reminders.ts";
 import { gmOf } from "../campaigns/roster.ts";
 import { attendanceRows } from "../attendance/rows.ts";
+import { requiredFor } from "../attendance/quorum.ts";
 import { confirmedNotice, correctionPost, jeopardyNotice } from "../attendance/render.ts";
 import { announceGameDay, postCloseNotice, postPollPost } from "../polls/post.ts";
 import { APPLY_JOB, applyFollowUp } from "../polls/canonise.ts";
@@ -137,7 +138,7 @@ async function runJob(job: typeof schema.jobs.$inferSelect, env: Env): Promise<v
       // session is happening is worse than silence.
       if (outcome !== "in-jeopardy") return;
 
-      const required = target.campaign?.quorum;
+      const required = requiredFor(target);
       if (required == null) return;
 
       await postNoticeOnce(
