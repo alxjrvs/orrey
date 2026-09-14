@@ -1,9 +1,10 @@
-import { and, asc, eq, gte, ne } from "drizzle-orm";
+import { and, asc, eq, gte, ne, sql } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
 import { rosterOf } from "../campaigns/roster.ts";
 import { flakeFor, flakeLine } from "../campaigns/flake.ts";
 import { sessionTitle } from "../projection/target.ts";
+import { escapeMarkdown } from "../attendance/render.ts";
 import { loadProjectionTarget } from "../projection/target.ts";
 
 /**
@@ -108,15 +109,19 @@ export async function sessionChoices(
   query: string,
   asOf: Date,
 ): Promise<{ name: string; value: string }[]> {
-  const rows = await callerSessions(env, userId, asOf);
   const needle = query.trim().toLowerCase();
+
+  // The needle has to reach the *database*, not a page of twenty-five rows.
+  // Filtering after the LIMIT means the twenty-sixth-soonest session can never
+  // be picked however precisely somebody types its name — which is exactly when
+  // they would be typing.
+  const rows = await callerSessions(env, userId, asOf, needle);
 
   return rows
     .map((row) => ({
       name: `${sessionTitle(row)} — ${stamp(row.session.startsAt)}`.slice(0, 100),
       value: row.session.id,
     }))
-    .filter((choice) => !needle || choice.name.toLowerCase().includes(needle))
     .slice(0, MAX_CHOICES);
 }
 
@@ -129,27 +134,54 @@ export function renderWhosIn(answer: WhosIn, asOf: Date): string {
     ["Not heard from", null],
   ];
 
-  const lines = [`**${answer.title}** — <t:${answer.startsAt}:F>`];
-  if (answer.state !== "SCHEDULED") lines.push(`-# ${answer.state.toLowerCase()}`);
+  const asOfLine = `-# Read from Orrey as of <t:${Math.floor(asOf.getTime() / 1000)}:t>, not from any post.`;
 
-  for (const [label, intent] of groups) {
-    const members = answer.rows.filter((row) => row.intent === intent);
-    if (members.length === 0) continue;
-    lines.push("", `**${label}** — ${members.length}`);
-    for (const member of members) lines.push(`- ${describe(member)}`);
+  // Longest first: the whole table with notes, then without, then counts only.
+  // An interaction response over Discord's ceiling is not a shortened answer, it
+  // is *no answer* — the call is rejected outright — so this command needs the
+  // same ladder the attendance post has.
+  for (const detail of [
+    { notes: true, names: true },
+    { notes: false, names: true },
+    { notes: false, names: false },
+  ]) {
+    const lines = [`**${escapeMarkdown(answer.title)}** — <t:${answer.startsAt}:F>`];
+    if (answer.state !== "SCHEDULED") lines.push(`-# ${answer.state.toLowerCase()}`);
+
+    for (const [label, intent] of groups) {
+      const members = answer.rows.filter((row) => row.intent === intent);
+      if (members.length === 0) continue;
+      lines.push("", `**${label}** — ${members.length}`);
+      // The counts are the part that must survive: a roster answer that says how
+      // many are in is worth something; one that has been cut off mid-name is
+      // not.
+      if (detail.names) for (const member of members) lines.push(`- ${describe(member, detail)}`);
+    }
+
+    lines.push("", asOfLine);
+    const content = lines.join("\n");
+    if (content.length <= LIMIT) return content;
   }
 
-  lines.push(
-    "",
-    `-# Read from Orrey as of <t:${Math.floor(asOf.getTime() / 1000)}:t>, not from any post.`,
-  );
-  return lines.join("\n");
+  // Nothing left to drop. The header and the as-of line are the answer.
+  return [`**${escapeMarkdown(answer.title)}** — <t:${answer.startsAt}:F>`, "", asOfLine].join("\n");
 }
 
-function describe(row: WhosInRow): string {
-  const parts = [row.role === "gm" ? `**${row.name}** (GM)` : row.name];
-  if (row.characterName) parts.push(`as ${row.characterName}`);
-  if (row.note) parts.push(`— ${row.note}`);
+/** Discord's ceiling is 2000; the margin is for the mention expansion. */
+const LIMIT = 1900;
+
+/**
+ * A name, a character name and a note are all somebody else's text, on a message
+ * Orrey can never edit. Unescaped, a note reading `**Out (4)** — Bob` renders as
+ * a heading of Orrey's own shape and the rest of the roster reflows under it —
+ * which on the command that exists to be *authoritative* is the worst place in
+ * the repo for it.
+ */
+function describe(row: WhosInRow, detail: { notes: boolean }): string {
+  const name = escapeMarkdown(row.name);
+  const parts = [row.role === "gm" ? `**${name}** (GM)` : name];
+  if (row.characterName) parts.push(`as ${escapeMarkdown(row.characterName)}`);
+  if (detail.notes && row.note) parts.push(`— ${escapeMarkdown(row.note)}`);
   // Information for the organiser, never a consequence: it sits after the name
   // and changes nothing about where the person is grouped.
   if (row.flake) parts.push(`-# (${row.flake})`);
@@ -170,7 +202,7 @@ async function isOnRoster(env: Env, campaignId: string, userId: string): Promise
   return row !== undefined;
 }
 
-async function callerSessions(env: Env, userId: string, asOf: Date) {
+async function callerSessions(env: Env, userId: string, asOf: Date, needle = "") {
   return db(env)
     .select({ session: schema.sessions, campaign: schema.campaigns })
     .from(schema.campaignMembers)
@@ -182,6 +214,9 @@ async function callerSessions(env: Env, userId: string, asOf: Date) {
         gte(schema.sessions.startsAt, Math.floor(asOf.getTime() / 1000)),
         ne(schema.sessions.state, "CANCELLED"),
         ne(schema.sessions.state, "PLAYED"),
+        ...(needle
+          ? [sql`lower(${schema.campaigns.name}) LIKE ${`%${needle.replaceAll("%", "")}%`}`]
+          : []),
       ),
     )
     .orderBy(asc(schema.sessions.startsAt), asc(schema.sessions.id))
