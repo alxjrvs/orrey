@@ -2,6 +2,7 @@ import { and, eq, lte } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
 import { enqueueProjection } from "../projection/outbox.ts";
+import { surfacesFor } from "../campaigns/event-cap.ts";
 import { postAttendancePost } from "../attendance/post.ts";
 
 const CLAIM_SECONDS = 60;
@@ -55,7 +56,10 @@ async function runJob(job: typeof schema.jobs.$inferSelect, env: Env): Promise<v
     case "session.project": {
       const { sessionId } = job.payload as { sessionId?: string };
       if (!sessionId) throw new Error(`session.project job ${job.id} has no sessionId`);
-      await enqueueProjection(env, sessionId);
+      // Google always; Discord only while this session is one of its campaign's
+      // next two. A scheduled event further out than that is a slot spent on
+      // something nobody is looking at yet.
+      await enqueueProjection(env, sessionId, await surfacesFor(env, sessionId, new Date()));
       return;
     }
 

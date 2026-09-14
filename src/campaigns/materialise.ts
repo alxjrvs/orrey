@@ -2,6 +2,7 @@ import { and, count, eq, isNotNull, sql } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
 import { SETTING_DEFAULTS, SETTING_KEYS, settingOr } from "../db/settings.ts";
+import { enforceEventCap } from "./event-cap.ts";
 import { occurrencesFrom } from "./recurrence.ts";
 import { remainingSessions } from "./roster.ts";
 
@@ -49,6 +50,9 @@ export async function materialiseHorizon(env: Env, now: Date): Promise<Materiali
     // One campaign's bad cadence must not stop the others' from being made.
     try {
       made.push(...(await materialiseOne(env, row, { now, horizon, timezone, leadDays })));
+      // Every running campaign, not only the ones that gained a session: the
+      // Discord horizon moves when a session *passes*, not only when one is made.
+      await enforceEventCap(env, row.campaign.id, now);
     } catch (error) {
       console.error("materialising", row.campaign.id, error);
     }
