@@ -167,6 +167,32 @@ export function deleteScheduledEvent(env: BotAuth, guildId: string, eventId: str
   });
 }
 
+/**
+ * A thread hung off a message. Discord allows exactly one per message, so a
+ * second attempt answers `160004` rather than making another — which is the
+ * closest thing to idempotency this endpoint offers.
+ *
+ * `auto_archive_duration` is minutes, and the thread archiving itself is the
+ * point: Orrey never unarchives one and never edits anything in it.
+ */
+export function startThreadFromMessage(
+  env: BotAuth,
+  channelId: string,
+  messageId: string,
+  body: { name: string; auto_archive_duration: number },
+) {
+  return discordFetch<{ id: string }>(
+    env,
+    `/channels/${channelId}/messages/${messageId}/threads`,
+    { method: "POST", body },
+  );
+}
+
+/** 160004 — this message already has a thread. */
+export function isThreadAlreadyStarted(error: unknown): boolean {
+  return asDiscordFailure(error)?.code === 160004;
+}
+
 /** Fire-and-forget. Record the id if you want it; never reconcile it. */
 export function postMessage(env: BotAuth, channelId: string, body: unknown) {
   return discordFetch<{ id: string; channel_id: string }>(env, `/channels/${channelId}/messages`, {

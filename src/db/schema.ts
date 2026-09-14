@@ -286,7 +286,13 @@ export const publications = sqliteTable(
     /** Derived: `<surface>:<kind>:<target_id>`. Two claims for one thing collide. */
     id: text("id").primaryKey(),
     surface: text("surface", { enum: ["discord", "google"] }).notNull(),
-    kind: text("kind", { enum: ["event", "message"] }).notNull(),
+    /**
+     * `thread` joins these in phase 3. There is no CHECK on this column, so
+     * widening it is a TypeScript change and not a migration — which is worth
+     * knowing rather than discovering: the enum here is advice, and the ledger's
+     * integrity comes from the derived `id`, not from this.
+     */
+    kind: text("kind", { enum: ["event", "message", "thread"] }).notNull(),
     /** A session id today. Deliberately not a foreign key — see above. */
     targetId: text("target_id").notNull(),
     /** Null while claimed; the remote object's own id once it exists. */
