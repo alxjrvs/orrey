@@ -1,6 +1,9 @@
 import { encodeCustomId } from "../discord/custom-id.ts";
 import { ButtonStyle, ComponentType } from "../discord/types.ts";
 import { sessionTitle, type ProjectionTarget } from "../projection/target.ts";
+import { escapeMarkdown } from "../discord/markdown.ts";
+
+export { escapeMarkdown };
 import { quorumLine, quorumOf } from "./quorum.ts";
 
 /**
@@ -164,19 +167,6 @@ function when(startsAt: number, endsAt: number): string {
 function name(row: AttendanceRow, detail: Detail): string {
   const who = escapeMarkdown(row.name);
   return detail.notes && row.note ? `${who} (${escapeMarkdown(row.note)})` : who;
-}
-
-/**
- * A note is somebody else's text on a post Orrey can never edit. Unescaped, a
- * note reading `**Out (4)** — Bob, Cara` renders as a heading of Orrey's own
- * shape, and a stray backtick reflows everything after it — the as-of line
- * included. So the markdown a note can use is the markdown it escapes.
- *
- * Only the inline set: a note is normalised to one line and never rendered at
- * the start of one, so `#` and `>` cannot open a block.
- */
-export function escapeMarkdown(text: string): string {
-  return text.replace(/([*_`~|\\])/g, "\\$1");
 }
 
 function unix(at: Date): number {
