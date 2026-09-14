@@ -107,6 +107,17 @@ export async function pickWinners(
     return { ok: false, reason: "refused" };
   }
 
+  // The same guard `openOverride` has, for a sharper reason. `stagePicks`
+  // already no-ops on a closed poll, so nothing is written either way — but
+  // `renderOverride` would still be returned, and the handler turns that into an
+  // UPDATE_MESSAGE. A post reading "Closed. The dates below are what it decided."
+  // would be rewritten into a live override view with a working Apply button, on
+  // a poll whose outcomes are final and whose consequences have already fired.
+  if (poll.status !== "open") {
+    const closed = await pollView(env, pollId, new Date(), actor.id);
+    return closed ? { ok: true, payload: renderPollPost(closed) } : { ok: false, reason: "unknown" };
+  }
+
   const view = await stagePicks(env, pollId, wonIds);
   return view
     ? { ok: true, payload: renderOverride(view, wonIds) }

@@ -249,3 +249,22 @@ describe("the post that stops answering", () => {
     );
   });
 });
+
+describe("a pick on a closed poll", () => {
+  it("re-renders the closed post rather than reopening it", async () => {
+    await db(env).update(schema.datePolls).set({ status: "closed" });
+
+    const res = await app.fetch(
+      await click("pick", [dates[0]!], "opener"),
+      discord.env(env),
+    );
+    const answer = (await res.json()) as { type: number; data: { content: string } };
+
+    // `stagePicks` already writes nothing to a closed poll. What was missing was
+    // the *answer*: this is an UPDATE_MESSAGE, so a post reading "Closed" would
+    // be rewritten into a live override view with a working Apply button — on a
+    // poll whose outcomes are final and whose consequences have already fired.
+    expect(answer.data.content).not.toContain("Change them if it got it wrong");
+    expect(answer.data.content).not.toContain("Closing the poll");
+  });
+});
