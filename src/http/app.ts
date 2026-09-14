@@ -15,6 +15,7 @@ import {
 } from "../console/cookies.ts";
 import { authorizeUrl, exchangeCode, identify, storeTokens } from "../console/oauth.ts";
 import { sessionFrom } from "../console/session.ts";
+import { deleteUserData, describeReceipt } from "../privacy/delete.ts";
 import { NotConfigured, isOrganiser } from "../console/roles.ts";
 import { readLoginToken } from "../console/link.ts";
 import { campaignSummaries, gameDaySummaries, gameSummaries } from "../console/api.ts";
@@ -471,6 +472,34 @@ export function createApp() {
   );
 
   /** Logging out is forgetting the cookie. The token pair is dropped with it. */
+  /**
+   * Delete my data.
+   *
+   * **Not under `/api/*`.** That gate is the organiser check, and this is the
+   * one console action that belongs to everybody: a person who has never been
+   * given a role still has data Orrey holds, and Discord's terms are about them.
+   * So it takes the session cookie and asks nothing else of it.
+   *
+   * The deleted id is `session.userId` and comes from nowhere else. **The body
+   * is not read at all** — an endpoint that accepts an id is an endpoint that
+   * erases someone else's data, which is precisely why phase 0 left `DELETE /me`
+   * at 405 rather than implementing it.
+   *
+   * No new deletion code: `deleteUserData` has been the one place since phase 0,
+   * and every phase that adds a user-keyed table adds its own delete and its own
+   * count there. Phase 6 adds none.
+   */
+  app.post("/console/me/delete", async (c) => {
+    const session = await sessionFrom(c.env, c.req.header("cookie"), new Date());
+    if (!session) return c.json({ error: "Not signed in. Run /console in Discord." }, 401);
+
+    const receipt = await deleteUserData(c.env, session.userId);
+    // The cookie goes with the row it authenticated. Leaving it set would mean a
+    // console that greets somebody it no longer holds anything about.
+    c.header("set-cookie", clear(SESSION_COOKIE));
+    return c.json({ receipt, said: describeReceipt(receipt) });
+  });
+
   app.post("/console/logout", (c) => {
     c.header("set-cookie", clear(SESSION_COOKIE));
     return c.redirect("/", 302);

@@ -1394,6 +1394,52 @@ function scalarOf(value) {
   return null;
 }
 
+/**
+ * Delete my data.
+ *
+ * Two confirmations rather than one, and the second asks for the word. This is
+ * the only action in the console that destroys data and the only one that cannot
+ * be undone by doing the opposite — there is no opposite.
+ *
+ * The receipt is shown table by table afterwards, in Orrey's own words, because
+ * "done" is not an answer to "what did you hold about me".
+ */
+function deleteMeSection() {
+  const section = document.createElement("section");
+
+  const warning = document.createElement("p");
+  warning.className = "note";
+  warning.textContent =
+    "Deletes everything Orrey holds that is keyed to your Discord account: what you said about sessions, your campaign memberships, your signups, and the tokens Orrey uses to recognise you. Your Discord account is untouched. It cannot be undone.";
+  section.append(warning);
+
+  const receipt = document.createElement("p");
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = "Delete my data";
+  button.addEventListener("click", async () => {
+    if (!confirm("Delete everything Orrey holds about you? This cannot be undone.")) return;
+    if (prompt('Type "delete" to confirm.') !== "delete") return;
+
+    button.disabled = true;
+    try {
+      const answer = await api("/console/me/delete", { method: "POST", body: "{}" });
+      // Table by table, in Orrey's own words. "Done" is not an answer to "what
+      // did you hold about me".
+      receipt.textContent = answer.said;
+      receipt.className = "note";
+    } catch (error) {
+      receipt.className = "error";
+      receipt.textContent =
+        error instanceof Refusal ? error.message : "Orrey could not do that. Try again.";
+    }
+  });
+
+  section.append(button, receipt);
+  return section;
+}
+
 function heading(label) {
   const h = document.createElement("h2");
   h.textContent = label;
@@ -1413,6 +1459,7 @@ async function load() {
       api("/api/game-days"),
       api("/api/settings"),
       api(
+    main.append(heading("Your data"), deleteMeSection());
         `/api/audit?limit=50${auditState.actor ? `&actor=${encodeURIComponent(auditState.actor)}` : ""}${
           auditState.cursor ? `&cursor=${encodeURIComponent(auditState.cursor)}` : ""
         }`,
