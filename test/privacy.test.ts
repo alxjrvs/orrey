@@ -1,7 +1,8 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../src/http/app.ts";
-import { deleteUserData } from "../src/privacy/delete.ts";
+import { deleteUserData, describeReceipt } from "../src/privacy/delete.ts";
+import { SESSION_COOKIE, issueSession } from "../src/console/cookies.ts";
 import { seedStatements } from "../src/db/seed-sql.ts";
 import { encodeCustomId } from "../src/discord/custom-id.ts";
 import { InteractionResponseType, InteractionType } from "../src/discord/types.ts";
@@ -203,5 +204,142 @@ describe("delete-my-data", () => {
     const row = await env.DB.prepare("SELECT actor_user_id, action FROM audit_log WHERE id = 'a1'")
       .first<{ actor_user_id: string | null; action: string }>();
     expect(row).toMatchObject({ actor_user_id: null, action: "campaign.conclude" });
+  });
+});
+
+/**
+ * The console half of the path, which is the half a person can actually reach.
+ *
+ * The deleted id comes from the session cookie and from nowhere else. An
+ * endpoint that accepts an id is an endpoint that erases somebody else's data,
+ * which is precisely why phase 0 left `DELETE /me` at 405 rather than
+ * implementing it — and that 405 stays.
+ */
+describe("delete my data, from the console", () => {
+  const NOW = new Date("2026-09-14T12:00:00Z");
+
+  function consoleEnv() {
+    return {
+      ...env,
+      CONSOLE_SESSION_SECRET: "a-secret",
+      DISCORD_APPLICATION_ID: "app-1",
+      DISCORD_CLIENT_SECRET: "shh",
+      DISCORD_BOT_TOKEN: "bot-token",
+    };
+  }
+
+  /**
+   * A signed-in person: the user row and the token pair the cookie is checked
+   * against. `sessionFrom` asks both — the cookie says who, `discord_tokens`
+   * says whether Orrey can still act as them.
+   */
+  async function signedIn(discordId: string) {
+    await seedUser(discordId);
+    await env.DB.prepare(
+      "INSERT INTO discord_tokens (user_id, access_token, refresh_token, expires_at) VALUES (?, 'at', 'rt', ?)",
+    )
+      .bind(discordId, Math.floor(NOW.getTime() / 1000) + 86_400)
+      .run();
+  }
+
+  async function deleteMe(userId: string | null, body?: unknown) {
+    return app.fetch(
+      new Request("https://orrey.test/console/me/delete", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(userId
+            ? { cookie: `${SESSION_COOKIE}=${await issueSession(consoleEnv(), userId, NOW)}` }
+            : {}),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      }),
+      consoleEnv(),
+    );
+  }
+
+  it("deletes only the caller's rows, whatever id the body names", async () => {
+    await signedIn("1001");
+    await signedIn("2002");
+
+    const res = await deleteMe("1001", { discordId: "2002", userId: "2002" });
+
+    expect(res.status).toBe(200);
+    // The body is not read at all. If it were, this is the request that would
+    // erase somebody else.
+    expect(await userCount("1001")).toBe(0);
+    expect(await userCount("2002")).toBe(1);
+  });
+
+  it("says back what it held, table by table", async () => {
+    await signedIn("1001");
+
+    const body = (await (await deleteMe("1001")).json()) as {
+      receipt: { removed: Record<string, number> };
+      said: string;
+    };
+
+    // The counts come from `src/privacy/delete.ts`, which is where every phase
+    // that adds a user-keyed table adds its own delete and its own count. Phase
+    // 6 adds none.
+    expect(Object.keys(body.receipt.removed).sort()).toEqual([
+      "attendance",
+      "campaign_members",
+      "discord_tokens",
+      "signups",
+      "users",
+    ]);
+    expect(body.said).toContain("users (1)");
+  });
+
+  it("says Orrey held nothing rather than erroring, when there is nothing", async () => {
+    await signedIn("1001");
+    await deleteMe("1001");
+
+    // The receipt for somebody Orrey holds nothing about is zeroes and a
+    // sentence, not a failure. Reaching it through the console a second time is
+    // not possible — the token pair the cookie is checked against went with
+    // everything else — so this asks the function the route calls.
+    expect(describeReceipt(await deleteUserData(env, "1001"))).toContain("no data for you");
+  });
+
+  it("stops recognising the session, because the pair it checked is gone", async () => {
+    await signedIn("1001");
+    await deleteMe("1001");
+
+    // Not an error: a 401 here is Orrey correctly not knowing somebody it holds
+    // nothing about. The pair stopping working immediately is the point of
+    // deleting it.
+    expect((await deleteMe("1001")).status).toBe(401);
+  });
+
+  it("clears the cookie, because the row it authenticated is gone", async () => {
+    await signedIn("1001");
+
+    const res = await deleteMe("1001");
+
+    // A console that goes on greeting somebody it holds nothing about is a
+    // console disagreeing with its own receipt.
+    expect(res.headers.get("set-cookie")).toContain(`${SESSION_COOKIE}=`);
+    expect(res.headers.get("set-cookie")).toMatch(/Max-Age=0|Expires=/i);
+  });
+
+  it("refuses without a session, and deletes nothing", async () => {
+    await signedIn("1001");
+
+    expect((await deleteMe(null, { discordId: "1001" })).status).toBe(401);
+    expect(await userCount("1001")).toBe(1);
+  });
+
+  it("leaves DELETE /me answering 405 and pointing at the console", async () => {
+    await signedIn("1001");
+
+    const res = await app.fetch(
+      new Request("https://orrey.test/me", { method: "DELETE" }),
+      consoleEnv(),
+    );
+
+    expect(res.status).toBe(405);
+    expect(await userCount("1001")).toBe(1);
   });
 });
