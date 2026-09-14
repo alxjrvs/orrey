@@ -103,10 +103,33 @@ export class SessionLock extends DurableObject<Env> {
     if (!target) return rows;
 
     if (crossesThreshold(quorumOf(target, rows), target)) {
-      await db(this.env)
-        .update(schema.sessions)
-        .set({ state: "CONFIRMED", updatedAt: sql`(unixepoch())` })
-        .where(eq(schema.sessions.id, sessionId));
+      const d = db(this.env);
+      await d.batch([
+        d
+          .update(schema.sessions)
+          .set({ state: "CONFIRMED", updatedAt: sql`(unixepoch())` })
+          .where(eq(schema.sessions.id, sessionId)),
+
+        // The notice is a job rather than a post made here, and that is a
+        // deliberate reading of #28. A click has three seconds to answer, and
+        // the thing that must happen inside them is the rewrite of its own
+        // message — which it does. Spending them on a second Discord call to
+        // post the notice risks the response Discord is actually waiting for.
+        //
+        // So: armed in the same batch as the confirmation, posted by the next
+        // minute's drain, and inspectable and re-runnable in between like every
+        // other piece of time-shifted work in this repo.
+        d
+          .insert(schema.jobs)
+          .values({
+            id: `session.confirmed-notice:${sessionId}`,
+            kind: "session.confirmed-notice",
+            payload: { sessionId },
+            idempotencyKey: `session.confirmed-notice:${sessionId}`,
+            runAt: sql`(unixepoch())`,
+          })
+          .onConflictDoNothing(),
+      ]);
     }
 
     return rows;

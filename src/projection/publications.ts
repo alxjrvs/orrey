@@ -26,13 +26,23 @@ export interface PublicationRef {
   surface: "discord" | "google";
   kind: "event" | "message" | "thread";
   targetId: string;
+  /**
+   * Which message about this target. A session has one attendance post but many
+   * notices — confirmed, jeopardy, reminders — and each is published once, so
+   * each needs its own row rather than sharing the session's.
+   *
+   * Absent for everything that existed before notices did, so their ids are
+   * unchanged: the attendance post is still `discord:message:<sessionId>`.
+   */
+  label?: string;
 }
 
 export type Publication = typeof schema.publications.$inferSelect;
 
 /** Derived, never random: two claims for the same thing collide on the key. */
-export function publicationId({ surface, kind, targetId }: PublicationRef): string {
-  return `${surface}:${kind}:${targetId}`;
+export function publicationId({ surface, kind, targetId, label }: PublicationRef): string {
+  const base = `${surface}:${kind}:${targetId}`;
+  return label ? `${base}:${label}` : base;
 }
 
 /**
