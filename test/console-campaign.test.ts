@@ -6,6 +6,7 @@ import { SETTING_KEYS, setSetting } from "../src/db/settings.ts";
 import { createApp } from "../src/http/app.ts";
 import { SESSION_COOKIE, issueSession } from "../src/console/cookies.ts";
 import { campaignPage } from "../src/console/campaign.ts";
+import { campaignPolls } from "../src/console/campaign-polls.ts";
 import { rosterOf } from "../src/campaigns/roster.ts";
 
 /**
@@ -77,6 +78,9 @@ beforeEach(async () => {
 
   for (const table of [
     "audit_log",
+    "poll_responses",
+    "poll_dates",
+    "date_polls",
     "calendar_links",
     "attendance",
     "campaign_members",
@@ -579,5 +583,192 @@ describe("the page over HTTP", () => {
     expect((await res.json()) as { error: string }).toMatchObject({
       error: expect.any(String),
     });
+  });
+});
+
+/**
+ * The campaign's open polls, and the one boolean beside them.
+ *
+ * This slice is display plus a toggle. What is worth testing is that it stays
+ * that: the toggle writes one row through the same function every other campaign
+ * field goes through and touches no poll, and a poll the rule already likes is
+ * reported as *waiting* rather than acted on.
+ */
+async function opened(
+  pollId: string,
+  over: Partial<typeof schema.datePolls.$inferInsert> = {},
+) {
+  await db(env)
+    .insert(schema.datePolls)
+    .values({
+      id: pollId,
+      campaignId: "umbra",
+      winRule: "min_players",
+      winThreshold: 2,
+      status: "open",
+      discordChannelId: "chan-1",
+      discordMessageId: "msg-1",
+      ...over,
+    });
+  return pollId;
+}
+
+async function candidate(pollId: string, id: string, days: number, yeses: string[]) {
+  const startsAt = seconds + days * 86_400;
+  await db(env)
+    .insert(schema.pollDates)
+    .values({ id, pollId, startsAt, endsAt: startsAt + 4 * 3600 });
+  for (const userId of yeses) {
+    await person(userId);
+    await db(env).insert(schema.pollResponses).values({ pollDateId: id, userId });
+  }
+  return id;
+}
+
+/** Somebody on the roster, optionally running it. */
+async function member(userId: string, role: "gm" | "player" = "player") {
+  await person(userId);
+  await db(env)
+    .insert(schema.campaignMembers)
+    .values({ campaignId: "umbra", userId, role })
+    .onConflictDoNothing();
+}
+
+describe("the open polls", () => {
+  it("lists candidate dates with the yeses they have, and links to the post", async () => {
+    await planned();
+    await opened("p1");
+    await candidate("p1", "d1", 7, ["a", "b"]);
+    await candidate("p1", "d2", 14, ["a"]);
+
+    const { polls } = await campaignPolls(env, "umbra");
+
+    expect(polls).toHaveLength(1);
+    expect(polls[0]?.dates.map((date) => date.yes)).toEqual([2, 1]);
+    expect(polls[0]?.postUrl).toBe("https://discord.com/channels/g1/chan-1/msg-1");
+    expect(polls[0]?.required).toBe(2);
+  });
+
+  it("says what the rule proposes without being the thing that acts on it", async () => {
+    await planned();
+    await member("gm", "gm");
+    await opened("p1");
+    await candidate("p1", "d1", 7, ["a", "b", "gm"]);
+
+    const { polls } = await campaignPolls(env, "umbra");
+
+    expect(polls[0]?.proposed).toEqual(["d1"]);
+    // The poll is still open, and nothing on this page closed it. Canonise is an
+    // organiser-only button on the post; a page load must never be the thing
+    // that decides a date.
+    const open = await db(env).select().from(schema.datePolls).all();
+    expect(open.map((poll) => poll.status)).toEqual(["open"]);
+  });
+
+  it("is waiting on the organiser once the rule and the GM both agree", async () => {
+    await planned();
+    await member("gm", "gm");
+    await opened("p1");
+    await candidate("p1", "d1", 7, ["a", "b", "gm"]);
+
+    expect((await campaignPolls(env, "umbra")).polls[0]?.waitingOn).toBe("organiser");
+  });
+
+  it("is waiting on the GM when the threshold is met on a night they have not marked", async () => {
+    await planned();
+    await member("gm", "gm");
+    await opened("p1");
+    await candidate("p1", "d1", 7, ["a", "b", "c"]);
+
+    const poll = (await campaignPolls(env, "umbra")).polls[0];
+
+    // Three players past a threshold of two, on a night the GM has not said they
+    // can make. That is not a win, it is a scheduling accident — and a poll that
+    // closed itself on one would have to be reopened by hand.
+    expect(poll?.proposed).toEqual(["d1"]);
+    expect(poll?.dates[0]?.gmAvailable).toBe(false);
+    expect(poll?.waitingOn).toBe("gm");
+  });
+
+  it("is waiting on responses while the rule proposes nothing", async () => {
+    await planned();
+    await member("gm", "gm");
+    await opened("p1");
+    await candidate("p1", "d1", 7, ["a"]);
+
+    const poll = (await campaignPolls(env, "umbra")).polls[0];
+    expect(poll?.proposed).toEqual([]);
+    expect(poll?.waitingOn).toBe("responses");
+  });
+
+  it("says nobody was asked rather than that the GM said no", async () => {
+    await planned();
+    await opened("p1");
+    await candidate("p1", "d1", 7, ["a", "b"]);
+
+    // A campaign with no GM is a real state. Rendering `false` would read as a
+    // refusal by somebody who does not exist.
+    expect((await campaignPolls(env, "umbra")).polls[0]?.dates[0]?.gmAvailable).toBeNull();
+  });
+
+  it("lists no closed poll", async () => {
+    await planned();
+    await opened("p1", { status: "closed" });
+    await candidate("p1", "d1", 7, ["a", "b"]);
+
+    expect((await campaignPolls(env, "umbra")).polls).toEqual([]);
+  });
+});
+
+describe("the auto-resolve toggle", () => {
+  it("writes exactly one audit row and touches no open poll", async () => {
+    await planned();
+    await opened("p1");
+    await candidate("p1", "d1", 7, ["a", "b", "c"]);
+
+    const res = await send("PATCH", "/api/campaigns/umbra", { autoResolvePolls: true });
+
+    expect(res.status).toBe(200);
+    expect((await campaignPolls(env, "umbra")).autoResolvePolls).toBe(true);
+
+    // One row, through the same `updateCampaign` every other campaign field goes
+    // through. A second write path for one boolean is a second thing to review.
+    const rows = await audit();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ action: "campaign.update", targetId: "umbra" });
+
+    // Turning it on is a statement about the *next* click, not about the polls
+    // already open. Nothing here closed, canonised or re-decided one.
+    const polls = await db(env).select().from(schema.datePolls).all();
+    expect(polls.map((poll) => poll.status)).toEqual(["open"]);
+    const dates = await db(env).select().from(schema.pollDates).all();
+    expect(dates.map((date) => date.outcome)).toEqual(["open"]);
+  });
+
+  it("turns off again, and is read live rather than copied onto a poll", async () => {
+    await planned({ autoResolvePolls: 1 });
+    await opened("p1");
+
+    await send("PATCH", "/api/campaigns/umbra", { autoResolvePolls: false });
+
+    // An organiser who turns it off expects the next click to respect that, not
+    // the next poll. Nothing copies the flag onto `date_polls`, and this is what
+    // would fail if something started.
+    expect((await campaignPolls(env, "umbra")).autoResolvePolls).toBe(false);
+  });
+});
+
+describe("the polls over HTTP", () => {
+  it("answers with the flag and the list together", async () => {
+    await planned({ autoResolvePolls: 1 });
+    await opened("p1");
+    await candidate("p1", "d1", 7, ["a"]);
+
+    const res = await send("GET", "/api/campaigns/umbra/polls");
+    const body = (await res.json()) as Awaited<ReturnType<typeof campaignPolls>>;
+
+    expect(res.status).toBe(200);
+    expect(body.autoResolvePolls).toBe(true);
+    expect(body.polls[0]?.pollId).toBe("p1");
   });
 });
