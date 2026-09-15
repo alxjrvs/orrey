@@ -9,6 +9,7 @@ import { REMINDER_JOB } from "../src/attendance/reminders.ts";
 import { POST_SIGNUP_JOB } from "../src/game-days/post.ts";
 import {
   IllegalDayTransition,
+  LOCK_JOB,
   isSeating,
   sessionIdFor,
   transition,
@@ -121,6 +122,7 @@ describe("opening seating", () => {
     const armed = await jobs();
     expect(armed.map((job) => job.id)).toEqual([
       `${ASSUME_JOB}:${sessionId}`,
+      `${LOCK_JOB}:${DAY_ID}`,
       `${POST_SIGNUP_JOB}:${DAY_ID}`,
       `${JEOPARDY_JOB}:${sessionId}`,
       `${REMINDER_JOB}:${sessionId}:2`,
@@ -166,13 +168,11 @@ describe("opening seating", () => {
     expect(await audit()).toEqual([]);
   });
 
-  it("arms no lock job — that is the PR above this one", async () => {
+  it("puts the lock two days out, by default", async () => {
     await day();
     await transition(env, DAY_ID, "SEATING", "organiser");
 
-    // Arming a job kind `runJob` does not know is how a row retries into
-    // `last_error` until the handler lands.
-    expect((await jobs()).some((job) => job.kind === "game-day.lock")).toBe(false);
+    expect((await jobs()).find((job) => job.kind === LOCK_JOB)?.runAt).toBe(START - 48 * 3600);
   });
 
   it("does not write a second set of jobs on a replay", async () => {

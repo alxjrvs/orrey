@@ -33,6 +33,15 @@ export const SETTING_KEYS = {
   reminderStepsHours: "reminder.steps_hours",
   /** How long a date poll takes answers for, in hours. */
   pollWindowHours: "poll.window_hours",
+  /**
+   * How long before a game day starts its table settles, in hours.
+   *
+   * Long enough that whoever is running it can plan for the people who are
+   * actually coming, short enough that somebody deciding on the day before is
+   * not too late. Forty-eight is the compromise; the organiser can lock sooner
+   * by hand, and nothing unlocks.
+   */
+  gameDayLockLeadHours: "gameday.lock_lead_hours",
 } as const;
 
 /** Used when the setting has not been written. Stated here, next to the key. */
@@ -42,6 +51,7 @@ export const SETTING_DEFAULTS = {
   [SETTING_KEYS.jeopardyLeadHours]: 24,
   [SETTING_KEYS.reminderStepsHours]: [72, 24, 2],
   [SETTING_KEYS.pollWindowHours]: 72,
+  [SETTING_KEYS.gameDayLockLeadHours]: 48,
   [SETTING_KEYS.timezone]: "Europe/London",
 } as const;
 
