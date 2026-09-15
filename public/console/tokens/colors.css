@@ -1,0 +1,99 @@
+:root{
+  /* --- base: Discord-weight greys. Lighter and warmer than a true near-black. -- */
+  --slate-1000:#1e1f22;
+  --slate-950:#2b2d31;
+  --slate-900:#313338;
+  --slate-850:#3a3d44;
+  --slate-800:#383a40;
+  --slate-750:#3f4147;
+  --slate-700:#4e5058;
+  --slate-500:#949ba4;
+  --slate-400:#b5bac1;
+  --slate-200:#dbdee1;
+  --slate-100:#f2f3f5;
+
+  /* --- signal: the one accent. Discord blurple. ------------------------ */
+  --signal-600:#4752c4;
+  --signal-500:#5865f2;
+  --signal-400:#7983f5;
+  --signal-100:#3b3f66;
+
+  /* --- semantic hues (status only, never decoration) ------------------- */
+  --green-500:#23a559;
+  --green-300:#6fd694;
+  --green-900:#2f5c41;
+  --green-950:#2f3b36;
+  --amber-500:#f0b232;
+  --amber-300:#f5c463;
+  --amber-900:#5e4a22;
+  --amber-950:#3c3930;
+  --rust-500:#f23f43;
+  --rust-300:#f58e90;
+  --rust-900:#5e3133;
+  --rust-950:#3c3134;
+
+  /* --- campaign identity: assigned per campaign, never reused as UI ---- */
+  --campaign-1:#eb459e;
+  --campaign-2:#3498db;
+  --campaign-3:#9b59b6;
+  --campaign-4:#1abc9c;
+  --campaign-5:#f1c40f;
+  --campaign-idle:#80848e;
+
+  /* --- surfaces: chrome sits darker than the page, as in Discord ------- */
+  --surface-page:var(--slate-900);
+  --surface-chrome:var(--slate-950);
+  --surface-raised:var(--slate-850);
+  --surface-sunken:var(--slate-1000);
+  --surface-inset:var(--slate-800);
+
+  /* --- text ------------------------------------------------------------ */
+  --text-primary:var(--slate-100);
+  --text-secondary:var(--slate-400);
+  --text-muted:var(--slate-500);
+  --text-inverse:#ffffff;
+  --text-accent:var(--signal-400);
+  --text-link:var(--signal-400);
+  --text-link-hover:#98a0f7;
+
+  /* --- lines: two weights, that is the whole system -------------------- */
+  --line-structural:var(--slate-750);
+  --line-hair:var(--slate-800);
+  --line-strong:var(--slate-700);
+
+  /* --- state ----------------------------------------------------------- */
+  --state-in:var(--green-500);
+  --state-in-text:var(--green-300);
+  --state-in-line:var(--green-900);
+  --state-in-bg:var(--green-950);
+  --state-maybe:var(--amber-500);
+  --state-maybe-text:var(--amber-300);
+  --state-maybe-line:var(--amber-900);
+  --state-maybe-bg:var(--amber-950);
+  --state-out:var(--rust-500);
+  --state-out-text:var(--rust-300);
+  --state-out-line:var(--rust-900);
+  --state-out-bg:var(--rust-950);
+  --state-silent:var(--slate-500);
+  --state-silent-bg:var(--slate-800);
+
+  /* --- interaction ----------------------------------------------------- */
+  --action-bg:var(--signal-500);
+  --action-bg-hover:var(--signal-400);
+  --action-bg-active:var(--signal-600);
+  --action-ink:#ffffff;
+  --focus-ring:var(--signal-400);
+
+  /* --- discord surface (Discord's own palette, not Orrey's) ------------ */
+  --discord-bg:#313338;
+  --discord-bg-alt:#2b2d31;
+  --discord-embed:#2b2d31;
+  --discord-text:#dbdee1;
+  --discord-muted:#949ba4;
+  --discord-blurple:#5865f2;
+  --discord-blurple-hover:#4752c4;
+  --discord-grey-btn:#4e5058;
+  --discord-green:#248046;
+  --discord-red:#da373c;
+  --discord-link:#00a8fc;
+}

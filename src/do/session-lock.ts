@@ -1,9 +1,11 @@
 import { DurableObject } from "cloudflare:workers";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
 import { rememberUser } from "../db/users.ts";
 import { attendanceRows } from "../attendance/rows.ts";
+import { crossesThreshold, quorumOf } from "../attendance/quorum.ts";
+import { loadProjectionTarget } from "../projection/target.ts";
 import type { AttendanceRow } from "../attendance/render.ts";
 import type { InteractionUser } from "../discord/types.ts";
 
@@ -40,7 +42,7 @@ export class SessionLock extends DurableObject<Env> {
           set: { intent, updatedAt: sql`(unixepoch())` },
         });
 
-      return attendanceRows(this.env, sessionId);
+      return this.settle(sessionId);
     });
   }
 
@@ -70,7 +72,47 @@ export class SessionLock extends DurableObject<Env> {
           set: { note: cleaned },
         });
 
-      return attendanceRows(this.env, sessionId);
+      return this.settle(sessionId);
+    });
+  }
+
+  /**
+   * Flip one person's attendance, and say it was a person who decided.
+   *
+   * Behind the same lock as everything else that touches this session's rows: an
+   * organiser tapping four toggles quickly is four read-modify-writes, and each
+   * one has to render the register the previous one left.
+   */
+  async toggleAttended({
+    sessionId,
+    userId,
+  }: {
+    sessionId: string;
+    userId: string;
+  }): Promise<void> {
+    return this.serialise(async () => {
+      const current = await db(this.env)
+        .select({ attended: schema.attendance.attended })
+        .from(schema.attendance)
+        .where(
+          and(
+            eq(schema.attendance.sessionId, sessionId),
+            eq(schema.attendance.userId, userId),
+          ),
+        )
+        .get();
+
+      const attended = current?.attended === 1 ? 0 : 1;
+
+      await db(this.env)
+        .insert(schema.attendance)
+        .values({ sessionId, userId, attended, attendedSource: "gm" })
+        .onConflictDoUpdate({
+          target: [schema.attendance.sessionId, schema.attendance.userId],
+          // `gm` is the point: it is what stops a re-run of the assume job
+          // putting Orrey's guess back over somebody's answer.
+          set: { attended, attendedSource: "gm" },
+        });
     });
   }
 
@@ -79,7 +121,58 @@ export class SessionLock extends DurableObject<Env> {
    * clicks reads a settled state rather than a half-written one.
    */
   async readIntents(sessionId: string): Promise<AttendanceRow[]> {
-    return this.serialise(() => attendanceRows(this.env, sessionId));
+    return this.serialise(() => this.settle(sessionId));
+  }
+
+  /**
+   * Read the rows back, and confirm the session if this click is the one that
+   * crossed the threshold.
+   *
+   * It happens here, inside the lock, because that is the only place where "the
+   * count after my write" is a real number rather than a guess — six people
+   * clicking In at once must produce one crossing, not six.
+   *
+   * Dropping back below afterwards does **not** un-confirm. #28 is explicit:
+   * whether a confirmed session is still on once somebody drops out is the
+   * organiser's call, so the post says what happened and Orrey decides nothing.
+   */
+  private async settle(sessionId: string): Promise<AttendanceRow[]> {
+    const rows = await attendanceRows(this.env, sessionId);
+
+    const target = await loadProjectionTarget(this.env, sessionId);
+    if (!target) return rows;
+
+    if (crossesThreshold(quorumOf(target, rows), target)) {
+      const d = db(this.env);
+      await d.batch([
+        d
+          .update(schema.sessions)
+          .set({ state: "CONFIRMED", updatedAt: sql`(unixepoch())` })
+          .where(eq(schema.sessions.id, sessionId)),
+
+        // The notice is a job rather than a post made here, and that is a
+        // deliberate reading of #28. A click has three seconds to answer, and
+        // the thing that must happen inside them is the rewrite of its own
+        // message — which it does. Spending them on a second Discord call to
+        // post the notice risks the response Discord is actually waiting for.
+        //
+        // So: armed in the same batch as the confirmation, posted by the next
+        // minute's drain, and inspectable and re-runnable in between like every
+        // other piece of time-shifted work in this repo.
+        d
+          .insert(schema.jobs)
+          .values({
+            id: `session.confirmed-notice:${sessionId}`,
+            kind: "session.confirmed-notice",
+            payload: { sessionId },
+            idempotencyKey: `session.confirmed-notice:${sessionId}`,
+            runAt: sql`(unixepoch())`,
+          })
+          .onConflictDoNothing(),
+      ]);
+    }
+
+    return rows;
   }
 
   /**

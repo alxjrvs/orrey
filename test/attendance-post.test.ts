@@ -61,6 +61,9 @@ beforeEach(async () => {
     return Response.json({ id: `msg-${posts.length}`, channel_id: "chan-1" });
   }) as typeof fetch;
 
+  // The post is guarded by a claim in `publications` now (#73), so a claim left
+  // by the previous case would stop the next one posting at all.
+  await env.DB.prepare("DELETE FROM publications").run();
   await env.DB.prepare("DELETE FROM attendance").run();
   await env.DB.prepare("DELETE FROM jobs").run();
   await env.DB.prepare("DELETE FROM sessions").run();
@@ -99,9 +102,18 @@ describe("rendering the post", () => {
     expect(await render(rows)()).toEqual(await render(rows)());
   });
 
-  it("says so plainly when nobody has answered", async () => {
+  it("says so plainly when there is nobody to have answered", async () => {
     expect((await render([])()).content).toContain("Nobody has said yet");
-    expect((await render([row("1", "Ada", null)])()).content).toContain("Nobody has said yet");
+  });
+
+  it("names the silence rather than calling it nothing", async () => {
+    // Phase 2 knows the roster, so a session where nobody has answered is not
+    // an empty post — it is a post that can say who has not answered. And it
+    // never reads as "out": silence is silence.
+    const content = (await render([row("1", "Ada", null)])()).content;
+    expect(content).toContain("**Not heard from (1)** — Ada");
+    expect(content).not.toContain("Nobody has said yet");
+    expect(content).not.toContain("Out");
   });
 
   it("shows a note beside the name that left it", async () => {

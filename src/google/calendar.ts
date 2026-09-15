@@ -2,6 +2,13 @@ import { eq, sql } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
 import { googleFingerprint, sessionTitle, type ProjectionTarget } from "../projection/target.ts";
+import {
+  find,
+  record,
+  retract,
+  standing,
+  type PublicationRef,
+} from "../projection/publications.ts";
 import { serviceAccountToken, type AccessToken } from "./auth.ts";
 import { eventIdFor } from "./event-id.ts";
 
@@ -73,6 +80,11 @@ export async function projectGoogleEvent(
   }
 }
 
+/** This session's entry in the ledger of what Orrey has put into the world. */
+function refFor(sessionId: string): PublicationRef {
+  return { surface: "google", kind: "event", targetId: sessionId };
+}
+
 async function upsert(env: Env, target: ProjectionTarget, eventId: string): Promise<void> {
   const { session } = target;
   const fingerprint = await googleFingerprint(target);
@@ -86,7 +98,17 @@ async function upsert(env: Env, target: ProjectionTarget, eventId: string): Prom
   // Unchanged since the last successful write: skip. Google's `updated` moves
   // on every write, and phase 7's return path has to tell Orrey's own echo from
   // a person's edit — so a pointless write is worse here than a wasted call.
-  if (link?.fingerprint === fingerprint) return;
+  //
+  // The *write* is skippable; the record of it is not. Every session linked
+  // before this table existed matches on its fingerprint and would never reach
+  // `record` below — so the ledger would stay empty for exactly the sessions
+  // that already exist, and a retraction after one of them is deleted would find
+  // nothing standing and leave the event on the calendar forever. Which is #73,
+  // unfixed, for the only sessions that have it.
+  if (link?.fingerprint === fingerprint) {
+    await ensureRecorded(env, session.id, eventId);
+    return;
+  }
 
   const body = eventBody(target, eventId, fingerprint);
 
@@ -101,6 +123,10 @@ async function upsert(env: Env, target: ProjectionTarget, eventId: string): Prom
       body,
     });
   }
+
+  // `calendar_links` cascades off `sessions`; the ledger does not. Both are
+  // written, and only one of them still exists after the session row goes.
+  await record(env, refFor(session.id), eventId);
 
   await db(env)
     .insert(schema.calendarLinks)
@@ -124,6 +150,8 @@ async function unproject(env: Env, target: ProjectionTarget, eventId: string): P
     // 404/410: already gone, which is the outcome asked for.
     if (!(error instanceof GoogleError && (error.status === 404 || error.status === 410))) throw error;
   }
+
+  await retract(env, refFor(target.session.id));
 
   await db(env)
     .delete(schema.calendarLinks)
@@ -196,4 +224,42 @@ function calendarId(env: Env): string {
 
 function isoOf(unixSeconds: number): string {
   return new Date(unixSeconds * 1000).toISOString();
+}
+
+/**
+ * The Google half of retracting without the session row. Google's id is derived
+ * from the session id, so this could be done from the id alone — but reading the
+ * ledger is what keeps the two surfaces answering the same question, and it is
+ * what stops Orrey issuing a DELETE for an event it never actually published.
+ */
+export async function unprojectOrphanedEvent(env: Env, sessionId: string): Promise<void> {
+  for (const row of await standing(env, sessionId)) {
+    if (row.surface !== "google" || !row.remoteId) continue;
+
+    try {
+      await googleFetch(env, `/calendars/${calendarId(env)}/events/${row.remoteId}`, {
+        method: "DELETE",
+      });
+    } catch (error) {
+      if (!(error instanceof GoogleError && (error.status === 404 || error.status === 410))) {
+        throw error;
+      }
+    }
+    await retract(env, { surface: "google", kind: "event", targetId: sessionId });
+  }
+}
+
+/**
+ * Backfill, run on the skip path: the ledger learns about an event that was
+ * published before there was a ledger to write it to. A read first, because the
+ * skip path is the common one and this must not turn every no-op projection into
+ * a write.
+ */
+async function ensureRecorded(env: Env, sessionId: string, eventId: string): Promise<void> {
+  const ref = refFor(sessionId);
+  const known = await find(env, ref);
+  if (known?.state === "published" && known.remoteId === eventId) return;
+  // A retraction is a decision, not a gap. Do not undo one by backfilling.
+  if (known?.state === "retracted") return;
+  await record(env, ref, eventId);
 }

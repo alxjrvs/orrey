@@ -6,6 +6,7 @@ import { seedStatements } from "../src/db/seed-sql.ts";
 import { clearTokenCache } from "../src/google/calendar.ts";
 import { eventIdFor } from "../src/google/event-id.ts";
 import { project } from "../src/queue/consumer.ts";
+import { find } from "../src/projection/publications.ts";
 
 /**
  * Google, scripted. The token exchange is answered like the real one, so the
@@ -110,6 +111,9 @@ beforeEach(async () => {
       : Response.json(next.body, { status: next.status });
   }) as typeof fetch;
 
+  // The ledger is designed to outlive the session row (#73), so the test has to
+  // say when it should not outlive the test.
+  await env.DB.prepare("DELETE FROM publications").run();
   await env.DB.prepare("DELETE FROM calendar_links").run();
   await env.DB.prepare("DELETE FROM jobs").run();
   await env.DB.prepare("DELETE FROM sessions").run();
@@ -231,5 +235,70 @@ describe("projecting a session to Google", () => {
   it("refuses to write when no calendar is configured", async () => {
     await expect(upsert(googleEnv({ GOOGLE_CALENDAR_ID: "" }))).rejects.toThrow(/GOOGLE_CALENDAR_ID/);
     expect(apiCalls()).toEqual([]);
+  });
+});
+
+describe("retracting without the session row", () => {
+  const ref = { surface: "google", kind: "event", targetId: SESSION_ID } as const;
+
+  it("deletes the event Orrey published for a session that no longer exists", async () => {
+    reply(200, {});
+    await upsert();
+
+    // `calendar_links` cascades away with the session. The ledger does not, and
+    // this is the case it exists for: deleting is exactly when the row goes.
+    await env.DB.prepare("DELETE FROM sessions WHERE id = ?").bind(SESSION_ID).run();
+    calls = [];
+    reply(204);
+
+    await project({ kind: "gcal.delete", sessionId: SESSION_ID }, googleEnv());
+
+    const eventId = await eventIdFor(SESSION_ID);
+    expect(apiCalls()).toMatchObject([
+      { method: "DELETE", url: `https://www.googleapis.com/calendar/v3/calendars/${CALENDAR}/events/${eventId}` },
+    ]);
+    expect(await find(env, ref)).toMatchObject({ state: "retracted", remoteId: eventId });
+  });
+
+  it("issues no DELETE for a session it never published", async () => {
+    await env.DB.prepare("DELETE FROM sessions WHERE id = ?").bind(SESSION_ID).run();
+    calls = [];
+
+    await project({ kind: "gcal.delete", sessionId: SESSION_ID }, googleEnv());
+
+    expect(apiCalls()).toEqual([]);
+  });
+});
+
+describe("the ledger, for events that predate it", () => {
+  const ref = { surface: "google", kind: "event", targetId: SESSION_ID } as const;
+
+  it("records a session that was linked before there was a ledger", async () => {
+    const eventId = await eventIdFor(SESSION_ID);
+    reply(200, {});
+    await upsert();
+
+    // Exactly the state of every session at deploy time: a `calendar_links` row
+    // with a current fingerprint, and no ledger row at all.
+    await env.DB.prepare("DELETE FROM publications").run();
+    calls = [];
+
+    await upsert();
+
+    // The write is skippable. The record is not — without it nothing is
+    // standing, and a retraction after the session row goes would leave the
+    // event on the calendar forever.
+    expect(apiCalls()).toEqual([]);
+    expect(await find(env, ref)).toMatchObject({ state: "published", remoteId: eventId });
+  });
+
+  it("does not resurrect a retraction as a backfill", async () => {
+    reply(200, {});
+    await upsert();
+    reply(204);
+    await project({ kind: "gcal.delete", sessionId: SESSION_ID }, googleEnv());
+
+    // A retraction is a decision, not a gap in the ledger.
+    expect(await find(env, ref)).toMatchObject({ state: "retracted" });
   });
 });

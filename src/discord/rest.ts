@@ -103,6 +103,26 @@ function retryAfterMs(response: Response, fromBody: number | undefined): number 
 }
 
 /**
+ * One guild member, read with the **bot** token. This is where roles come from,
+ * and the reason the console's OAuth scope can stay `identify`: the user's own
+ * token is never asked what they are allowed to do.
+ */
+export interface GuildMember {
+  roles: string[];
+  user?: { id: string };
+}
+
+export function getGuildMember(env: BotAuth, guildId: string, userId: string) {
+  return discordFetch<GuildMember>(env, `/guilds/${guildId}/members/${userId}`);
+}
+
+/** 404 / 10007 — not in the guild. Not an error; an answer. */
+export function isUnknownMember(error: unknown): boolean {
+  const failure = asDiscordFailure(error);
+  return failure !== undefined && (failure.code === 10007 || failure.status === 404);
+}
+
+/**
  * Scheduled events are the only Discord objects Orrey reconciles, so these are
  * the only Discord writes that ever happen twice for the same thing.
  */
@@ -110,6 +130,16 @@ export interface ScheduledEvent {
   id: string;
   name: string;
   status: number;
+  /** Carries Orrey's marker, which is how an event is recognised as a session's. */
+  description?: string | null;
+}
+
+/**
+ * Every scheduled event in the guild. Bounded by Discord's own cap of 100 per
+ * guild, which is what makes a scan affordable enough to do before creating.
+ */
+export function listScheduledEvents(env: BotAuth, guildId: string) {
+  return discordFetch<ScheduledEvent[]>(env, `/guilds/${guildId}/scheduled-events`);
 }
 
 export function createScheduledEvent(env: BotAuth, guildId: string, body: unknown) {
@@ -135,6 +165,57 @@ export function deleteScheduledEvent(env: BotAuth, guildId: string, eventId: str
   return discordFetch<void>(env, `/guilds/${guildId}/scheduled-events/${eventId}`, {
     method: "DELETE",
   });
+}
+
+/**
+ * A thread hung off a message. Discord allows exactly one per message, so a
+ * second attempt answers `160004` rather than making another — which is the
+ * closest thing to idempotency this endpoint offers.
+ *
+ * `auto_archive_duration` is minutes, and the thread archiving itself is the
+ * point: Orrey never unarchives one and never edits anything in it.
+ */
+export function startThreadFromMessage(
+  env: BotAuth,
+  channelId: string,
+  messageId: string,
+  body: { name: string; auto_archive_duration: number },
+) {
+  return discordFetch<{ id: string }>(
+    env,
+    `/channels/${channelId}/messages/${messageId}/threads`,
+    { method: "POST", body },
+  );
+}
+
+/** 160004 — this message already has a thread. */
+export function isThreadAlreadyStarted(error: unknown): boolean {
+  return asDiscordFailure(error)?.code === 160004;
+}
+
+/**
+ * Open (or re-open) the DM channel with one person. Discord returns the same
+ * channel every time, so this is safe to call before every DM and there is
+ * nothing to cache — the channel id is not the thing that can go wrong.
+ *
+ * What can go wrong is that they do not accept DMs from the bot, and **there is
+ * no way to ask**. This call succeeds regardless; the refusal arrives on the
+ * message.
+ */
+export function openDm(env: BotAuth, userId: string) {
+  return discordFetch<{ id: string }>(env, "/users/@me/channels", {
+    method: "POST",
+    body: { recipient_id: userId },
+  });
+}
+
+/**
+ * 50007 — cannot send messages to this user. The only way to learn somebody's
+ * DMs were never open to Orrey, and it arrives after the attempt rather than
+ * before it. Treated as permanent: it is a setting they chose, not a blip.
+ */
+export function isClosedDm(error: unknown): boolean {
+  return asDiscordFailure(error)?.code === 50007;
 }
 
 /** Fire-and-forget. Record the id if you want it; never reconcile it. */

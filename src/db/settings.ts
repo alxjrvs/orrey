@@ -13,6 +13,33 @@ export const SETTING_KEYS = {
   schedulingChannelId: "discord.scheduling_channel_id",
   /** IANA zone for recurrence and reminders. */
   timezone: "timezone",
+  /**
+   * The role that may administer. Read with the bot token against the guild
+   * member endpoint — never from the user's own OAuth token, which is why the
+   * console never asks for the `guilds` scope.
+   */
+  organiserRoleId: "discord.organiser_role_id",
+  /**
+   * How many sessions ahead the materialiser keeps in D1 and on Google. The
+   * Discord horizon is separate and much shorter — two per campaign, because
+   * scheduled events are capped per guild and treated as disposable.
+   */
+  horizonSessions: "horizon.sessions",
+  /** How long before a session starts its attendance post goes up, in days. */
+  attendanceLeadDays: "attendance.lead_days",
+  /** How long before a session starts Orrey asks whether it still runs, in hours. */
+  jeopardyLeadHours: "jeopardy.lead_hours",
+  /** How many hours before a session each reminder goes out. Descending. */
+  reminderStepsHours: "reminder.steps_hours",
+} as const;
+
+/** Used when the setting has not been written. Stated here, next to the key. */
+export const SETTING_DEFAULTS = {
+  [SETTING_KEYS.horizonSessions]: 4,
+  [SETTING_KEYS.attendanceLeadDays]: 10,
+  [SETTING_KEYS.jeopardyLeadHours]: 24,
+  [SETTING_KEYS.reminderStepsHours]: [72, 24, 2],
+  [SETTING_KEYS.timezone]: "Europe/London",
 } as const;
 
 export type SettingKey = (typeof SETTING_KEYS)[keyof typeof SETTING_KEYS] | (string & {});
@@ -37,4 +64,9 @@ export async function requireGuildId(env: Env): Promise<string> {
   const guildId = await getSetting<string>(env, SETTING_KEYS.guildId);
   if (!guildId) throw new Error(`setting ${SETTING_KEYS.guildId} is not seeded — run the cutover`);
   return guildId;
+}
+
+/** A setting with its default, for the keys that have one. */
+export async function settingOr<T>(env: Env, key: SettingKey, fallback: T): Promise<T> {
+  return (await getSetting<T>(env, key)) ?? fallback;
 }

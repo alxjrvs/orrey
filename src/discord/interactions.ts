@@ -1,8 +1,13 @@
 import type { Env } from "../env.ts";
 import { decodeCustomId, encodeCustomId } from "./custom-id.ts";
 import { deleteUserData, describeReceipt } from "../privacy/delete.ts";
-import { renderAttendancePost } from "../attendance/render.ts";
+import { correctionPost, renderAttendancePost } from "../attendance/render.ts";
+import { registerRows } from "../attendance/assume.ts";
+import { isGm } from "../campaigns/roster.ts";
 import { loadProjectionTarget } from "../projection/target.ts";
+import { renderUpcoming, upcomingWithTotal } from "../commands/upcoming.ts";
+import { renderWhosIn, sessionChoices, whosIn } from "../commands/whos-in.ts";
+import { loginLink } from "../console/link.ts";
 import type { SmokeTally } from "../do/session-lock.ts";
 import {
   ButtonStyle,
@@ -60,10 +65,7 @@ export async function handleInteraction(
       return handleCommand(interaction, env, ctx);
 
     case InteractionType.APPLICATION_COMMAND_AUTOCOMPLETE:
-      return {
-        type: InteractionResponseType.APPLICATION_COMMAND_AUTOCOMPLETE_RESULT,
-        data: { choices: [] },
-      };
+      return handleAutocomplete(interaction, env);
 
     case InteractionType.MESSAGE_COMPONENT:
       return handleComponent(interaction, env, ctx);
@@ -78,31 +80,131 @@ export async function handleInteraction(
 
 async function handleCommand(
   interaction: Interaction,
-  _env: Env,
+  env: Env,
   ctx: InteractionContext,
 ): Promise<Json> {
   switch (interaction.data?.name) {
     case "upcoming":
-      return ephemeral("Nothing scheduled yet — Orrey is still being built.");
+      return upcoming(interaction, env);
     case "reschedule":
       return ephemeral("Date polls arrive in phase 4.");
     case "whos-in":
-      return ephemeral("Rosters arrive in phase 2.");
+      return whosInCommand(interaction, env);
     case "console":
-      return console_(ctx);
+      return console_(interaction, env, ctx);
     default:
       return ephemeral("Unknown command.");
   }
 }
 
 /**
- * Until the console exists (phase 2), `/console` is where the two things
- * Discord's terms require live: the privacy policy, and a way out.
+/**
+ * The agenda. Ephemeral, read from D1 at the moment it is asked, and ordered
+ * across campaigns rather than grouped by them — one list is the point.
+ *
+ * It answers the caller and nobody else, so it needs no roster check beyond the
+ * one the query already does: a person sees the sessions of the campaigns they
+ * are a member of, which is exactly the set `campaign_members` describes.
  */
-function console_(ctx: InteractionContext): Json {
+async function upcoming(interaction: Interaction, env: Env): Promise<Json> {
+  const actor = actorOf(interaction);
+  if (!actor) return ephemeral("Orrey could not tell who asked.");
+
+  const asOf = new Date();
+  const { entries, total } = await upcomingWithTotal(env, actor.id, asOf);
+  return ephemeral(renderUpcoming(entries, asOf, total));
+}
+
+/**
+ * The authoritative roster, for the named session or the caller's next one.
+ *
+ * Read from D1 at the moment it is asked and stamped with when that was — this
+ * command exists because an attendance post is a snapshot, so it must not be one
+ * itself. A session on a campaign the caller is not a member of is refused: the
+ * autocomplete offering only their own campaigns is a convenience, not the check.
+ */
+async function whosInCommand(interaction: Interaction, env: Env): Promise<Json> {
+  const actor = actorOf(interaction);
+  if (!actor) return ephemeral("Orrey could not tell who asked.");
+
+  const asOf = new Date();
+  const answer = await whosIn(env, actor.id, optionOf(interaction, "event"), asOf);
+
+  switch (answer) {
+    case "no-session":
+      return ephemeral(
+        "Nothing to show. Name a session, or wait until one of your campaigns has one scheduled.",
+      );
+    case "not-yours":
+      return ephemeral("That session is not on a campaign you are on.");
+    default:
+      return ephemeral(renderWhosIn(answer, asOf));
+  }
+}
+
+/**
+ * `/whos-in`'s `event` option was declared with `autocomplete: true` at cutover
+ * and has answered `{ choices: [] }` ever since. It resolves against upcoming
+ * sessions on the caller's own rosters, capped at Discord's 25 — one indexed
+ * scan, because an autocomplete has three seconds.
+ */
+async function handleAutocomplete(interaction: Interaction, env: Env): Promise<Json> {
+  const actor = actorOf(interaction);
+  const focused = interaction.data?.options?.find((option) => option.focused);
+
+  const choices =
+    actor && focused?.name === "event"
+      ? await sessionChoices(env, actor.id, String(focused.value ?? ""), new Date())
+      : [];
+
+  return {
+    type: InteractionResponseType.APPLICATION_COMMAND_AUTOCOMPLETE_RESULT,
+    data: { choices },
+  };
+}
+
+function optionOf(interaction: Interaction, name: string): string | undefined {
+  const value = interaction.data?.options?.find((option) => option.name === name)?.value;
+  return typeof value === "string" && value !== "" ? value : undefined;
+}
+
+/**
+ * A login link, and the two things Discord's terms require: the privacy policy
+ * and a way out.
+ *
+ * The link carries a five-minute signed token, so the redirect to Discord's
+ * authorize endpoint only happens for somebody who asked for it here, just now.
+ * The response is ephemeral, so the link is seen by the person who ran the
+ * command and nobody else.
+ *
+ * The **Delete my data** button stays exactly where it is. It is the only way
+ * out Orrey offers until the console has a page of its own for it, which is
+ * phase 6 — losing it here in the move would quietly drop a term of service.
+ */
+async function console_(
+  interaction: Interaction,
+  env: Env,
+  ctx: InteractionContext,
+): Promise<Json> {
+  const actor = actorOf(interaction);
+  if (!actor) return ephemeral("Orrey could not tell who asked.");
+
+  // A deploy without `CONSOLE_SESSION_SECRET` cannot mint a link. That must not
+  // cost the person the privacy policy and the way out, and it must never reach
+  // them as "interaction failed" — so the link line is what goes missing, and it
+  // says why.
+  let linkLine: string;
+  try {
+    const link = await loginLink(env, ctx.origin, actor.id, new Date());
+    linkLine = `**The Orrey console** — <${link}>\n-# That link is yours and lasts five minutes. Run \`/console\` again for another.`;
+  } catch (error) {
+    console.error("could not mint a console link", error);
+    linkLine = "**The Orrey console** — not available on this deploy.";
+  }
+
   return ephemeral(
     [
-      "The console arrives in phase 2. Until then:",
+      linkLine,
       "",
       `**What Orrey knows about you** — <${ctx.origin}/privacy>`,
     ].join("\n"),
@@ -127,6 +229,8 @@ async function handleComponent(
   switch (id.action) {
     case "attend":
       return handleAttend(interaction, env, id.arg, id.target);
+    case "attended":
+      return handleAttended(interaction, env, id.arg, id.target);
     case "ping":
       return handlePing(interaction, env, id.target ?? "default");
     case "privacy":
@@ -180,9 +284,52 @@ async function handleAttend(
       return retiredPost();
   }
 
+  // Re-read: the click may have been the one that crossed quorum, and the
+  // session it confirmed is the session this response has to render. Rendering
+  // the target we loaded a moment ago would show the crossing click everything
+  // except the thing it just did.
+  const settled = (await loadProjectionTarget(env, sessionId)) ?? target;
+
   return {
     type: InteractionResponseType.UPDATE_MESSAGE,
-    data: renderAttendancePost({ target, rows, asOf: new Date() }),
+    data: renderAttendancePost({ target: settled, rows, asOf: new Date() }),
+  };
+}
+
+/**
+ * One toggle on the correction post. The organiser's alone: the register is what
+ * flake memory reads, and a register anybody can edit is a register nobody can
+ * rely on.
+ *
+ * Everyone else gets an ephemeral sentence rather than a silent no-op, because a
+ * button that appears to do nothing reads as broken rather than as forbidden.
+ */
+async function handleAttended(
+  interaction: Interaction,
+  env: Env,
+  userId: string | undefined,
+  sessionId: string | undefined,
+): Promise<Json> {
+  if (!userId || !sessionId) return retiredPost();
+
+  const actor = actorOf(interaction);
+  if (!actor) return ephemeral("Orrey could not tell who clicked that.");
+
+  const target = await loadProjectionTarget(env, sessionId);
+  if (!target) return retiredPost();
+
+  if (!target.campaign || !(await isGm(env, target.campaign.id, actor.id))) {
+    return ephemeral("Only whoever ran the session can correct the register.");
+  }
+
+  const lock = env.SESSION_LOCK.get(env.SESSION_LOCK.idFromName(sessionId));
+  await lock.toggleAttended({ sessionId, userId });
+
+  // Rendered from what was just written, and returned as this click's own
+  // response — the one rewrite send-only allows.
+  return {
+    type: InteractionResponseType.UPDATE_MESSAGE,
+    data: correctionPost(target, await registerRows(env, sessionId), new Date()),
   };
 }
 
@@ -243,10 +390,11 @@ async function handleModal(interaction: Interaction, env: Env): Promise<Json> {
 
   const lock = env.SESSION_LOCK.get(env.SESSION_LOCK.idFromName(id.target));
   const rows = await lock.setNote({ sessionId: id.target, actor, note });
+  const settled = (await loadProjectionTarget(env, id.target)) ?? target;
 
   return {
     type: InteractionResponseType.UPDATE_MESSAGE,
-    data: renderAttendancePost({ target, rows, asOf: new Date() }),
+    data: renderAttendancePost({ target: settled, rows, asOf: new Date() }),
   };
 }
 

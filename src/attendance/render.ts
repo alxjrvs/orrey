@@ -1,6 +1,7 @@
 import { encodeCustomId } from "../discord/custom-id.ts";
 import { ButtonStyle, ComponentType } from "../discord/types.ts";
 import { sessionTitle, type ProjectionTarget } from "../projection/target.ts";
+import { quorumLine, quorumOf } from "./quorum.ts";
 
 /**
  * The attendance post, rendered from D1 and nothing else.
@@ -30,7 +31,12 @@ export interface AttendanceView {
 export interface MessagePayload {
   content: string;
   components: Record<string, unknown>[];
-  allowed_mentions: { parse: never[]; roles: string[] };
+  /**
+   * `parse: []` is the important half: it turns off @everyone, @here and every
+   * role mention Orrey did not name on purpose. `roles` and `users` are then the
+   * exhaustive list of what may actually fire.
+   */
+  allowed_mentions: { parse: never[]; roles: string[]; users?: string[] };
 }
 
 export function renderAttendancePost({ target, rows, asOf }: AttendanceView): MessagePayload {
@@ -92,7 +98,27 @@ function compose(
     lines.push(`**Notes** — ${unanswered.map((row) => name(row, detail)).join(", ")}`);
   }
 
-  if (rows.every((row) => row.intent === null) && !showNotes) lines.push("*Nobody has said yet.*");
+  // The people on the roster who have not answered. This is the half of the
+  // question "four in" cannot answer on its own, and it is deliberately not a
+  // tally of "out": silence is silence. Anyone whose note is already above is
+  // not repeated here — they have been heard from, just not answered.
+  // Anyone with no intent who is not already named in the Notes line *of this
+  // pass*. The truncation passes drop Notes, and somebody who left a note but no
+  // answer would then appear nowhere at all — which also made the count smaller
+  // than the roster and turned a shortened post into a quietly wrong one.
+  const silent = rows.filter((row) => row.intent === null && !(showNotes && row.note));
+  if (silent.length > 0) {
+    const who = detail.names ? ` — ${silent.map((row) => name(row, detail)).join(", ")}` : "";
+    lines.push(`**Not heard from (${silent.length})**${who}`);
+  }
+
+  if (rows.length === 0) lines.push("*Nobody has said yet.*");
+
+  // Does it run. Last, because it is the answer and the tallies above are the
+  // working — and it survives every truncation pass, because a post shortened
+  // past the one line that answers the question is a post worth nothing.
+  const quorum = quorumLine(quorumOf(target, rows));
+  if (quorum) lines.push("", quorum);
 
   lines.push("", `-# As of <t:${unix(asOf)}:R>. Refresh for a fresh reading.`);
   return lines.join("\n");
@@ -155,4 +181,222 @@ export function escapeMarkdown(text: string): string {
 
 function unix(at: Date): number {
   return Math.floor(at.getTime() / 1000);
+}
+
+/**
+ * The confirmed notice. Short on purpose: the attendance post above it in the
+ * thread carries the detail, and this exists to put the answer in front of
+ * people who are not looking at a post they have already read.
+ *
+ * It carries no buttons. Every button in this repo sits on the thing it
+ * concerns, and the thing this concerns is the attendance post.
+ */
+export function confirmedNotice(target: ProjectionTarget): MessagePayload {
+  const { session, campaign } = target;
+  return {
+    content: [
+      `**It's on.** ${escapeMarkdown(sessionTitle(target))}`,
+      `<t:${session.startsAt}:F>${session.location ? ` — ${escapeMarkdown(session.location)}` : ""}`,
+    ].join("\n"),
+    components: [],
+    allowed_mentions: { parse: [], roles: campaign?.discordRoleId ? [campaign.discordRoleId] : [] },
+  };
+}
+
+
+/**
+ * The jeopardy notice. A new message in the thread, with its own as-of line,
+ * posted when the clock found the session short a day out.
+ *
+ * It names who has not answered, because "we are two short" is a fact nobody can
+ * act on and "we are two short and it is these three who have not said" is a
+ * fact three people can. It mentions the roster role so the people who can fix it
+ * see it, and it names the GM because the decision is theirs.
+ *
+ * Phase 4 gives it a *Suggest another day* button. Until then it says who to
+ * talk to, which is the honest version of the same thing.
+ */
+export function jeopardyNotice({
+  target,
+  rows,
+  gmId,
+  required,
+  asOf,
+}: {
+  target: ProjectionTarget;
+  rows: AttendanceRow[];
+  gmId: string | undefined;
+  required: number;
+  asOf: Date;
+}): MessagePayload {
+  const { session, campaign } = target;
+  const saidIn = rows.filter((row) => row.intent === "in").length;
+  const silent = rows.filter((row) => row.intent === null);
+
+  const lines = [
+    `**Is this one happening?** ${escapeMarkdown(sessionTitle(target))}`,
+    `<t:${session.startsAt}:F> — ${saidIn} of ${required} in.`,
+  ];
+
+  if (silent.length > 0) {
+    lines.push(
+      "",
+      `Not heard from: ${silent.map((row) => `<@${row.userId}>`).join(", ")}`,
+    );
+  }
+
+  lines.push(
+    "",
+    gmId
+      ? `<@${gmId}> decides whether it runs. Answering on the post above is what changes it.`
+      : "Whoever is running it decides. Answering on the post above is what changes it.",
+    `-# As of <t:${Math.floor(asOf.getTime() / 1000)}:R>.`,
+  );
+
+  return {
+    content: lines.join("\n"),
+    components: [],
+    // The roster, and the people named. Nothing else — a notice that could fire
+    // @everyone because somebody's display name looked like one is a notice
+    // nobody trusts.
+    allowed_mentions: {
+      parse: [],
+      roles: campaign?.discordRoleId ? [campaign.discordRoleId] : [],
+      // Deduplicated: a GM who has not answered is in both lists, and Discord
+      // caps this at 100 ids — a list that repeats people runs out sooner than
+      // the number of people in it suggests.
+      users: [...new Set([...silent.map((row) => row.userId), ...(gmId ? [gmId] : [])])],
+    },
+  };
+}
+
+/**
+ * The nudge, as a DM. It carries no buttons, because a DM is not the attendance
+ * post and every button in this repo sits on the thing it concerns — so it says
+ * where to answer instead, and the link takes them there.
+ */
+export function remindDm(target: ProjectionTarget, hours: number): MessagePayload {
+  const { session, campaign } = target;
+  const where =
+    campaign?.discordChannelId && session.discordMessageId
+      ? `https://discord.com/channels/${GUILD_PLACEHOLDER}/${session.threadId ?? campaign.discordChannelId}/${session.discordMessageId}`
+      : undefined;
+
+  return {
+    content: [
+      `**${escapeMarkdown(sessionTitle(target))}** — ${inWords(hours)}.`,
+      `<t:${session.startsAt}:F>. You have not said whether you are coming.`,
+      ...(where ? [where] : ["Answer on the attendance post."]),
+    ].join("\n"),
+    components: [],
+    allowed_mentions: { parse: [], roles: [] },
+  };
+}
+
+/** One row of the register, as the correction post shows it. */
+export interface RegisterRow {
+  userId: string;
+  name: string;
+  attended: boolean;
+  /** Whether a person said so, as opposed to Orrey having assumed it. */
+  corrected: boolean;
+}
+
+/**
+ * The correction post: the register, and one toggle per person.
+ *
+ * Orrey assumed this from what people said, and the assumption is wrong often
+ * enough to be worth a post — somebody says in and does not come, somebody turns
+ * up who never clicked. The toggles are the organiser's, and each click rewrites
+ * this message as its own response, which is the one rewrite send-only allows.
+ *
+ * Discord gives five buttons a row and five rows, so twenty-five people fit. A
+ * bigger table than that says so rather than silently dropping the rest — the
+ * whole point of this post is that the register is complete.
+ */
+const MAX_TOGGLES = 25;
+
+export function correctionPost(
+  target: ProjectionTarget,
+  register: RegisterRow[],
+  asOf: Date,
+): MessagePayload {
+  const shown = register.slice(0, MAX_TOGGLES);
+  const dropped = register.length - shown.length;
+
+  const came = register.filter((row) => row.attended);
+  const lines = [
+    `**Who came?** ${escapeMarkdown(sessionTitle(target))}`,
+    `${came.length} of ${register.length}${came.length > 0 ? ` — ${came.map((row) => escapeMarkdown(row.name)).join(", ")}` : ""}`,
+    "",
+    "Orrey guessed this from what people said. Tap anybody it got wrong.",
+  ];
+
+  if (dropped > 0) {
+    lines.push(
+      `-# ${dropped} more on the roster than there are buttons; correct those in the console.`,
+    );
+  }
+  lines.push(`-# As of <t:${Math.floor(asOf.getTime() / 1000)}:R>.`);
+
+  return {
+    content: lines.join("\n"),
+    components: rowsOf(shown.map((row) => toggle(target.session.id, row))),
+    allowed_mentions: { parse: [], roles: [] },
+  };
+}
+
+/**
+ * The same nudge for everybody Orrey could not DM, as one message in the thread.
+ * One message and not one each: the thread is shared, so three separate mentions
+ * of three people is three notifications for all of them.
+ */
+export function remindInThread(
+  target: ProjectionTarget,
+  hours: number,
+  userIds: string[],
+): MessagePayload {
+  return {
+    content: [
+      `${userIds.map((id) => `<@${id}>`).join(" ")} — ${inWords(hours)}.`,
+      `**${escapeMarkdown(sessionTitle(target))}**, <t:${target.session.startsAt}:F>.`,
+      "Answering on the post above is what changes it.",
+    ].join("\n"),
+    components: [],
+    allowed_mentions: { parse: [], roles: [], users: [...new Set(userIds)] },
+  };
+}
+
+/**
+ * Discord needs a guild id in a message link and the renderer is pure, so the
+ * link is built with a placeholder Discord accepts: `@me` resolves to whatever
+ * guild the channel is in when somebody clicks it.
+ */
+const GUILD_PLACEHOLDER = "@me";
+
+function inWords(hours: number): string {
+  if (hours >= 48) return `in ${Math.round(hours / 24)} days`;
+  if (hours >= 24) return "tomorrow";
+  if (hours === 1) return "in an hour";
+  return `in ${hours} hours`;
+}
+
+function toggle(sessionId: string, row: RegisterRow): Record<string, unknown> {
+  return {
+    type: ComponentType.BUTTON,
+    // Green for came, grey for did not. A corrected row keeps the tick that says
+    // a person decided it rather than Orrey guessing.
+    style: row.attended ? ButtonStyle.SUCCESS : ButtonStyle.SECONDARY,
+    label: `${row.attended ? "✓" : "✗"} ${row.name}`.slice(0, 80),
+    custom_id: encodeCustomId({ action: "attended", arg: row.userId, target: sessionId }),
+  };
+}
+
+/** Five to a row, which is all Discord allows. */
+function rowsOf(buttons: Record<string, unknown>[]): Record<string, unknown>[] {
+  const rows: Record<string, unknown>[] = [];
+  for (let i = 0; i < buttons.length; i += 5) {
+    rows.push({ type: ComponentType.ACTION_ROW, components: buttons.slice(i, i + 5) });
+  }
+  return rows;
 }
