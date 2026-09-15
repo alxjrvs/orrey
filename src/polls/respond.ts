@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
 import { renderOverride, renderPollPost } from "./render.ts";
+import { CLOSE_JOB } from "./schedule.ts";
 import { applyOutcomes, mayCanonise, proposal, stagePicks, staged } from "./canonise.ts";
 import { pollView } from "./rows.ts";
 import type { Interaction } from "../discord/types.ts";
@@ -18,14 +19,23 @@ import type { InteractionUser } from "../discord/types.ts";
  */
 export type PollAnswer =
   | { ok: true; payload: MessagePayload }
-  | { ok: false; reason: "unknown" };
+  | { ok: false; reason: "unknown" }
+  | { ok: false; reason: "closed" };
 
 export async function answerPoll(
   env: Env,
   pollId: string,
   actor: InteractionUser,
   pollDateIds: string[],
+  now = new Date(),
 ): Promise<PollAnswer> {
+  // Closing is enforced *here*, and it has to be: the poll post is still sitting
+  // in the channel with a live select, Orrey cannot disarm it, and the message is
+  // not a place state can live. So the handler is the gate.
+  const poll = await loadPoll(env, pollId);
+  if (!poll) return { ok: false, reason: "unknown" };
+  if (isClosedToAnswers(poll, now)) return { ok: false, reason: "closed" };
+
   const lock = env.POLL_LOCK.get(env.POLL_LOCK.idFromName(pollId));
   const view = await lock.select({ pollId, actor, pollDateIds });
   return view ? { ok: true, payload: renderPollPost(view) } : { ok: false, reason: "unknown" };
@@ -97,6 +107,17 @@ export async function pickWinners(
     return { ok: false, reason: "refused" };
   }
 
+  // The same guard `openOverride` has, for a sharper reason. `stagePicks`
+  // already no-ops on a closed poll, so nothing is written either way — but
+  // `renderOverride` would still be returned, and the handler turns that into an
+  // UPDATE_MESSAGE. A post reading "Closed. The dates below are what it decided."
+  // would be rewritten into a live override view with a working Apply button, on
+  // a poll whose outcomes are final and whose consequences have already fired.
+  if (poll.status !== "open") {
+    const closed = await pollView(env, pollId, new Date(), actor.id);
+    return closed ? { ok: true, payload: renderPollPost(closed) } : { ok: false, reason: "unknown" };
+  }
+
   const view = await stagePicks(env, pollId, wonIds);
   return view
     ? { ok: true, payload: renderOverride(view, wonIds) }
@@ -129,3 +150,20 @@ export async function applyOverride(
   const view = await lock.apply(pollId, await staged(env, pollId));
   return view ? { ok: true, payload: renderPollPost(view) } : { ok: false, reason: "unknown" };
 }
+
+/**
+ * Whether this poll still takes answers.
+ *
+ * Canonise stays available after `closes_at`: **closing the answers is not
+ * closing the poll**. The organiser still has to decide, and a deadline that
+ * also locked them out would leave a dead post nobody could settle.
+ */
+export function isClosedToAnswers(
+  poll: { status: "open" | "closed"; closesAt: number | null },
+  now: Date,
+): boolean {
+  if (poll.status !== "open") return true;
+  return poll.closesAt !== null && poll.closesAt <= Math.floor(now.getTime() / 1000);
+}
+
+export { CLOSE_JOB };
