@@ -55,6 +55,27 @@ export function isUnknownEvent(error: unknown): boolean {
   return failure !== undefined && (failure.code === 10070 || failure.status === 404);
 }
 
+/**
+ * The event cannot be moved.
+ *
+ * `COMPLETED` and `CANCELED` are terminal on a Discord scheduled event and they
+ * fire on their own — an event whose start time has passed is already COMPLETED,
+ * and Discord refuses to PATCH it to a new one. That is a 400 about the event's
+ * *status*, not a 404 about its existence, so it needs its own answer: mint a
+ * replacement rather than retrying into the DLQ.
+ *
+ * The stored id was always disposable. Phase 1's review note said so; this is
+ * where it gets spent.
+ */
+export function isLapsedEvent(error: unknown): boolean {
+  const failure = asDiscordFailure(error);
+  if (!failure || failure.status !== 400) return false;
+  // 180000: "Cannot update a scheduled event that has completed or been
+  // cancelled." Matched by code, never by message text — the text is Discord's
+  // to change and the code is not.
+  return failure.code === 180_000;
+}
+
 interface DiscordRequest {
   method?: string;
   headers?: Record<string, string>;
