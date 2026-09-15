@@ -18,6 +18,7 @@ import { announceGameDay, postCloseNotice, postPollPost } from "../polls/post.ts
 import { APPLY_JOB, applyFollowUp } from "../polls/canonise.ts";
 import { POST_SIGNUP_JOB, postSignupPost, startDayThread } from "../game-days/post.ts";
 import { sessionIdFor } from "../game-days/lifecycle.ts";
+import { SYNC_JOB, runSync } from "../google/sync.ts";
 import { PROMOTED_JOB } from "../game-days/promote.ts";
 import {
   CANCELLED_JOB,
@@ -443,6 +444,14 @@ async function runJob(job: typeof schema.jobs.$inferSelect, env: Env): Promise<v
       if (!row) return;
 
       await postDayNoticeOnce(env, gameDayId, "cancelled", cancelledNotice(row.day, row.game));
+      return;
+    }
+
+    case SYNC_JOB: {
+      // Google says something on the calendar changed. What changed is whatever
+      // the list call says changed — the push carried no body and this job
+      // holds none either, only the minute it collapsed a burst into.
+      await runSync(env);
       return;
     }
 
