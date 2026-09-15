@@ -493,9 +493,51 @@ export const gameDays = sqliteTable("game_days", {
   })
     .notNull()
     .default("PROPOSED"),
+
+  /** What the EXTERNAL Discord event carries as its location. */
+  venue: text("venue"),
+  /** Whoever is running it. Null until somebody says, and null again if they leave. */
+  hostUserId: text("host_user_id").references(() => users.discordId, {
+    onDelete: "set null",
+  }),
+  /**
+   * How many seats. Nullable on purpose.
+   *
+   * A `single` day takes its count from `games.max_players`; this column is the
+   * override for the evening the table only has five chairs. On a `multi` day it
+   * is the venue's cap, or nothing at all.
+   */
+  capacity: integer("capacity"),
+  /** What is being played. Required on a `single` day — see `singleNamesGame`. */
+  gameId: text("game_id").references(() => games.id, { onDelete: "set null" }),
+
+  /** The three ids a day accumulates. Recorded, then never read back from. */
+  discordChannelId: text("discord_channel_id"),
+  discordMessageId: text("discord_message_id"),
+  threadId: text("thread_id"),
+
   createdAt: integer("created_at").notNull().default(now),
   updatedAt: integer("updated_at").notNull().default(now),
 });
+
+/**
+ * A `single` day names a game.
+ *
+ * This is a CHECK in every sense except the one that would make it a CHECK.
+ * SQLite cannot add a constraint to a table in place, so drizzle-kit would
+ * answer with a rebuild — `__new_game_days`, copy, drop, rename — and
+ * `docs/GOTCHAS.md` records what that costs on D1: the platform ignores
+ * `PRAGMA foreign_keys=OFF`, so dropping the old table fires
+ * `poll_dates.game_day_id`'s ON DELETE SET NULL and every link phase 4 wrote
+ * from a winning date to the day it minted is silently blanked.
+ *
+ * Phase 2 hit this with `campaigns_interval_ck` and answered it the same way:
+ * the rule moves to the one place that writes the row. A constraint that
+ * destroys the data it is protecting is not a constraint worth having.
+ */
+export function singleNamesGame(day: { kind: string; gameId: string | null }): boolean {
+  return day.kind !== "single" || day.gameId !== null;
+}
 
 /**
  * Asking a group which day works.
