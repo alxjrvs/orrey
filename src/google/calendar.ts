@@ -1,7 +1,12 @@
 import { eq, sql } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
-import { googleFingerprint, sessionTitle, type ProjectionTarget } from "../projection/target.ts";
+import {
+  googleFingerprint,
+  locationOf,
+  sessionTitle,
+  type ProjectionTarget,
+} from "../projection/target.ts";
 import {
   find,
   record,
@@ -169,10 +174,20 @@ export function eventBody(
   fingerprint: string,
 ): Record<string, unknown> {
   const { session } = target;
+  // The same helper the fingerprint and the Discord body read. Reading
+  // `session.location` here instead left every game day's Google event with no
+  // place on it — the venue lives on `game_days.venue`, and a day's session is
+  // minted with `location` null — while the fingerprint hashed the venue in and
+  // claimed it had. Moving a venue then changed the fingerprint, missed the skip
+  // guard, and wrote a body byte-identical to the one already there, moving
+  // `updated` for a field the surface never showed. That is precisely the thing
+  // `locationOf`'s own docstring says phase 7's return path must not have to
+  // explain.
+  const location = locationOf(target);
   return {
     id: eventId,
     summary: sessionTitle(target),
-    ...(session.location ? { location: session.location } : {}),
+    ...(location ? { location } : {}),
     start: { dateTime: isoOf(session.startsAt), timeZone: "UTC" },
     end: { dateTime: isoOf(session.endsAt), timeZone: "UTC" },
     extendedProperties: {

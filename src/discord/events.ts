@@ -2,7 +2,12 @@ import { eq, sql } from "drizzle-orm";
 import type { Env, OutboxMessage } from "../env.ts";
 import { db, schema } from "../db/index.ts";
 import { requireGuildId } from "../db/settings.ts";
-import { discordFingerprint, sessionTitle, type ProjectionTarget } from "../projection/target.ts";
+import {
+  discordFingerprint,
+  locationOf,
+  sessionTitle,
+  type ProjectionTarget,
+} from "../projection/target.ts";
 import {
   find,
   record,
@@ -85,7 +90,9 @@ export function scheduledEventBody(target: ProjectionTarget): Record<string, unk
     ...base,
     entity_type: EntityType.EXTERNAL,
     channel_id: null,
-    entity_metadata: { location: session.location ?? "To be confirmed" },
+    // The day's venue when there is a day — `locationOf` is the one place that
+    // decides, so the two fingerprints and the event body cannot disagree.
+    entity_metadata: { location: locationOf(target) ?? "To be confirmed" },
   };
 }
 

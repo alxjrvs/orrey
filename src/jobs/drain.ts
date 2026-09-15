@@ -1,7 +1,7 @@
-import { and, eq, lte, or } from "drizzle-orm";
+import { and, eq, lte, or, sql } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
-import { enqueueProjection } from "../projection/outbox.ts";
+import { enqueueProjection, enqueueUnprojection } from "../projection/outbox.ts";
 import { surfacesFor } from "../campaigns/event-cap.ts";
 import { postAttendancePost } from "../attendance/post.ts";
 import { startSessionThread } from "../attendance/thread.ts";
@@ -11,9 +11,22 @@ import { assumeAttendance, registerRows } from "../attendance/assume.ts";
 import { sendReminder } from "../attendance/reminders.ts";
 import { gmOf } from "../campaigns/roster.ts";
 import { attendanceRows } from "../attendance/rows.ts";
+import { requiredFor } from "../attendance/quorum.ts";
 import { confirmedNotice, correctionPost, jeopardyNotice } from "../attendance/render.ts";
+import { isMultiDaySession } from "../attendance/tables.ts";
 import { announceGameDay, postCloseNotice, postPollPost } from "../polls/post.ts";
 import { APPLY_JOB, applyFollowUp } from "../polls/canonise.ts";
+import { POST_SIGNUP_JOB, postSignupPost, startDayThread } from "../game-days/post.ts";
+import { sessionIdFor } from "../game-days/lifecycle.ts";
+import { PROMOTED_JOB } from "../game-days/promote.ts";
+import {
+  CANCELLED_JOB,
+  LOCK_JOB,
+  cancelledNotice,
+  lockIfSeating,
+  playAfterAssume,
+} from "../game-days/lifecycle.ts";
+import { postDayNoticeOnce, promotedNotice } from "../game-days/notice.ts";
 import { loadProjectionTarget } from "../projection/target.ts";
 
 const CLAIM_SECONDS = 60;
@@ -158,7 +171,7 @@ async function runJob(job: typeof schema.jobs.$inferSelect, env: Env): Promise<v
       // session is happening is worse than silence.
       if (outcome !== "in-jeopardy") return;
 
-      const required = target.campaign?.quorum;
+      const required = requiredFor(target);
       if (required == null) return;
 
       await postNoticeOnce(
@@ -189,6 +202,11 @@ async function runJob(job: typeof schema.jobs.$inferSelect, env: Env): Promise<v
       if (!target) return;
 
       const assumed = await assumeAttendance(env, target);
+
+      // A game day's evening is over, so the day is too. This happens before the
+      // early return below, because a day nobody claimed a seat at is still a
+      // day that has been and gone.
+      if (target.session.gameDayId) await playAfterAssume(env, target.session.gameDayId);
       // Nobody on the roster and nobody who clicked: there is no register to
       // correct, and a post with no buttons is a post that says nothing.
       if (assumed.length === 0) return;
@@ -199,7 +217,12 @@ async function runJob(job: typeof schema.jobs.$inferSelect, env: Env): Promise<v
         env,
         target,
         "correction",
-        correctionPost(target, await registerRows(env, sessionId), new Date()),
+        correctionPost(target, await registerRows(env, sessionId), new Date(), {
+          // The button is a multi day's alone. A campaign session and a single
+          // day both play one thing, and asking what somebody played would be a
+          // question with one answer.
+          multiDay: await isMultiDaySession(env, sessionId),
+        }),
       );
       return;
     }
@@ -278,6 +301,148 @@ async function runJob(job: typeof schema.jobs.$inferSelect, env: Env): Promise<v
       if (!sessionId) return;
 
       await applyFollowUp(env, pollId, sessionId, wasStartsAt);
+      return;
+    }
+
+    /**
+     * The seating stage's post, sent once, and the thread that hangs off it.
+     *
+     * Send-only, like the attendance post: this records the message id and never
+     * touches the message again — a re-run finds the id and does nothing rather
+     * than posting a second one with live buttons.
+     *
+     * Nothing arms this yet. `PROPOSED → SEATING` is `p5/9`'s, and it is defined
+     * as "post the signup post", so the transition and this handler have to be
+     * on the same side of a merge: a transition landing first would arm a job
+     * `runJob` throws on, which sends it back to `pending` with a growing
+     * backoff until the PR above it lands.
+     */
+    case POST_SIGNUP_JOB: {
+      const { gameDayId } = job.payload as { gameDayId?: string };
+      if (!gameDayId) throw new Error(`game-day.post-signup job ${job.id} has no gameDayId`);
+
+      const messageId = await postSignupPost(env, gameDayId);
+      // No post, no thread to hang off it. The job re-runs, and a post that went
+      // up but was not recorded heals on the next drain — at which point the
+      // thread is started from the *recorded* id rather than this call's.
+      if (!messageId) return;
+
+      const threadId = await startDayThread(env, gameDayId);
+      if (!threadId) return;
+
+      // And now the attendance post, once the day has a thread to put it in.
+      //
+      // It is armed here rather than by the transition that armed this job
+      // because `postAttendancePost` sends into the day's thread if there is
+      // one and into the channel if there is not, and under send-only a post in
+      // the wrong place cannot be moved. Arming it a minute out would be a race
+      // this loses whenever the signup post has to retry; arming it from the
+      // thread's own creation cannot be. `onConflictDoNothing` because this
+      // job's own retry runs it again.
+      //
+      // Without it a game day has no surface anybody can say "I'm coming" on,
+      // and `attendance.assume` writes the whole seated table down as absent.
+      await db(env)
+        .insert(schema.jobs)
+        .values({
+          id: `session.post-attendance:${sessionIdFor(gameDayId)}`,
+          kind: "session.post-attendance",
+          payload: { sessionId: sessionIdFor(gameDayId) },
+          idempotencyKey: `session.post-attendance:${sessionIdFor(gameDayId)}`,
+          runAt: sql`(unixepoch())`,
+        })
+        .onConflictDoNothing();
+      return;
+    }
+
+    /**
+     * Somebody came off the waitlist. One new message in the day's thread saying
+     * so, addressed to them — never a rewrite of the signup post, because
+     * anything changing from outside posts a new message.
+     *
+     * The job carries who moved: by the time this runs they are simply seated,
+     * and indistinguishable from everybody else at the table.
+     */
+    case PROMOTED_JOB: {
+      const { gameDayId, noticeId, userIds } = job.payload as {
+        gameDayId?: string;
+        noticeId?: string;
+        userIds?: string[];
+      };
+      if (!gameDayId) throw new Error(`${PROMOTED_JOB} job ${job.id} has no gameDayId`);
+      if (!userIds?.length) return;
+
+      const row = await db(env)
+        .select({ day: schema.gameDays, game: schema.games })
+        .from(schema.gameDays)
+        .leftJoin(schema.games, eq(schema.gameDays.gameId, schema.games.id))
+        .where(eq(schema.gameDays.id, gameDayId))
+        .get();
+      // The day is gone, or it was called off between the promotion and this —
+      // and a message saying "you're in" about a day nobody is running is worse
+      // than no message at all.
+      if (!row || row.day.state === "CANCELLED") return;
+
+      await postDayNoticeOnce(
+        env,
+        gameDayId,
+        `promoted:${noticeId ?? userIds.join(",")}`,
+        promotedNotice(row.day, row.game, userIds),
+      );
+      return;
+    }
+
+    /**
+     * The table settles. A fallback for the day nobody locked by hand, which is
+     * why it is written to be harmless on one that is already locked, played or
+     * called off rather than throwing on the ordinary case.
+     *
+     * It posts nothing. The signup post's buttons outlive the lock — a post is
+     * never edited — and the `seat` handler is what tells a late clicker what
+     * happened, ephemerally, leaving the post alone.
+     */
+    case LOCK_JOB: {
+      const { gameDayId } = job.payload as { gameDayId?: string };
+      if (!gameDayId) throw new Error(`${LOCK_JOB} job ${job.id} has no gameDayId`);
+
+      await lockIfSeating(env, gameDayId);
+      return;
+    }
+
+    /**
+     * The day is off. One new message in its thread, claimed under its own label
+     * so a second cancellation posts nothing.
+     *
+     * The deletes went out with the transition itself — they are queue messages
+     * rather than work for here, and `project`'s retract branch is deliberately
+     * ungated so a cancelled day's event comes down rather than being stranded.
+     */
+    case CANCELLED_JOB: {
+      const { gameDayId } = job.payload as { gameDayId?: string };
+      if (!gameDayId) throw new Error(`${CANCELLED_JOB} job ${job.id} has no gameDayId`);
+
+      // Both surfaces come down, and from here rather than from `transition`,
+      // so the deletes are owed by the same durable row that owes the notice. A
+      // queue that is down sends this job back to `pending` with a backoff
+      // instead of losing the retraction for good — cancelling is terminal and
+      // there is no second click that reaches the transition again.
+      //
+      // Not gated on the day still being projectable: a delete is how something
+      // published comes down, and `project`'s retract branch is deliberately
+      // ungated for exactly this, no-ops on a session with no event ids, and is
+      // written so that projecting twice is indistinct from projecting once. So
+      // a re-run after a refused post costs nothing.
+      await enqueueUnprojection(env, sessionIdFor(gameDayId));
+
+      const row = await db(env)
+        .select({ day: schema.gameDays, game: schema.games })
+        .from(schema.gameDays)
+        .leftJoin(schema.games, eq(schema.gameDays.gameId, schema.games.id))
+        .where(eq(schema.gameDays.id, gameDayId))
+        .get();
+      if (!row) return;
+
+      await postDayNoticeOnce(env, gameDayId, "cancelled", cancelledNotice(row.day, row.game));
       return;
     }
 

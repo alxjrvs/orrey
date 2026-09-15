@@ -30,8 +30,27 @@ export interface Quorum {
   slipped: boolean;
 }
 
+/**
+ * How many `in` it takes, asked of whichever parent the session has.
+ *
+ * A campaign says so itself — `campaigns.quorum`, set by the organiser. A
+ * `single` game day does not have that column and does not need one: the game
+ * already says how few people can play it, and `games.min_players` is the same
+ * number phase 4's default win rule used. A `multi` day is a hangout and has no
+ * threshold at all; neither does a day playing a game whose minimum nobody has
+ * filled in.
+ *
+ * Null is "nobody has asked this question", not "a quorum of zero". A session
+ * with no threshold never confirms on its own and is never in jeopardy.
+ */
+export function requiredFor(target: ProjectionTarget): number | null {
+  if (target.campaign) return target.campaign.quorum ?? null;
+  if (target.gameDay?.kind === "single") return target.game?.minPlayers ?? null;
+  return null;
+}
+
 export function quorumOf(target: ProjectionTarget, rows: AttendanceRow[]): Quorum {
-  const required = target.campaign?.quorum ?? null;
+  const required = requiredFor(target);
   const saidIn = rows.filter((row) => row.intent === "in").length;
   const met = required !== null && saidIn >= required;
   const confirmed = target.session.state === "CONFIRMED";

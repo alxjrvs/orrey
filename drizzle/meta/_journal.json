@@ -78,6 +78,20 @@
       "when": 1789364176529,
       "tag": "0010_auto_resolve_polls",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1789364695577,
+      "tag": "0011_game_day_details",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1789364975523,
+      "tag": "0012_game_day_sessions",
+      "breakpoints": true
     }
   ]
 }

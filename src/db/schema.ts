@@ -206,6 +206,12 @@ export const sessions = sqliteTable(
     id: text("id").primaryKey(),
     kind: text("kind", { enum: ["campaign_session", "one_off"] }).notNull(),
     campaignId: text("campaign_id").references(() => campaigns.id, { onDelete: "cascade" }),
+    /**
+     * A one-off's parent. A game day gets a session row so that attendance, the
+     * thread, the Discord event and the Google event reuse the machinery they
+     * already have rather than growing a second copy of it.
+     */
+    gameDayId: text("game_day_id").references(() => gameDays.id, { onDelete: "cascade" }),
     /** Session number within the campaign. Display only — never an ordering key. */
     number: integer("number"),
     /** Unix seconds, UTC. The timezone is a rendering concern, held in settings. */
@@ -231,6 +237,22 @@ export const sessions = sqliteTable(
   (t) => [
     index("sessions_starts_idx").on(t.startsAt),
     index("sessions_campaign_idx").on(t.campaignId, t.startsAt),
+    /**
+     * Phase 1's CHECK, **untouched**. It still says exactly what it said: a
+     * campaign session has a campaign and a one-off does not.
+     *
+     * It does not say a one-off has a game day, and it deliberately is not made
+     * to. SQLite cannot alter a CHECK, so any change here — including *removing*
+     * it — is a rebuild of `sessions`, and `docs/GOTCHAS.md` records that D1
+     * ignores `PRAGMA foreign_keys=OFF`: dropping the old table would cascade
+     * away every `attendance` row, every `calendar_links` row, and every
+     * `date_polls` row that targets a session. That is the entire attendance
+     * history of the server, deleted to tighten a constraint.
+     *
+     * So the second half of "exactly one parent, and the one its kind names"
+     * lives in `hasExactlyOneParent` below, next to `singleNamesGame` and for the
+     * same reason.
+     */
     check(
       "sessions_parent_ck",
       sql`(${t.kind} = 'campaign_session' AND ${t.campaignId} IS NOT NULL)
@@ -238,6 +260,23 @@ export const sessions = sqliteTable(
     ),
   ],
 );
+
+/**
+ * Exactly one parent, and the one its `kind` names.
+ *
+ * The campaign half is a CHECK; this is the whole rule, including the half
+ * SQLite will not let Orrey add without deleting the attendance history to do
+ * it. Every path that writes a session goes through this.
+ */
+export function hasExactlyOneParent(session: {
+  kind: string;
+  campaignId: string | null;
+  gameDayId: string | null;
+}): boolean {
+  return session.kind === "campaign_session"
+    ? session.campaignId !== null && session.gameDayId === null
+    : session.campaignId === null && session.gameDayId !== null;
+}
 
 /**
  * One row per person per session. `intent` is what they said; `attended` is what
@@ -257,6 +296,14 @@ export const attendance = sqliteTable(
     intent: text("intent", { enum: ["in", "out", "maybe"] }),
     attended: integer("attended"),
     attendedSource: text("attended_source", { enum: ["auto", "gm"] }),
+    /**
+     * What this person actually played, on a day where several tables ran.
+     *
+     * Free text on a row already keyed `(session_id, user_id)`, so it is per
+     * person by construction — which is #7's open question settled: there is no
+     * `tables` table and no per-table seating. Nothing reads this until `p5/13`.
+     */
+    tablesPlayed: text("tables_played"),
     note: text("note"),
     updatedAt: integer("updated_at").notNull().default(now),
   },
@@ -371,6 +418,10 @@ export const campaignMembers = sqliteTable(
  * someone who has stopped thinking about what it is for. `game_days` arrives in
  * phase 5; until then nothing can write a row that points at one, because
  * nothing mints that kind of id.
+ *
+ * Phase 5 arrived and that foresight held: `src/game-days/signups.ts` writes the
+ * second kind of row without a migration, and the CHECK is byte-for-byte the one
+ * `0006_roster_and_audit.sql` created.
  */
 export const signups = sqliteTable(
   "signups",
@@ -384,7 +435,16 @@ export const signups = sqliteTable(
     state: text("state", { enum: ["in", "waitlisted", "out"] })
       .notNull()
       .default("in"),
-    /** Waitlist order. Null for anyone who is not on the waitlist. */
+    /**
+     * Arrival order within a target: assigned when the claim is made and never
+     * touched again while it stands.
+     *
+     * Phase 2 wrote it as "waitlist order, null for anyone else"; phase 5 is the
+     * phase that reads it, and reads it as arrival order for everyone who claims
+     * a place at a game day, seated or queued. That is what lets a promotion be
+     * one column changing — see `src/game-days/signups.ts`. A forming campaign
+     * has no capacity and so no queue, so its signups still leave this null.
+     */
     position: integer("position"),
     characterName: text("character_name"),
     createdAt: integer("created_at").notNull().default(now),
@@ -493,9 +553,51 @@ export const gameDays = sqliteTable("game_days", {
   })
     .notNull()
     .default("PROPOSED"),
+
+  /** What the EXTERNAL Discord event carries as its location. */
+  venue: text("venue"),
+  /** Whoever is running it. Null until somebody says, and null again if they leave. */
+  hostUserId: text("host_user_id").references(() => users.discordId, {
+    onDelete: "set null",
+  }),
+  /**
+   * How many seats. Nullable on purpose.
+   *
+   * A `single` day takes its count from `games.max_players`; this column is the
+   * override for the evening the table only has five chairs. On a `multi` day it
+   * is the venue's cap, or nothing at all.
+   */
+  capacity: integer("capacity"),
+  /** What is being played. Required on a `single` day — see `singleNamesGame`. */
+  gameId: text("game_id").references(() => games.id, { onDelete: "set null" }),
+
+  /** The three ids a day accumulates. Recorded, then never read back from. */
+  discordChannelId: text("discord_channel_id"),
+  discordMessageId: text("discord_message_id"),
+  threadId: text("thread_id"),
+
   createdAt: integer("created_at").notNull().default(now),
   updatedAt: integer("updated_at").notNull().default(now),
 });
+
+/**
+ * A `single` day names a game.
+ *
+ * This is a CHECK in every sense except the one that would make it a CHECK.
+ * SQLite cannot add a constraint to a table in place, so drizzle-kit would
+ * answer with a rebuild — `__new_game_days`, copy, drop, rename — and
+ * `docs/GOTCHAS.md` records what that costs on D1: the platform ignores
+ * `PRAGMA foreign_keys=OFF`, so dropping the old table fires
+ * `poll_dates.game_day_id`'s ON DELETE SET NULL and every link phase 4 wrote
+ * from a winning date to the day it minted is silently blanked.
+ *
+ * Phase 2 hit this with `campaigns_interval_ck` and answered it the same way:
+ * the rule moves to the one place that writes the row. A constraint that
+ * destroys the data it is protecting is not a constraint worth having.
+ */
+export function singleNamesGame(day: { kind: string; gameId: string | null }): boolean {
+  return day.kind !== "single" || day.gameId !== null;
+}
 
 /**
  * Asking a group which day works.

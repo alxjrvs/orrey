@@ -211,6 +211,84 @@ describe("the toggle", () => {
   });
 });
 
+describe("the toggle on a game day", () => {
+  const DAY_ID = "gd-1";
+  const DAY_SESSION = "gd-1-s";
+  const HOST = "host-1";
+
+  const dayToggleFor = (userId: string) =>
+    encodeCustomId({ action: "attended", arg: userId, target: DAY_SESSION });
+
+  function dayRegister(userId: string) {
+    return db(env)
+      .select()
+      .from(schema.attendance)
+      .where(and(eq(schema.attendance.sessionId, DAY_SESSION), eq(schema.attendance.userId, userId)))
+      .get();
+  }
+
+  beforeEach(async () => {
+    await env.DB.prepare("DELETE FROM game_days").run();
+    for (const id of [HOST, "p-9"]) {
+      await db(env)
+        .insert(schema.users)
+        .values({ discordId: id, username: id, globalName: id, feedToken: `t-${id}` })
+        .onConflictDoNothing();
+    }
+    await db(env)
+      .insert(schema.gameDays)
+      .values({
+        id: DAY_ID,
+        kind: "multi",
+        state: "PLAYED",
+        startsAt: STARTS_AT,
+        endsAt: STARTS_AT + 4 * 3600,
+        title: "November Games Day",
+        hostUserId: HOST,
+        threadId: "thread-1",
+      });
+    // A game day's session: `campaign_id` null, `game_day_id` set. The CHECK
+    // requires exactly that pairing, and it is why the campaign-only guard used
+    // to refuse the host of every day there is.
+    await db(env)
+      .insert(schema.sessions)
+      .values({
+        id: DAY_SESSION,
+        kind: "one_off",
+        gameDayId: DAY_ID,
+        startsAt: STARTS_AT,
+        endsAt: STARTS_AT + 4 * 3600,
+        threadId: "thread-1",
+      });
+    await db(env)
+      .insert(schema.attendance)
+      .values({ sessionId: DAY_SESSION, userId: "p-9", attended: 0, attendedSource: "auto" });
+  });
+
+  it("lets whoever ran the day correct it", async () => {
+    const reply = await click(dayToggleFor("p-9"), HOST);
+
+    expect(reply.type).toBe(InteractionResponseType.UPDATE_MESSAGE);
+    expect(await dayRegister("p-9")).toMatchObject({ attended: 1, attendedSource: "gm" });
+  });
+
+  it("turns away everybody else", async () => {
+    const reply = await click(dayToggleFor("p-9"), "p-9");
+
+    expect(reply.data.content).toContain("Only whoever ran the session");
+    expect(await dayRegister("p-9")).toMatchObject({ attended: 0, attendedSource: "auto" });
+  });
+
+  it("fails closed on a day nobody said they ran", async () => {
+    await env.DB.prepare("UPDATE game_days SET host_user_id = NULL").run();
+
+    const reply = await click(dayToggleFor("p-9"), HOST);
+
+    expect(reply.data.content).toContain("Only whoever ran the session");
+    expect(await dayRegister("p-9")).toMatchObject({ attended: 0 });
+  });
+});
+
 describe("a post Discord refused", () => {
   it("goes up on the retry, so the register is still correctable", async () => {
     await member(GM, "gm", "in");

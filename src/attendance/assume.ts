@@ -1,6 +1,7 @@
 import { and, eq, sql } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
+import { rearm, type ArmedJob } from "../jobs/arm.ts";
 import { attendanceRows } from "./rows.ts";
 import type { ProjectionTarget } from "../projection/target.ts";
 
@@ -20,15 +21,21 @@ import type { ProjectionTarget } from "../projection/target.ts";
  */
 export const ASSUME_JOB = "attendance.assume";
 
+/**
+ * The row, described. `transition` puts it in the same batch as the state write
+ * that makes it necessary; everybody else writes it on its own.
+ */
+export function assumeJob(sessionId: string, endsAt: number): ArmedJob {
+  return {
+    id: `${ASSUME_JOB}:${sessionId}`,
+    kind: ASSUME_JOB,
+    payload: { sessionId },
+    runAt: endsAt,
+  };
+}
+
 export async function armAssume(env: Env, sessionId: string, endsAt: number): Promise<void> {
-  const id = `${ASSUME_JOB}:${sessionId}`;
-  await db(env)
-    .insert(schema.jobs)
-    .values({ id, kind: ASSUME_JOB, payload: { sessionId }, idempotencyKey: id, runAt: endsAt })
-    .onConflictDoUpdate({
-      target: schema.jobs.id,
-      set: { runAt: endsAt, state: "pending", attempts: 0, lastError: null },
-    });
+  await rearm(db(env), [assumeJob(sessionId, endsAt)]);
 }
 
 /** What was assumed, so the correction post can render it without asking again. */
@@ -114,6 +121,7 @@ export function registerOf(env: Env, sessionId: string) {
       attended: schema.attendance.attended,
       attendedSource: schema.attendance.attendedSource,
       intent: schema.attendance.intent,
+      tablesPlayed: schema.attendance.tablesPlayed,
       username: schema.users.username,
       globalName: schema.users.globalName,
     })
@@ -131,5 +139,6 @@ export async function registerRows(env: Env, sessionId: string) {
     name: row.globalName ?? row.username ?? `<@${row.userId}>`,
     attended: row.attended === 1,
     corrected: row.attendedSource === "gm",
+    tablesPlayed: row.tablesPlayed,
   }));
 }
