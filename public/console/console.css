@@ -55,3 +55,36 @@ button {
 }
 button + button { margin-left: var(--space-2, 8px); }
 button[disabled] { opacity: .5; cursor: default; }
+
+/* The agenda. */
+.bar-inline { display: flex; align-items: baseline; gap: var(--space-3, 12px); }
+.bar-inline h1 { font: var(--type-title, inherit); margin: 0; }
+.controls { display: flex; gap: var(--space-3, 12px); align-items: center; flex-wrap: wrap; margin: var(--space-4, 16px) 0 var(--space-3, 12px); }
+.controls .primary { margin-left: auto; }
+
+/* Exactly one blurple element on the screen, and it is on the view with work in
+   it. The filters are not actions and must not look like them. */
+button.primary { background: var(--signal-500, #5865f2); }
+.segmented { display: inline-flex; border: var(--border-structural); border-radius: var(--radius-sm); overflow: hidden; }
+.segmented button { background: transparent; border: 0; border-radius: 0; color: var(--text-secondary); }
+.segmented button + button { margin-left: 0; border-left: var(--border-hair); }
+.segmented button[aria-current="true"] { background: var(--surface-inset, #1e1f22); color: inherit; }
+
+tr.day th { font: var(--type-caption, inherit); color: var(--text-secondary); padding-top: var(--space-4, 16px); border-bottom: var(--border-structural); }
+tbody tr[tabindex] { cursor: pointer; }
+tbody tr[aria-selected="true"] { background: var(--surface-inset, #1e1f22); }
+
+/* In / maybe / out / not heard from. Width is the count; the four are not a
+   severity scale, so they are hues rather than a gradient. */
+.meter { display: flex; height: 6px; border-radius: 3px; overflow: hidden; background: var(--surface-inset, #1e1f22); margin-bottom: var(--space-1, 4px); }
+.meter span[data-kind="in"] { background: var(--signal-500, #5865f2); }
+.meter span[data-kind="maybe"] { background: var(--amber-500, #d9a441); }
+.meter span[data-kind="out"] { background: var(--danger-500, #d84b4b); }
+.meter span[data-kind="none"] { background: transparent; }
+
+.as-of { margin-top: var(--space-4, 16px); font: var(--type-caption, inherit); }
+
+.state[data-state="CONFIRMED"] { color: var(--signal-500); }
+.state[data-state="JEOPARDY"] { color: var(--amber-500, #d9a441); }
+.state[data-state="CANCELLED"] { color: var(--danger-500, #d84b4b); }
+.state[data-state="SCHEDULED"], .state[data-state="PLAYED"] { color: var(--text-secondary); }
