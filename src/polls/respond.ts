@@ -3,6 +3,7 @@ import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
 import { renderOverride, renderPollPost } from "./render.ts";
 import { CLOSE_JOB } from "./schedule.ts";
+import { autoResolve } from "./auto-resolve.ts";
 import { applyOutcomes, mayCanonise, proposal, stagePicks, staged } from "./canonise.ts";
 import { pollView } from "./rows.ts";
 import type { Interaction } from "../discord/types.ts";
@@ -38,7 +39,22 @@ export async function answerPoll(
 
   const lock = env.POLL_LOCK.get(env.POLL_LOCK.idFromName(pollId));
   const view = await lock.select({ pollId, actor, pollDateIds });
-  return view ? { ok: true, payload: renderPollPost(view) } : { ok: false, reason: "unknown" };
+  if (!view) return { ok: false, reason: "unknown" };
+
+  /**
+   * The click that crosses the line is the click that renders the closed state.
+   *
+   * This runs after the selection is written and before the re-render, so the
+   * person who tipped it gets the closed post as their own `UPDATE_MESSAGE`
+   * response — which is exactly why `applyOutcomes` was split from the
+   * rendering. Two of three questions and it changes nothing at all, which is
+   * the common case and costs one read.
+   */
+  const resolved = await autoResolve(env, pollId);
+  return {
+    ok: true,
+    payload: renderPollPost(resolved.outcome === "resolved" && resolved.view ? resolved.view : view),
+  };
 }
 
 export async function refreshPoll(
