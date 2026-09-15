@@ -3,6 +3,12 @@ import { decodeCustomId, encodeCustomId } from "./custom-id.ts";
 import { deleteUserData, describeReceipt } from "../privacy/delete.ts";
 import { correctionPost, renderAttendancePost } from "../attendance/render.ts";
 import { registerRows } from "../attendance/assume.ts";
+import {
+  hostCheck,
+  isMultiDaySession,
+  setTablesPlayed,
+  tablesPlayedFor,
+} from "../attendance/tables.ts";
 import { isGm } from "../campaigns/roster.ts";
 import { loadProjectionTarget, sessionTitle } from "../projection/target.ts";
 import {
@@ -463,12 +469,18 @@ async function handleComponent(
       return handleAttend(interaction, env, id.arg, id.target);
     case "attended":
       return handleAttended(interaction, env, id.arg, id.target);
+    case "correction":
+      return handleCorrection(interaction, env, id.arg, id.target);
     case "ping":
       return handlePing(interaction, env, id.target ?? "default");
     case "privacy":
       return handlePrivacy(interaction, env, ctx, id.arg);
     case "poll":
       return handlePoll(interaction, env, id.arg, id.target);
+    case "tables":
+      return handleTables(interaction, env, id.target);
+    case "tables-who":
+      return handleTablesWho(interaction, env, id.target);
     case "suggest":
       return handleSuggest(interaction, env, id.target);
     default:
@@ -565,7 +577,40 @@ async function handleAttended(
   // response — the one rewrite send-only allows.
   return {
     type: InteractionResponseType.UPDATE_MESSAGE,
-    data: correctionPost(target, await registerRows(env, sessionId), new Date()),
+    // The same option the drain renders with. Two render sites for one post
+    // that disagree about whether it has a Tables block would drop the block —
+    // and the button under it — on the first toggle, permanently.
+    data: correctionPost(target, await registerRows(env, sessionId), new Date(), {
+      multiDay: await isMultiDaySession(env, sessionId),
+    }),
+  };
+}
+
+/**
+ * Refresh on a correction post.
+ *
+ * What the Tables-played confirmation means by "on the post on its next
+ * Refresh". No write, so no lock and no guard past `loadProjectionTarget` — it
+ * is the same read-only re-render the attendance post's own Refresh is, and the
+ * click came from the message it rewrites, which is the one rewrite send-only
+ * allows.
+ */
+async function handleCorrection(
+  interaction: Interaction,
+  env: Env,
+  arg: string | undefined,
+  sessionId: string | undefined,
+): Promise<Json> {
+  if (arg !== "refresh" || !sessionId) return retiredPost();
+
+  const target = await loadProjectionTarget(env, sessionId);
+  if (!target) return retiredPost();
+
+  return {
+    type: InteractionResponseType.UPDATE_MESSAGE,
+    data: correctionPost(target, await registerRows(env, sessionId), new Date(), {
+      multiDay: await isMultiDaySession(env, sessionId),
+    }),
   };
 }
 
@@ -669,6 +714,132 @@ function noteModal(sessionId: string, current: string): Json {
 const NOTE_INPUT = "note";
 
 /**
+ * **Tables played**, and the ephemeral chain it opens.
+ *
+ * Three steps, all ephemeral: a select of the people marked attended, a modal
+ * prefilled from D1, and a sentence saying what was stored. The correction post
+ * is not rewritten at any point — rewriting it would replace the toggles
+ * everybody else is using with one organiser's select, permanently. The line
+ * appears on the post's next Refresh.
+ */
+async function handleTables(
+  interaction: Interaction,
+  env: Env,
+  sessionId: string | undefined,
+): Promise<Json> {
+  if (!sessionId) return retiredPost();
+
+  const actor = actorOf(interaction);
+  if (!actor) return ephemeral("Orrey could not tell who clicked that.");
+
+  const refusal = await refuseUnlessHost(env, interaction, sessionId, actor.id);
+  if (refusal) return refusal;
+
+  const register = await registerRows(env, sessionId);
+  const came = register.filter((row) => row.attended).slice(0, MAX_CHOICES);
+  if (came.length === 0) {
+    return ephemeral("Nobody is marked as having come, so there is nothing to record yet.");
+  }
+
+  return ephemeral("Who do you want to record a table for?", [
+    {
+      type: ComponentType.ACTION_ROW,
+      components: [
+        {
+          type: ComponentType.STRING_SELECT,
+          custom_id: encodeCustomId({ action: "tables-who", target: sessionId }),
+          placeholder: "Somebody who came",
+          options: came.map((row) => ({
+            label: row.name.slice(0, 100),
+            value: row.userId,
+            ...(row.tablesPlayed ? { description: row.tablesPlayed.slice(0, 100) } : {}),
+          })),
+        },
+      ],
+    },
+  ]);
+}
+
+/** The select. It answers with the modal, prefilled from D1 and never from the message. */
+async function handleTablesWho(
+  interaction: Interaction,
+  env: Env,
+  sessionId: string | undefined,
+): Promise<Json> {
+  if (!sessionId) return retiredPost();
+
+  const actor = actorOf(interaction);
+  if (!actor) return ephemeral("Orrey could not tell who chose that.");
+
+  const refusal = await refuseUnlessHost(env, interaction, sessionId, actor.id);
+  if (refusal) return refusal;
+
+  const userId = interaction.data?.values?.[0];
+  if (!userId) return ephemeral("Orrey could not tell who that was.");
+
+  return tablesModal(sessionId, userId, (await tablesPlayedFor(env, sessionId, userId)) ?? "");
+}
+
+function tablesModal(sessionId: string, userId: string, current: string): Json {
+  return {
+    type: InteractionResponseType.MODAL,
+    data: {
+      // Namespace, action, the person and the session — well inside Discord's
+      // hundred, which `encodeCustomId` throws on rather than truncating.
+      custom_id: encodeCustomId({ action: "tables-line", arg: userId, target: sessionId }),
+      title: "Tables played",
+      components: [
+        {
+          type: ComponentType.ACTION_ROW,
+          components: [
+            {
+              type: ComponentType.TEXT_INPUT,
+              custom_id: TABLES_INPUT,
+              style: TextInputStyle.SHORT,
+              label: "What did they play?",
+              placeholder: "Blades, then Fiasco",
+              value: current,
+              max_length: 140,
+              required: false,
+            },
+          ],
+        },
+      ],
+    },
+  };
+}
+
+const TABLES_INPUT = "tables";
+
+/** The one guard, in one place, so the button and the select cannot disagree. */
+async function refuseUnlessHost(
+  env: Env,
+  interaction: Interaction,
+  sessionId: string,
+  userId: string,
+): Promise<Json | undefined> {
+  switch (await hostCheck(env, sessionId, userId)) {
+    case "yes":
+      return undefined;
+    case "no":
+      return ephemeral("Only whoever ran the day can record what was played.");
+    case "no-host":
+      // Nothing writes `game_days.host_user_id` yet, so a day with no host is
+      // every day — refusing here would refuse the whole feature, and the
+      // console page the refusal used to name does not exist. The organiser
+      // role stands in: the same role that opens a poll for a day, read off the
+      // member the bot token resolved, still closed to a player, and still
+      // failing closed when the role id is unseeded. The host column stays the
+      // narrower check for when a writer lands.
+      return (await hasOrganiserRole(env, interaction))
+        ? undefined
+        : ephemeral("Only an organiser can record what was played.");
+    default:
+      return retiredPost();
+  }
+}
+
+/**
  * A modal launched from a message component may answer with UPDATE_MESSAGE, so
  * the note lands and the post it came from rewrites itself — the same single
  * exception to send-only that a button click uses.
@@ -678,6 +849,7 @@ async function handleModal(interaction: Interaction, env: Env): Promise<Json> {
   if (!id || !id.target) return retiredPost();
 
   if (id.action === "poll-open") return openDatePoll(interaction, env, id.target);
+  if (id.action === "tables-line") return submitTablesPlayed(interaction, env, id.arg, id.target);
   if (id.action !== "attend-note") return retiredPost();
 
   const actor = actorOf(interaction);
@@ -779,4 +951,37 @@ async function handlePrivacy(
 
 function retiredPost(): Json {
   return ephemeral("This post is retired — its buttons no longer do anything. Try `/upcoming`.");
+}
+
+/**
+ * The last step. It answers ephemerally with what was stored — never with
+ * UPDATE_MESSAGE, because the message this chain started from is the correction
+ * post and it belongs to everybody using its toggles.
+ */
+async function submitTablesPlayed(
+  interaction: Interaction,
+  env: Env,
+  userId: string | undefined,
+  sessionId: string | undefined,
+): Promise<Json> {
+  if (!userId || !sessionId) return retiredPost();
+
+  const actor = actorOf(interaction);
+  if (!actor) return ephemeral("Orrey could not tell who submitted that.");
+
+  const refusal = await refuseUnlessHost(env, interaction, sessionId, actor.id);
+  if (refusal) return refusal;
+
+  const text =
+    interaction.data?.components
+      ?.flatMap((row) => row.components)
+      .find((input) => input.custom_id === TABLES_INPUT)?.value ?? "";
+
+  const stored = await setTablesPlayed(env, sessionId, userId, text);
+
+  return ephemeral(
+    stored === null
+      ? "Cleared. It will be off the post on its next Refresh."
+      : `Stored: ${stored}. It will be on the post on its next Refresh.`,
+  );
 }
