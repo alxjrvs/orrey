@@ -14,9 +14,11 @@ import {
   issueSession,
 } from "../console/cookies.ts";
 import { authorizeUrl, exchangeCode, identify, storeTokens } from "../console/oauth.ts";
+import { sessionFrom } from "../console/session.ts";
+import { NotConfigured, isOrganiser } from "../console/roles.ts";
 
 export function createApp() {
-  const app = new Hono<{ Bindings: Env }>();
+  const app = new Hono<{ Bindings: Env; Variables: { userId: string } }>();
 
   app.get("/healthz", (c) => c.json({ ok: true, environment: c.env.ENVIRONMENT }));
 
@@ -85,6 +87,41 @@ export function createApp() {
       return c.text("Discord would not complete that login. Run /console again.", 502);
     }
   });
+
+  /**
+   * The gate every administering route sits behind.
+   *
+   * It answers 403 rather than redirecting, because the caller is `fetch` from
+   * the SPA and a 302 to Discord would arrive as an opaque CORS failure rather
+   * than as "you are not allowed to do that".
+   *
+   * The role is read fresh, with the bot token, on every request. Nothing is
+   * carried in the cookie and nothing is cached, so a role removed in Discord is
+   * a permission gone on the next request rather than on the next login.
+   */
+  app.use("/api/*", async (c, next) => {
+    const session = await sessionFrom(c.env, c.req.header("cookie"), new Date());
+    if (!session) return c.json({ error: "Not signed in. Run /console in Discord." }, 401);
+
+    try {
+      if (!(await isOrganiser(c.env, session.userId))) {
+        return c.json({ error: "That is an organiser's to do." }, 403);
+      }
+    } catch (error) {
+      // Orrey does not know which role administers, so nobody does. A 503 says
+      // that plainly rather than answering 403 and sending somebody hunting for
+      // a permission they already have.
+      if (!(error instanceof NotConfigured)) throw error;
+      return c.json({ error: error.message }, 503);
+    }
+
+    c.set("userId", session.userId);
+    await next();
+    return undefined;
+  });
+
+  /** Who Orrey thinks you are. The first thing the console asks. */
+  app.get("/api/me", (c) => c.json({ userId: c.get("userId") }));
 
   /** Logging out is forgetting the cookie. The token pair is dropped with it. */
   app.post("/console/logout", (c) => {
