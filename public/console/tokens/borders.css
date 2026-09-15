@@ -1,0 +1,25 @@
+:root{
+  /* Square by default. Only pills and avatars round. */
+  --radius-none:0;
+  --radius-sm:2px;
+  --radius-md:3px;
+  --radius-pill:99px;
+  --radius-circle:50%;
+  --radius-discord:8px;
+
+  --border-hair:1px solid var(--line-hair);
+  --border-structural:1px solid var(--line-structural);
+  --border-strong:1px solid var(--line-strong);
+  --border-accent:1px solid var(--signal-500);
+
+  /* Selection is an inset bar, not a background swap or a drop shadow. */
+  --marker-selected:inset 2px 0 0 var(--signal-500);
+  --marker-attention:inset 2px 0 0 var(--amber-500);
+
+  /* There are no drop shadows in the console. Overlays get one. */
+  --shadow-none:none;
+  --shadow-overlay:0 12px 32px -8px rgba(0,0,0,.45);
+  --shadow-discord:0 2px 8px rgba(0,0,0,.28);
+
+  --scrim:rgba(30,31,34,.72);
+}
