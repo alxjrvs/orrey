@@ -38,7 +38,7 @@ import type { MessagePayload } from "../attendance/render.ts";
 export async function moveSession(
   env: Env,
   sessionId: string,
-  when: { startsAt: number; endsAt: number },
+  when: { startsAt: number; endsAt: number; location?: string | null },
   wasStartsAt?: number,
 ): Promise<boolean> {
   const before = await loadProjectionTarget(env, sessionId);
@@ -46,7 +46,11 @@ export async function moveSession(
 
   const { session } = before;
   const from = wasStartsAt ?? session.startsAt;
-  if (from === when.startsAt && session.endsAt === when.endsAt) return false;
+  // `location` is only carried by the caller that has one to carry — the
+  // inbound path, where somebody retyped the venue in the same drag. Undefined
+  // means "leave it as it is", which is what every other caller means.
+  const venueMoved = when.location !== undefined && when.location !== session.location;
+  if (from === when.startsAt && session.endsAt === when.endsAt && !venueMoved) return false;
 
   /**
    * Discord's scheduled event is the half that cannot be updated in place.
@@ -65,6 +69,7 @@ export async function moveSession(
     .set({
       startsAt: when.startsAt,
       endsAt: when.endsAt,
+      ...(when.location === undefined ? {} : { location: when.location }),
       ...(lapsed ? { discordEventId: null, discordEventFingerprint: null } : {}),
       // The date moved, so every subscribed calendar has to be told this update
       // supersedes the one it holds. The `+ 1` itself lives in one place.
