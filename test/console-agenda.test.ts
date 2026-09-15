@@ -35,7 +35,7 @@ async function get(path: string, withCookie = true) {
   return app.fetch(
     new Request(`https://orrey.test${path}`, {
       headers: withCookie
-        ? { cookie: `${SESSION_COOKIE}=${await issueSession(consoleEnv(), "1001", NOW)}` }
+        ? { cookie: `${SESSION_COOKIE}=${await issueSession(consoleEnv(), "1001", new Date())}` }
         : {},
     }),
     consoleEnv(),
