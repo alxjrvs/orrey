@@ -74,7 +74,7 @@ export function occurrencesFrom(cadence: Cadence): Occurrence[] {
 }
 
 /** The anchor as somebody in that zone would read it off a clock. */
-interface WallClock {
+export interface WallClock {
   year: number;
   month: number;
   day: number;
@@ -140,7 +140,7 @@ function startOf(anchor: WallClock, days: number, timeZone: string): number {
  * The hour that does not exist — 02:30 on a spring-forward Sunday — resolves to
  * the instant the clock jumps to, which is the same thing every calendar does.
  */
-function instantOf(wall: WallClock, timeZone: string): number {
+export function instantOf(wall: WallClock, timeZone: string): number {
   const asIfUtc = Date.UTC(wall.year, wall.month - 1, wall.day, wall.hour, wall.minute, wall.second);
 
   let instant = asIfUtc;
