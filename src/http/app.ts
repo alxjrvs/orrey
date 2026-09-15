@@ -18,6 +18,7 @@ import { sessionFrom } from "../console/session.ts";
 import { NotConfigured, isOrganiser } from "../console/roles.ts";
 import { readLoginToken } from "../console/link.ts";
 import { campaignSummaries, gameDaySummaries, gameSummaries } from "../console/api.ts";
+import { deleteGame, gameRows } from "../console/games.ts";
 import { agendaBetween, windowAround } from "../console/agenda.ts";
 import { openPollFromConsole } from "../console/polls.ts";
 import { InvalidCampaign, createCampaign, updateCampaign } from "../campaigns/write.ts";
@@ -152,6 +153,15 @@ export function createApp() {
   // Discord back would be showing a projection as though it were the thing.
   app.get("/api/campaigns", async (c) => c.json({ campaigns: await campaignSummaries(c.env) }));
   app.get("/api/games", async (c) => c.json({ games: await gameSummaries(c.env) }));
+
+  /**
+   * The games admin's list: every game with who is holding it.
+   *
+   * The holders travel with the row so the page can say what a delete would
+   * break *before* it is attempted, rather than the organiser finding out
+   * afterwards.
+   */
+  app.get("/api/games/usage", async (c) => c.json({ games: await gameRows(c.env) }));
   app.get("/api/game-days", async (c) => c.json({ gameDays: await gameDaySummaries(c.env) }));
 
   /**
@@ -212,6 +222,13 @@ export function createApp() {
   app.delete("/api/campaigns/:id/members/:userId", async (c) =>
     refusable(c, async () => {
       await removeMember(c.env, c.req.param("id"), c.req.param("userId"), c.get("userId"));
+      return c.json({ ok: true });
+    }),
+  );
+
+  app.delete("/api/games/:id", async (c) =>
+    refusable(c, async () => {
+      await deleteGame(c.env, c.req.param("id"), c.get("userId"));
       return c.json({ ok: true });
     }),
   );
