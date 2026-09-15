@@ -1,6 +1,10 @@
 import { encodeCustomId } from "../discord/custom-id.ts";
 import { ButtonStyle, ComponentType } from "../discord/types.ts";
 import { sessionTitle, type ProjectionTarget } from "../projection/target.ts";
+import { escapeMarkdown } from "../discord/markdown.ts";
+
+export { escapeMarkdown };
+import { suggestRow } from "../polls/buttons.ts";
 import { quorumLine, quorumOf } from "./quorum.ts";
 
 /**
@@ -52,7 +56,7 @@ export function renderAttendancePost({ target, rows, asOf }: AttendanceView): Me
 
   return {
     content,
-    components: [buttons(session.id)],
+    components: [buttons(session.id), suggestRow(session.id)],
     // The roster is the audience, and only the roster: a mention Orrey did not
     // mean — @everyone, or a user id that wandered in from a note — cannot fire.
     allowed_mentions: { parse: [], roles: campaign?.discordRoleId ? [campaign.discordRoleId] : [] },
@@ -166,19 +170,6 @@ function name(row: AttendanceRow, detail: Detail): string {
   return detail.notes && row.note ? `${who} (${escapeMarkdown(row.note)})` : who;
 }
 
-/**
- * A note is somebody else's text on a post Orrey can never edit. Unescaped, a
- * note reading `**Out (4)** — Bob, Cara` renders as a heading of Orrey's own
- * shape, and a stray backtick reflows everything after it — the as-of line
- * included. So the markdown a note can use is the markdown it escapes.
- *
- * Only the inline set: a note is normalised to one line and never rendered at
- * the start of one, so `#` and `>` cannot open a block.
- */
-export function escapeMarkdown(text: string): string {
-  return text.replace(/([*_`~|\\])/g, "\\$1");
-}
-
 function unix(at: Date): number {
   return Math.floor(at.getTime() / 1000);
 }
@@ -255,7 +246,9 @@ export function jeopardyNotice({
 
   return {
     content: lines.join("\n"),
-    components: [],
+    // The same mint the attendance post uses. Phase 3 said this notice would
+    // gain the button "until then it says who to talk to"; this is then.
+    components: [suggestRow(session.id)],
     // The roster, and the people named. Nothing else — a notice that could fire
     // @everyone because somebody's display name looked like one is a notice
     // nobody trusts.

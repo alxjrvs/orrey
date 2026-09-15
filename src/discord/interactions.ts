@@ -4,9 +4,25 @@ import { deleteUserData, describeReceipt } from "../privacy/delete.ts";
 import { correctionPost, renderAttendancePost } from "../attendance/render.ts";
 import { registerRows } from "../attendance/assume.ts";
 import { isGm } from "../campaigns/roster.ts";
-import { loadProjectionTarget } from "../projection/target.ts";
+import { loadProjectionTarget, sessionTitle } from "../projection/target.ts";
+import {
+  answerPoll,
+  applyOverride,
+  openOverride,
+  pickWinners,
+  refreshPoll,
+} from "../polls/respond.ts";
 import { renderUpcoming, upcomingWithTotal } from "../commands/upcoming.ts";
-import { renderWhosIn, sessionChoices, whosIn } from "../commands/whos-in.ts";
+import {
+  MAX_CHOICES,
+  isOnRoster,
+  renderWhosIn,
+  sessionChoices,
+  whosIn,
+} from "../commands/whos-in.ts";
+import { parseDates } from "../polls/parse-dates.ts";
+import { openPoll } from "../polls/open.ts";
+import { SETTING_KEYS, getSetting } from "../db/settings.ts";
 import { loginLink } from "../console/link.ts";
 import type { SmokeTally } from "../do/session-lock.ts";
 import {
@@ -87,7 +103,7 @@ async function handleCommand(
     case "upcoming":
       return upcoming(interaction, env);
     case "reschedule":
-      return ephemeral("Date polls arrive in phase 4.");
+      return reschedule(interaction, env);
     case "whos-in":
       return whosInCommand(interaction, env);
     case "console":
@@ -143,6 +159,195 @@ async function whosInCommand(interaction: Interaction, env: Env): Promise<Json> 
 }
 
 /**
+ * `/reschedule` — pick a session, then say which days might work instead.
+ *
+ * The command opens a modal rather than taking the dates as options, because a
+ * command option is one line and a poll takes ten. Its `custom_id` is minted the
+ * same way every other component id is and carries the session through the round
+ * trip, which is the only thing that survives between the command and the
+ * submission — Orrey holds no interaction state.
+ */
+async function reschedule(interaction: Interaction, env: Env): Promise<Json> {
+  const sessionId = optionOf(interaction, "event");
+  if (!sessionId) return ephemeral("Name the session you want to move.");
+
+  const actor = actorOf(interaction);
+  if (!actor) return ephemeral("Orrey could not tell who asked.");
+
+  if (sessionId === FIND_A_DAY) {
+    // The sentinel is offered only to organisers, but a person can type any
+    // value they like — so the check is here as well as in the suggestions.
+    if (!(await hasOrganiserRole(env, interaction))) {
+      return ephemeral("Only an organiser can open a poll for a new day.");
+    }
+    return ephemeral(
+      [
+        "A day with no session attached needs to say what is being played and whether",
+        "it is one table or several, which is more than a modal should ask for.",
+        "",
+        "The console has a page for it: **Polls → Find a new day**.",
+      ].join("\n"),
+    );
+  }
+
+  const target = await loadProjectionTarget(env, sessionId);
+  if (!target) return ephemeral("Orrey does not know that session.");
+
+  // The autocomplete only ever offers the caller's own campaigns, and that is a
+  // convenience rather than an access check — `/whos-in` says so in as many
+  // words and checks the roster anyway. Session ids are `<slug>-s<n>`, so they
+  // are guessable; without this, anybody could open a date poll on anybody's
+  // session by typing its id. A one-off has no roster to be on.
+  if (target.campaign && !(await isOnRoster(env, target.campaign.id, actor.id))) {
+    return ephemeral("That session is not on a campaign you are on.");
+  }
+
+  return datesModal(sessionId, sessionTitle(target));
+}
+
+/**
+ * **Suggest another day**, from the post it concerns.
+ *
+ * The same modal `/reschedule` opens, with the session already decided — so the
+ * two entry points converge on one `MODAL_SUBMIT` path and one `openPoll`, and a
+ * session that already has an open poll gets the same refusal from the same
+ * constraint.
+ *
+ * The click itself writes nothing. Opening a modal is not opening a poll.
+ */
+async function handleSuggest(
+  interaction: Interaction,
+  env: Env,
+  sessionId: string | undefined,
+): Promise<Json> {
+  if (!sessionId) return retiredPost();
+
+  const actor = actorOf(interaction);
+  if (!actor) return ephemeral("Orrey could not tell who clicked that.");
+
+  const target = await loadProjectionTarget(env, sessionId);
+  if (!target) return retiredPost();
+
+  // The same guard `/reschedule` has. This button sits on a post in a campaign's
+  // own channel, which is close to an access check and is not one: a `custom_id`
+  // is a string the client sends, and anybody who can read one post can send
+  // another post's id.
+  if (target.campaign && !(await isOnRoster(env, target.campaign.id, actor.id))) {
+    return ephemeral("That session is not on a campaign you are on.");
+  }
+
+  return datesModal(sessionId, sessionTitle(target));
+}
+
+const DATES_INPUT = "dates";
+
+/**
+ * One paragraph, one date per line. A modal takes five text inputs and a poll
+ * takes ten dates, so five boxes would be both too few and too fiddly.
+ */
+function datesModal(sessionId: string, title: string): Json {
+  return {
+    type: InteractionResponseType.MODAL,
+    data: {
+      custom_id: encodeCustomId({ action: "poll-open", target: sessionId }),
+      title: `Another day for ${title}`.slice(0, 45),
+      components: [
+        {
+          type: ComponentType.ACTION_ROW,
+          components: [
+            {
+              type: ComponentType.TEXT_INPUT,
+              custom_id: DATES_INPUT,
+              style: TextInputStyle.PARAGRAPH,
+              label: "Which days might work? One per line.",
+              placeholder: "2026-10-01 19:00\nThu 8 Oct 7pm\n15 Oct 19:00",
+              max_length: 500,
+              required: true,
+            },
+          ],
+        },
+      ],
+    },
+  };
+}
+
+/**
+ * The submission. On a clean parse the poll is written and posted; on a dirty
+ * one **nothing is written** and the lines come back, so nobody retypes nine
+ * good dates because of one bad one.
+ */
+async function openDatePoll(
+  interaction: Interaction,
+  env: Env,
+  sessionId: string,
+): Promise<Json> {
+  const actor = actorOf(interaction);
+  if (!actor) return ephemeral("Orrey could not tell who submitted that.");
+
+  const target = await loadProjectionTarget(env, sessionId);
+  if (!target) return retiredPost();
+
+  // Checked again on the way back, not only on the way out. The modal's
+  // `custom_id` is the only thing carried across the round trip, and it is a
+  // string the client sends — so trusting that the modal was issued to a member
+  // is trusting the caller with the guard.
+  if (target.campaign && !(await isOnRoster(env, target.campaign.id, actor.id))) {
+    return ephemeral("That session is not on a campaign you are on.");
+  }
+
+  const text =
+    interaction.data?.components
+      ?.flatMap((row) => row.components)
+      .find((input) => input.custom_id === DATES_INPUT)?.value ?? "";
+
+  const timeZone =
+    (await getSetting<string>(env, SETTING_KEYS.timezone)) ?? "Europe/London";
+  const parsed = parseDates({
+    text,
+    timeZone,
+    durationSeconds: target.session.endsAt - target.session.startsAt,
+    now: new Date(),
+  });
+
+  if (!parsed.ok) {
+    return ephemeral(
+      parsed.tooMany
+        ? `That is ${parsed.tooMany} dates — a poll takes ten. Trim it and try again.`
+        : [
+            "Orrey could not read these lines, so nothing was written:",
+            ...parsed.unreadable.map((line) => `- \`${line}\``),
+            "",
+            "Try `2026-10-01 19:00`, `Thu 8 Oct 7pm`, or `15 Oct 19:00`.",
+          ].join("\n"),
+    );
+  }
+
+  const opened = await openPoll(env, {
+    actor,
+    targetSessionId: sessionId,
+    ...(target.session.campaignId ? { campaignId: target.session.campaignId } : {}),
+    channelId:
+      target.campaign?.discordChannelId ??
+      (await getSetting<string>(env, SETTING_KEYS.schedulingChannelId)) ??
+      undefined,
+    dates: parsed.dates,
+    now: new Date(),
+  });
+
+  if (!opened.ok) {
+    return ephemeral(
+      opened.reason === "already-open"
+        ? "There is already a poll open for that session. Settle that one first."
+        : "Orrey has nowhere to post that — the campaign has no channel and neither does settings.",
+    );
+  }
+
+  return ephemeral(
+    `Asking. ${parsed.dates.length} ${parsed.dates.length === 1 ? "day" : "days"} are going up in the channel now.`,
+  );
+}
+
+/**
  * `/whos-in`'s `event` option was declared with `autocomplete: true` at cutover
  * and has answered `{ choices: [] }` ever since. It resolves against upcoming
  * sessions on the caller's own rosters, capped at Discord's 25 — one indexed
@@ -157,10 +362,37 @@ async function handleAutocomplete(interaction: Interaction, env: Env): Promise<J
       ? await sessionChoices(env, actor.id, String(focused.value ?? ""), new Date())
       : [];
 
+  /**
+   * "Find a new day" is a **synthetic choice**, not a fifth command.
+   *
+   * Opening an untargeted poll from Discord is the same paragraph modal with no
+   * session attached, so it belongs in the same option rather than in a command
+   * of its own — which is what keeps the surface at four.
+   *
+   * Offered only to somebody holding the organiser role, read off the payload
+   * Discord signed. It is a convenience and not the access check: the console
+   * route behind it does its own, and so does everything downstream.
+   */
+  if (actor && focused?.name === "event" && interaction.data?.name === "reschedule") {
+    if (await hasOrganiserRole(env, interaction)) {
+      choices.unshift({ name: "Find a new day — no session", value: FIND_A_DAY });
+    }
+  }
+
   return {
     type: InteractionResponseType.APPLICATION_COMMAND_AUTOCOMPLETE_RESULT,
-    data: { choices },
+    data: { choices: choices.slice(0, MAX_CHOICES) },
   };
+}
+
+/** The sentinel the synthetic choice carries. Not a session id, and never one. */
+export const FIND_A_DAY = "new-day";
+
+async function hasOrganiserRole(env: Env, interaction: Interaction): Promise<boolean> {
+  const roleId = await getSetting<string>(env, SETTING_KEYS.organiserRoleId);
+  // Fail closed: an unseeded role id means nobody, which somebody notices.
+  if (!roleId) return false;
+  return interaction.member?.roles?.includes(roleId) ?? false;
 }
 
 function optionOf(interaction: Interaction, name: string): string | undefined {
@@ -235,6 +467,10 @@ async function handleComponent(
       return handlePing(interaction, env, id.target ?? "default");
     case "privacy":
       return handlePrivacy(interaction, env, ctx, id.arg);
+    case "poll":
+      return handlePoll(interaction, env, id.arg, id.target);
+    case "suggest":
+      return handleSuggest(interaction, env, id.target);
     default:
       return retiredPost();
   }
@@ -334,6 +570,70 @@ async function handleAttended(
 }
 
 /**
+ * Answering a date poll, and re-reading one.
+ *
+ * Discord sends the **complete** selection in `data.values` every time, so the
+ * write behind this is a replacement rather than a toggle — and an empty
+ * selection is a real answer, "none of these work", not a click that failed to
+ * say anything.
+ *
+ * The response is `UPDATE_MESSAGE` rendering what was just written: the click is
+ * the re-render. The message itself is never read.
+ *
+ * **Canonise**, **Apply** and the override select are the organiser's half. They
+ * are refused ephemerally for everybody else: a player clicking Canonise on a
+ * post the whole server can see must not change what everybody else is looking
+ * at.
+ */
+async function handlePoll(
+  interaction: Interaction,
+  env: Env,
+  arg: string | undefined,
+  pollId: string | undefined,
+): Promise<Json> {
+  if (!pollId) return retiredPost();
+
+  const actor = actorOf(interaction);
+  if (!actor) return ephemeral("Orrey could not tell who clicked that.");
+
+  const values = interaction.data?.values ?? [];
+  const answer =
+    arg === "select"
+      ? await answerPoll(env, pollId, actor, values)
+      : arg === "refresh"
+        ? await refreshPoll(env, pollId, actor)
+        : arg === "canon"
+          ? await openOverride(env, pollId, actor, interaction)
+          : arg === "pick"
+            ? await pickWinners(env, pollId, actor, interaction, values)
+            : arg === "apply"
+              ? await applyOverride(env, pollId, actor, interaction)
+              : undefined;
+
+  // An id Orrey minted but does not act on is the retired-post case, the same as
+  // an id it never minted at all.
+  if (!answer) return retiredPost();
+
+  if (!answer.ok) {
+    // Refusal is ephemeral and rewrites nothing. A player clicking Canonise on a
+    // post the whole server can see must not change what everybody else is
+    // looking at — and the same goes for a late answer: the post stays as it is.
+    switch (answer.reason) {
+      case "refused":
+        return ephemeral("Only the person who opened this poll, or an organiser, can close it.");
+      case "closed":
+        return ephemeral(
+          "This poll has closed — it is not taking answers any more. Ask whoever opened it.",
+        );
+      default:
+        return retiredPost();
+    }
+  }
+
+  return { type: InteractionResponseType.UPDATE_MESSAGE, data: answer.payload };
+}
+
+/**
  * Note opens a modal. Its id is minted the same way every other component id
  * is, so the submission that comes back minutes later is recognised — or, if it
  * comes back after a schema change, degrades to the retired-post response like
@@ -375,7 +675,10 @@ const NOTE_INPUT = "note";
  */
 async function handleModal(interaction: Interaction, env: Env): Promise<Json> {
   const id = decodeCustomId(interaction.data?.custom_id ?? "");
-  if (!id || id.action !== "attend-note" || !id.target) return retiredPost();
+  if (!id || !id.target) return retiredPost();
+
+  if (id.action === "poll-open") return openDatePoll(interaction, env, id.target);
+  if (id.action !== "attend-note") return retiredPost();
 
   const actor = actorOf(interaction);
   if (!actor) return ephemeral("Orrey could not tell who submitted that.");
