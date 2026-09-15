@@ -2,7 +2,14 @@ import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SETTING_KEYS, getSetting, setSetting } from "../src/db/settings.ts";
 import { clearTokenCache } from "../src/google/calendar.ts";
-import { renewWatchIfDue, startWatch, storedWatch, type Watch } from "../src/google/watch.ts";
+import {
+  ASSUMED_TTL_SECONDS,
+  RENEW_WITHIN_SECONDS,
+  renewWatchIfDue,
+  startWatch,
+  storedWatch,
+  type Watch,
+} from "../src/google/watch.ts";
 import { handleScheduled } from "../src/cron/scheduled.ts";
 
 /**
@@ -208,6 +215,48 @@ describe("the renewal window", () => {
     expect(await renewWatchIfDue(watchEnv(), now)).toBe("current");
     expect(calls).toEqual([]);
     expect(await storedWatch(watchEnv())).toEqual(after);
+  });
+});
+
+describe("the window against the TTL Google issues", () => {
+  it("leaves room for a failed tick and the two after it", () => {
+    // The renewal runs daily. A window shorter than the TTL by less than a day
+    // would mean one missed tick lapses a channel, and nothing would notice
+    // until a change nobody heard about.
+    expect(ASSUMED_TTL_SECONDS - RENEW_WITHIN_SECONDS).toBeGreaterThan(2 * DAY);
+  });
+
+  it("would renew immediately on a TTL shorter than the window", async () => {
+    // `scripts/probe-watch.ts` measures the real TTL. If it comes back shorter
+    // than the window, this is the shape of the failure it prevents: a channel
+    // that is due the moment it is opened, renewed every tick, for ever.
+    const now = Math.floor(Date.now() / 1000);
+    await setSetting(watchEnv(), SETTING_KEYS.googleWatch, {
+      channelId: "short",
+      resourceId: "short-resource",
+      token: "t",
+      expiresAt: now + RENEW_WITHIN_SECONDS - 1,
+    } satisfies Watch);
+
+    expect(await renewWatchIfDue(watchEnv(), now)).toBe("renewed");
+  });
+
+  it("takes Google's stated expiry over the assumed one", async () => {
+    // The assumption is a fallback for a channel Google opens without saying
+    // when it ends. Whatever it does say wins.
+    const short = Math.floor(Date.now() / 1000) + 2 * DAY;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = new URL(typeof input === "string" ? input : (input as Request).url);
+      if (url.hostname === "oauth2.googleapis.com") {
+        return Response.json({ access_token: "at", expires_in: 3600 });
+      }
+      if (url.pathname.endsWith("/events/watch")) {
+        return Response.json({ resourceId: "r", expiration: String(short * 1000) });
+      }
+      return new Response(null, { status: 204 });
+    }) as typeof fetch;
+
+    expect((await startWatch(watchEnv())).expiresAt).toBe(short);
   });
 });
 

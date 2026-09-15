@@ -54,3 +54,30 @@ the trap is gone.
   guild's zone (`src/campaigns/recurrence.ts`), converting back to an instant
   afterwards; dividing elapsed seconds by an interval has the same bug and drifts
   further the older the anchor is.
+
+- **A Google `events.watch` channel expires and does not renew itself, and the
+  TTL is Google's to choose.** The renewal in `src/google/watch.ts` assumes about
+  seven days and replaces a channel with less than forty-eight hours left, so a
+  daily tick that fails has two more before anything lapses. That assumption is
+  not documented as a guarantee. Rule: `ASSUMED_TTL_SECONDS` and
+  `RENEW_WITHIN_SECONDS` are both exported and a test asserts the gap between
+  them, so shrinking one is a decision somebody makes rather than a channel that
+  stops one night. `scripts/probe-watch.ts` measures the real figure — run it
+  before trusting the window, and record what it says on #49.
+
+- **Google refuses to deliver push notifications to an unverified domain.** The
+  Worker's public hostname has to be verified once, by hand, in the Google
+  console; until it is, `events.watch` refuses the channel and nothing in the
+  return path ever fires. No test can stand in for it, and the failure looks
+  like silence rather than an error. Rule: verify the domain before expecting a
+  push, and read `scripts/probe-watch.ts`'s `watch` line — a 401 there is almost
+  always this.
+
+- **Repeated `privateExtendedProperty` filters: Google's reference says AND, its
+  guide says OR.** Nothing in Orrey depends on the answer, because `syncToken` is
+  incompatible with that filter and `src/google/sync.ts` therefore lists the
+  whole calendar — which is the reason Orrey owns a calendar rather than
+  filtering somebody else's. Rule: if anybody ever reaches for that filter, run
+  `scripts/probe-watch.ts` first and read the `repeated filter` line, because
+  the two readings differ by everything: an intersection of two values no single
+  event carries returns nothing at all.
