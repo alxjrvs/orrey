@@ -32,7 +32,7 @@ function consoleEnv() {
 }
 
 async function cookie() {
-  return `${SESSION_COOKIE}=${await issueSession(consoleEnv(), "1001", NOW)}`;
+  return `${SESSION_COOKIE}=${await issueSession(consoleEnv(), "1001", new Date())}`;
 }
 
 async function send(method: string, path: string, body?: unknown) {

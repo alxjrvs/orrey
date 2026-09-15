@@ -2,6 +2,7 @@ import { asc, eq, inArray, sql } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import type { BatchItem } from "drizzle-orm/batch";
 import { db, schema } from "../db/index.ts";
+import { singleNamesGame } from "../db/schema.ts";
 import { mintId } from "../db/ids.ts";
 
 /**
@@ -72,14 +73,36 @@ export async function mintStatements(env: Env, pollId: string, wonIds: string[])
   const d = db(env);
   const minted = fresh.map((date) => ({ dayId: mintId(), date }));
 
+  /**
+   * `singleNamesGame`, enforced where its docstring says it is enforced.
+   *
+   * SQLite cannot add a CHECK to `game_days` without rebuilding the table, and
+   * D1 ignores `PRAGMA foreign_keys=OFF` — so a rebuild would cascade the
+   * signups away. The rule therefore lives in the one statement that writes the
+   * row, and until now it lived nowhere: `grep singleNamesGame src/` found the
+   * definition and no call site.
+   */
+  const kind = poll.gameDayKind ?? "single";
+  if (!singleNamesGame({ kind, gameId: poll.gameId })) {
+    throw new Error(
+      `poll ${poll.id} would mint a single day with no game — a single day's capacity comes from its game`,
+    );
+  }
+
   const statements: BatchItem<"sqlite">[] = [
     d.insert(schema.gameDays).values(
       minted.map(({ dayId, date }) => ({
         id: dayId,
-        kind: poll.gameDayKind ?? ("single" as const),
+        kind,
         startsAt: date.startsAt,
         endsAt: date.endsAt,
         title,
+        // The poll's game, carried onto the day rather than read once for a
+        // title and dropped. Without it every day this path mints is
+        // `game_id NULL`, which `dayWithCapacity` reads as "however many turn
+        // up" — so a six-player Blades table seats nine and the waitlist never
+        // engages on any day the product actually creates.
+        gameId: poll.gameId,
       })),
     ),
     ...minted.map(({ dayId, date }) =>

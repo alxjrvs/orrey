@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { db, schema } from "../src/db/index.ts";
 import { hasExactlyOneParent } from "../src/db/schema.ts";
 import { ASSUME_JOB } from "../src/attendance/assume.ts";
+import { JEOPARDY_JOB } from "../src/attendance/jeopardy.ts";
+import { REMINDER_JOB } from "../src/attendance/reminders.ts";
 import { POST_SIGNUP_JOB } from "../src/game-days/post.ts";
 import {
   IllegalDayTransition,
@@ -112,18 +114,58 @@ describe("opening seating", () => {
     expect(await sessions()).toHaveLength(1);
   });
 
-  it("arms the four standing jobs a seating day wants", async () => {
+  it("arms the projection, the signup post and the whole ladder after it", async () => {
     await day();
     await transition(env, DAY_ID, "SEATING", "organiser");
 
     const sessionId = sessionIdFor(DAY_ID);
-    expect((await jobs()).map((job) => [job.kind, job.id])).toEqual([
-      [ASSUME_JOB, `${ASSUME_JOB}:${sessionId}`],
-      [LOCK_JOB, `${LOCK_JOB}:${DAY_ID}`],
-      [POST_SIGNUP_JOB, `${POST_SIGNUP_JOB}:${DAY_ID}`],
-      ["session.project", `session.project:${sessionId}`],
+    const armed = await jobs();
+    expect(armed.map((job) => job.id)).toEqual([
+      `${ASSUME_JOB}:${sessionId}`,
+      `${LOCK_JOB}:${DAY_ID}`,
+      `${POST_SIGNUP_JOB}:${DAY_ID}`,
+      `${JEOPARDY_JOB}:${sessionId}`,
+      `${REMINDER_JOB}:${sessionId}:2`,
+      `${REMINDER_JOB}:${sessionId}:24`,
+      `${REMINDER_JOB}:${sessionId}:72`,
+      `session.project:${sessionId}`,
     ]);
-    expect((await jobs()).find((job) => job.kind === ASSUME_JOB)?.runAt).toBe(START + 18_000);
+    expect(armed.find((job) => job.kind === ASSUME_JOB)?.runAt).toBe(START + 18_000);
+    // A day gets the same ladder a campaign's session gets: the check a day out
+    // and the nudges before it. p5/8 taught `requiredFor` about a game's
+    // min_players; nothing arms the check that asks it unless this does.
+    expect(armed.find((job) => job.kind === JEOPARDY_JOB)?.runAt).toBe(START - 24 * 3600);
+    expect(armed.filter((job) => job.kind === REMINDER_JOB).map((job) => job.runAt)).toEqual([
+      START - 2 * 3600,
+      START - 24 * 3600,
+      START - 72 * 3600,
+    ]);
+  });
+
+  it("writes the state and the ladder in one commit, or neither", async () => {
+    await day();
+    // The jobs insert is in the same batch as the state write, so a statement
+    // that cannot land takes the transition down with it. A duplicate
+    // idempotency key on a row this batch would write is the cheapest way to
+    // make one fail for its own reasons.
+    await db(env)
+      .insert(schema.jobs)
+      .values({
+        id: "somebody-elses-row",
+        kind: ASSUME_JOB,
+        payload: {},
+        idempotencyKey: `${ASSUME_JOB}:${sessionIdFor(DAY_ID)}`,
+        runAt: START,
+      });
+
+    await expect(transition(env, DAY_ID, "SEATING", "organiser")).rejects.toThrow();
+
+    // Still PROPOSED, so clicking Open seating again replays the whole thing.
+    // The `from === to` guard means a day left half-open could never be
+    // repaired: the retry returns changed:false without arming anything.
+    expect((await dayRow())?.state).toBe("PROPOSED");
+    expect(await sessions()).toEqual([]);
+    expect(await audit()).toEqual([]);
   });
 
   it("puts the lock two days out, by default", async () => {

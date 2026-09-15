@@ -52,6 +52,18 @@ function lockJob() {
     .get();
 }
 
+/**
+ * Bring the armed lock forward to now — which is what the clock does. Arming at
+ * a time already past is the thing the clamp exists to prevent, so a test that
+ * wants a due lock has to age one rather than arm one.
+ */
+async function mature() {
+  await db(env)
+    .update(schema.jobs)
+    .set({ runAt: Math.floor(Date.now() / 1000) - 60 })
+    .where(eq(schema.jobs.id, `${LOCK_JOB}:${DAY_ID}`));
+}
+
 function audit() {
   return db(env).select().from(schema.auditLog).all();
 }
@@ -179,7 +191,8 @@ describe("what the job does", () => {
 
   it("runs when its time comes, and acks", async () => {
     await day();
-    await armLock(env, DAY_ID, Math.floor(Date.now() / 1000) + 48 * 3600 - 60);
+    await armLock(env, DAY_ID, Math.floor(Date.now() / 1000) + 10 * 86_400);
+    await mature();
 
     await drainJobs(env);
 
@@ -189,13 +202,36 @@ describe("what the job does", () => {
 
   it("acks rather than failing on an ordinary already-locked day", async () => {
     await day({ state: "LOCKED" });
-    await armLock(env, DAY_ID, Math.floor(Date.now() / 1000) + 48 * 3600 - 60);
+    await armLock(env, DAY_ID, Math.floor(Date.now() / 1000) + 10 * 86_400);
+    await mature();
 
     await drainJobs(env);
 
     // A job that fails on the ordinary case is a job that fills `last_error`
     // with nothing wrong.
     expect(await lockJob()).toMatchObject({ state: "done", lastError: null });
+  });
+
+  it("is not already due for a day opened inside the lead time", async () => {
+    await day();
+    const startsAt = Math.floor(Date.now() / 1000) + 86_400;
+
+    // A day tomorrow, against a two-day default. Arming at starts_at - 48h
+    // would be a lock due before the signup post it was armed beside.
+    await armLock(env, DAY_ID, startsAt);
+    await drainJobs(env);
+
+    expect(await dayRow()).toMatchObject({ state: "SEATING" });
+    expect((await lockJob())?.runAt).toBe(startsAt);
+  });
+
+  it("still arms at the lead time for a day far enough out", async () => {
+    await day();
+    const startsAt = Math.floor(Date.now() / 1000) + 10 * 86_400;
+
+    await armLock(env, DAY_ID, startsAt);
+
+    expect((await lockJob())?.runAt).toBe(startsAt - 48 * 3600);
   });
 
   it("posts nothing at all", async () => {

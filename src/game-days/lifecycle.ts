@@ -6,8 +6,11 @@ import {
   SETTING_KEYS,
   settingOr,
 } from "../db/settings.ts";
-import { armAssume } from "../attendance/assume.ts";
-import { enqueueUnprojection } from "../projection/outbox.ts";
+import { assumeJob } from "../attendance/assume.ts";
+import { jeopardyJob } from "../attendance/jeopardy.ts";
+import { reminderJobs } from "../attendance/reminders.ts";
+import { rearm, rearmStatement, type ArmedJob } from "../jobs/arm.ts";
+import { escapeMarkdown } from "../discord/markdown.ts";
 import { POST_SIGNUP_JOB } from "./post.ts";
 import { gameDayTitle } from "../projection/target.ts";
 import type { MessagePayload } from "../attendance/render.ts";
@@ -155,12 +158,14 @@ export async function transition(
         .onConflictDoNothing(),
     ]);
 
-    // Both surfaces, and not gated on the day still being projectable: a delete
-    // is how something published comes down, and `project`'s retract branch is
-    // deliberately ungated for exactly this. Gating it would strand a cancelled
-    // day's event on everybody's calendar for good.
-    await enqueueUnprojection(env, existing.id);
-
+    // The calendar deletes are owed by that job too, not sent from here. A queue
+    // send after the commit is the one consequence of cancelling that could not
+    // be replayed: `if (from === to)` above returns before any of this, and
+    // `EDGES.CANCELLED` is empty, so a `sendBatch` that threw would leave the
+    // day CANCELLED, the notice armed — "The calendar entries have been taken
+    // down" — and both entries still on everybody's calendar, with no second
+    // click that could reach here. Hung off the job row instead, a queue that is
+    // down costs a retry rather than the retraction.
     return { from, to, changed: true, sessionId: existing.id };
   }
 
@@ -179,12 +184,26 @@ export async function transition(
     // and `campaign_id` is not, which is what `hasExactlyOneParent` asks.
     .onConflictDoNothing();
 
+  // The ladder a session gets: the register when the evening is over, the
+  // does-it-still-run check a day before, and the nudges. Both of the latter
+  // read `settings`, so they are resolved *here* — before the batch — and the
+  // batch is left with nothing in it that can throw for its own reasons.
+  const standing = [
+    assumeJob(sessionId, day.endsAt),
+    await lockJob(env, gameDayId, day.startsAt),
+    await jeopardyJob(env, sessionId, day.startsAt),
+    ...(await reminderJobs(env, sessionId, day.startsAt)),
+  ];
+
+  // One commit. Opening seating and the jobs that carry the day to its end are
+  // the same act: the `from === to` guard above means a transition that got
+  // halfway cannot be run again to finish the job, so there is no halfway to be
+  // in. Each key is derived from the session, so a replay writes none of them a
+  // second time.
   await d.batch([
     moved,
     minted,
     logged,
-    // Three standing jobs. Each key is derived from the session, so a re-run of
-    // a half-finished transition writes none of them a second time.
     d
       .insert(schema.jobs)
       .values([
@@ -198,6 +217,12 @@ export async function transition(
         {
           // The signup post, now — a day in SEATING with no post is a day
           // nobody can claim a place at, so there is no lead time to wait out.
+          //
+          // The attendance post is *not* here. It is armed by the signup post's
+          // own job once the day has a thread, because `postAttendancePost`
+          // sends into that thread if there is one and into the channel if
+          // there is not — and under send-only a post in the wrong place cannot
+          // be moved. Causal, rather than a `run_at` a minute out and a hope.
           id: `${POST_SIGNUP_JOB}:${gameDayId}`,
           kind: POST_SIGNUP_JOB,
           payload: { gameDayId },
@@ -206,16 +231,8 @@ export async function transition(
         },
       ])
       .onConflictDoNothing(),
+    rearmStatement(d, standing),
   ]);
-
-  // And the register, when it is over. Armed outside the batch because it
-  // upserts its `run_at` rather than being written once — the day can move.
-  await armAssume(env, sessionId, day.endsAt);
-
-  // And the moment the table settles. Also an upsert rather than a one-time
-  // write, for the same reason: a day whose date moves has to take its lock
-  // with it, or it fires a lead time before the wrong evening.
-  await armLock(env, gameDayId, day.startsAt);
 
   return { from, to, changed: true, sessionId };
 }
@@ -234,27 +251,36 @@ export const LOCK_JOB = "game-day.lock";
 /** The one message a called-off day sends. */
 export const CANCELLED_JOB = "game-day.cancelled";
 
-export async function armLock(env: Env, gameDayId: string, startsAt: number): Promise<void> {
+export async function lockJob(
+  env: Env,
+  gameDayId: string,
+  startsAt: number,
+  now = Math.floor(Date.now() / 1000),
+): Promise<ArmedJob> {
   const hours = await settingOr<number>(
     env,
     SETTING_KEYS.gameDayLockLeadHours,
     SETTING_DEFAULTS[SETTING_KEYS.gameDayLockLeadHours],
   );
-  const id = `${LOCK_JOB}:${gameDayId}`;
+  const lead = startsAt - hours * 3600;
 
-  await db(env)
-    .insert(schema.jobs)
-    .values({
-      id,
-      kind: LOCK_JOB,
-      payload: { gameDayId },
-      idempotencyKey: id,
-      runAt: startsAt - hours * 3600,
-    })
-    .onConflictDoUpdate({
-      target: schema.jobs.id,
-      set: { runAt: startsAt - hours * 3600, state: "pending", attempts: 0, lastError: null },
-    });
+  return {
+    id: `${LOCK_JOB}:${gameDayId}`,
+    kind: LOCK_JOB,
+    payload: { gameDayId },
+    // Never armed already due. A day opened for seating inside the lead time —
+    // Wednesday evening for a Thursday, against a two-day default — would
+    // otherwise lock itself in the same minute its signup post goes up, and
+    // there is no LOCKED → SEATING edge and no way to mint the day again. Every
+    // button on that post would answer "seating is closed" for ever. Firing the
+    // jeopardy check or a reminder early is harmless; firing the lock early is
+    // terminal, so short-notice seating runs to the evening itself instead.
+    runAt: lead > now ? lead : startsAt,
+  };
+}
+
+export async function armLock(env: Env, gameDayId: string, startsAt: number): Promise<void> {
+  await rearm(db(env), [await lockJob(env, gameDayId, startsAt)]);
 }
 
 /**
@@ -325,8 +351,8 @@ export function cancelledNotice(
 ): MessagePayload {
   return {
     content: [
-      `**It's off.** ${gameDayTitle(day, game)} is not happening.`,
-      `It was <t:${day.startsAt}:F>${day.venue ? `, ${day.venue}` : ""}.`,
+      `**It's off.** ${escapeMarkdown(gameDayTitle(day, game))} is not happening.`,
+      `It was <t:${day.startsAt}:F>${day.venue ? `, ${escapeMarkdown(day.venue)}` : ""}.`,
       "",
       "-# The calendar entries have been taken down.",
     ].join("\n"),

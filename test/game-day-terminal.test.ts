@@ -220,16 +220,73 @@ describe("a day that was played", () => {
 });
 
 describe("a day that was called off", () => {
-  it("takes both calendar entries down", async () => {
+  it("takes both calendar entries down, when the notice job runs", async () => {
     await day({ state: "SEATING" });
     await session();
 
     await transition(outboxEnv(), DAY_ID, "CANCELLED", "organiser");
+    // Nothing yet: the transition owes the deletes, it does not send them. The
+    // job row written in its batch is what owes them.
+    expect(sent).toEqual([]);
+
+    await drainJobs(outboxEnv());
 
     expect(sent).toEqual([
       { kind: "discord.event.delete", sessionId: SESSION_ID },
       { kind: "gcal.delete", sessionId: SESSION_ID },
     ]);
+  });
+
+  it("still owes them after a queue that was down", async () => {
+    await day({ state: "SEATING" });
+    await session();
+    await transition(outboxEnv(), DAY_ID, "CANCELLED", "organiser");
+
+    let refuse = true;
+    const flaky = {
+      ...env,
+      OUTBOX: {
+        send: async () => {
+          throw new Error("queue is having a day");
+        },
+        sendBatch: async (batch: Iterable<{ body: OutboxMessage }>) => {
+          if (refuse) throw new Error("queue is having a day");
+          for (const { body } of batch) sent.push(body);
+        },
+      } as unknown as Env["OUTBOX"],
+    } as Env;
+
+    await drainJobs(flaky);
+    expect(sent).toEqual([]);
+
+    // Cancelling is terminal — `EDGES.CANCELLED` is empty and `from === to`
+    // returns early — so a retraction sent from the transition would have been
+    // lost here for good, on a day whose notice says the entries came down.
+    // Owed by the job, it is simply owed again.
+    refuse = false;
+    await db(env)
+      .update(schema.jobs)
+      .set({ runAt: Math.floor(Date.now() / 1000) - 60 })
+      .where(eq(schema.jobs.id, `${CANCELLED_JOB}:${DAY_ID}`));
+    await drainJobs(flaky);
+
+    expect(sent).toEqual([
+      { kind: "discord.event.delete", sessionId: SESSION_ID },
+      { kind: "gcal.delete", sessionId: SESSION_ID },
+    ]);
+  });
+
+  it("escapes a title and a venue somebody typed markdown into", async () => {
+    await day({ state: "SEATING", kind: "multi", gameId: null, title: "November `games` day" });
+    await session();
+    await transition(outboxEnv(), DAY_ID, "CANCELLED", "organiser");
+
+    await drainJobs(outboxEnv());
+
+    // A stray backtick opens a code span that never closes, swallowing the
+    // timestamp and the line about the calendar — on a message never edited.
+    const notice = calls.at(-1)?.body as { content: string };
+    expect(notice.content).toContain("November \\`games\\` day");
   });
 
   it("calls the session off with it", async () => {

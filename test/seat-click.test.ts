@@ -252,7 +252,12 @@ describe("where the answer comes from", () => {
     );
     const answer = (await res.json()) as { data: { content: string } };
     expect(answer.data.content).toContain("**Seated (1/5)**");
-    expect(answer.data.content).not.toContain("99");
+    // The lie by name rather than by digits: the footer carries an `As of` stamp
+    // that is a live unix timestamp, so a bare "99" goes red whenever the clock
+    // happens to contain those two characters — a failure that says nothing at
+    // all about where the answer came from.
+    expect(answer.data.content).not.toContain("(99/99)");
+    expect(answer.data.content).not.toContain("everybody");
   });
 
   it("remembers whoever clicked, so the post can name them", async () => {

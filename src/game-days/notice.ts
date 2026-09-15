@@ -3,6 +3,7 @@ import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
 import { SETTING_KEYS, getSetting, requireGuildId } from "../db/settings.ts";
 import { throughGovernor } from "../discord/governor.ts";
+import { escapeMarkdown } from "../discord/markdown.ts";
 import { asDiscordFailure, postMessage } from "../discord/rest.ts";
 import { claim, record, recordFailure, release } from "../projection/publications.ts";
 import { gameDayTitle } from "../projection/target.ts";
@@ -102,8 +103,8 @@ export function promotedNotice(
 
   return {
     content: [
-      `**You're in.** ${who} — ${seats(userIds.length)} came free at ${gameDayTitle(day, game)}.`,
-      `<t:${day.startsAt}:F>${day.venue ? `, ${day.venue}` : ""}.`,
+      `**You're in.** ${who} — ${seats(userIds.length)} came free at ${escapeMarkdown(gameDayTitle(day, game))}.`,
+      `<t:${day.startsAt}:F>${day.venue ? `, ${escapeMarkdown(day.venue)}` : ""}.`,
       "",
       "-# Can't make it after all? Out on the signup post puts the seat back.",
     ].join("\n"),

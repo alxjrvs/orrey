@@ -6,6 +6,7 @@ import { SETTING_KEYS, setSetting } from "../src/db/settings.ts";
 import { mintId } from "../src/db/ids.ts";
 import type { Env, OutboxMessage } from "../src/env.ts";
 import { scheduledEventBody } from "../src/discord/events.ts";
+import { eventBody } from "../src/google/calendar.ts";
 import { handleQueueBatch } from "../src/queue/consumer.ts";
 import {
   googleFingerprint,
@@ -239,6 +240,29 @@ describe("the Discord event", () => {
   it("says so rather than nothing when the day has no venue yet", async () => {
     const body = scheduledEventBody(await sessionOf(await day({ venue: null })));
     expect(body).toMatchObject({ entity_metadata: { location: "To be confirmed" } });
+  });
+});
+
+describe("the Google event", () => {
+  it("carries the same venue the Discord event does", async () => {
+    const target = await sessionOf(await day());
+
+    // Asserted on the **body**, not only on the fingerprint. The fingerprint
+    // already hashed the venue in, which is exactly what made this invisible:
+    // Google's body omitted `location` entirely while the hash claimed it was
+    // there, so moving a venue changed the fingerprint, missed the skip guard,
+    // and wrote a body byte-identical to the one already on the calendar.
+    const body = eventBody(target, "ev-1", await googleFingerprint(target));
+    expect(body).toMatchObject({ location: "The Wreck, back room" });
+  });
+
+  it("omits the key rather than sending an empty place", async () => {
+    const target = await sessionOf(await day({ venue: null }));
+    const body = eventBody(target, "ev-1", await googleFingerprint(target));
+
+    // Google is not Discord: there is no "To be confirmed" to show, and a blank
+    // `location` on a calendar entry reads as a place nobody typed.
+    expect(body).not.toHaveProperty("location");
   });
 });
 

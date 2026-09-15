@@ -1,7 +1,7 @@
-import { and, eq, lte } from "drizzle-orm";
+import { and, eq, lte, or, sql } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
-import { enqueueProjection } from "../projection/outbox.ts";
+import { enqueueProjection, enqueueUnprojection } from "../projection/outbox.ts";
 import { surfacesFor } from "../campaigns/event-cap.ts";
 import { postAttendancePost } from "../attendance/post.ts";
 import { startSessionThread } from "../attendance/thread.ts";
@@ -17,6 +17,7 @@ import { isMultiDaySession } from "../attendance/tables.ts";
 import { announceGameDay, postCloseNotice, postPollPost } from "../polls/post.ts";
 import { APPLY_JOB, applyFollowUp } from "../polls/canonise.ts";
 import { POST_SIGNUP_JOB, postSignupPost, startDayThread } from "../game-days/post.ts";
+import { sessionIdFor } from "../game-days/lifecycle.ts";
 import { PROMOTED_JOB } from "../game-days/promote.ts";
 import {
   CANCELLED_JOB,
@@ -32,6 +33,30 @@ const CLAIM_SECONDS = 60;
 const BATCH = 25;
 
 /**
+ * A job this drain is allowed to take: one nobody holds, or one whose lease has
+ * run out.
+ *
+ * The second half is what makes `claimed_until` mean anything. It was written
+ * and never read, so a job whose isolate died mid-run — a cron invocation
+ * evicted, a CPU limit — stayed `claimed` for ever and no later drain would look
+ * at it again. The lease was a lease nobody collected.
+ *
+ * Phase 5 is what makes that bite. A `game-day.lock` job that dies leaves the
+ * day in SEATING through its own evening, and a `game-day.post-signup` job that
+ * dies leaves a SEATING day with no post anybody can claim a seat on.
+ *
+ * The same expression guards the claim's `where`, and that is what keeps
+ * exactly-once per lease: the drain that wins sets `claimed_until` forward, so a
+ * concurrent drain's compare-and-set matches nothing.
+ */
+function reclaimable(now: number) {
+  return or(
+    eq(schema.jobs.state, "pending"),
+    and(eq(schema.jobs.state, "claimed"), lte(schema.jobs.claimedUntil, now)),
+  );
+}
+
+/**
  * Runs every minute. Claims due jobs with a lease so a slow run and the next
  * tick cannot both execute the same job, then dispatches each one.
  */
@@ -42,7 +67,7 @@ export async function drainJobs(env: Env): Promise<number> {
   const due = await d
     .select()
     .from(schema.jobs)
-    .where(and(eq(schema.jobs.state, "pending"), lte(schema.jobs.runAt, now)))
+    .where(and(reclaimable(now), lte(schema.jobs.runAt, now)))
     .limit(BATCH);
 
   let ran = 0;
@@ -50,7 +75,7 @@ export async function drainJobs(env: Env): Promise<number> {
     const claimed = await d
       .update(schema.jobs)
       .set({ state: "claimed", claimedUntil: now + CLAIM_SECONDS, attempts: job.attempts + 1 })
-      .where(and(eq(schema.jobs.id, job.id), eq(schema.jobs.state, "pending")))
+      .where(and(eq(schema.jobs.id, job.id), reclaimable(now)))
       .returning({ id: schema.jobs.id });
     if (claimed.length === 0) continue;
 
@@ -302,7 +327,31 @@ async function runJob(job: typeof schema.jobs.$inferSelect, env: Env): Promise<v
       // thread is started from the *recorded* id rather than this call's.
       if (!messageId) return;
 
-      await startDayThread(env, gameDayId);
+      const threadId = await startDayThread(env, gameDayId);
+      if (!threadId) return;
+
+      // And now the attendance post, once the day has a thread to put it in.
+      //
+      // It is armed here rather than by the transition that armed this job
+      // because `postAttendancePost` sends into the day's thread if there is
+      // one and into the channel if there is not, and under send-only a post in
+      // the wrong place cannot be moved. Arming it a minute out would be a race
+      // this loses whenever the signup post has to retry; arming it from the
+      // thread's own creation cannot be. `onConflictDoNothing` because this
+      // job's own retry runs it again.
+      //
+      // Without it a game day has no surface anybody can say "I'm coming" on,
+      // and `attendance.assume` writes the whole seated table down as absent.
+      await db(env)
+        .insert(schema.jobs)
+        .values({
+          id: `session.post-attendance:${sessionIdFor(gameDayId)}`,
+          kind: "session.post-attendance",
+          payload: { sessionId: sessionIdFor(gameDayId) },
+          idempotencyKey: `session.post-attendance:${sessionIdFor(gameDayId)}`,
+          runAt: sql`(unixepoch())`,
+        })
+        .onConflictDoNothing();
       return;
     }
 
@@ -371,6 +420,19 @@ async function runJob(job: typeof schema.jobs.$inferSelect, env: Env): Promise<v
     case CANCELLED_JOB: {
       const { gameDayId } = job.payload as { gameDayId?: string };
       if (!gameDayId) throw new Error(`${CANCELLED_JOB} job ${job.id} has no gameDayId`);
+
+      // Both surfaces come down, and from here rather than from `transition`,
+      // so the deletes are owed by the same durable row that owes the notice. A
+      // queue that is down sends this job back to `pending` with a backoff
+      // instead of losing the retraction for good — cancelling is terminal and
+      // there is no second click that reaches the transition again.
+      //
+      // Not gated on the day still being projectable: a delete is how something
+      // published comes down, and `project`'s retract branch is deliberately
+      // ungated for exactly this, no-ops on a session with no event ids, and is
+      // written so that projecting twice is indistinct from projecting once. So
+      // a re-run after a refused post costs nothing.
+      await enqueueUnprojection(env, sessionIdFor(gameDayId));
 
       const row = await db(env)
         .select({ day: schema.gameDays, game: schema.games })

@@ -169,6 +169,19 @@ describe("the seat write, unchanged", () => {
     expect((await states()).every(([, state]) => state === "in")).toBe(true);
   });
 
+  it("seats a replayed Waitlist click on a day with no limit", async () => {
+    await day();
+
+    // The button is gone from the render, but a custom_id is a string the
+    // client sends — `o1:seat:wait:<dayId>` is copyable off any capped day's
+    // post. Withholding the button in the renderer alone would leave the write
+    // able to put somebody in a waitlist nothing can ever promote them out of.
+    const answer = await click("wait", "1");
+
+    expect(await states()).toEqual([["1", "in"]]);
+    expect(answer.data.content).not.toContain("Waitlist");
+  });
+
   it("waitlists past a capacity exactly as a single day does", async () => {
     await day({ capacity: 2 });
     for (const who of ["1", "2", "3"]) await click("in", who);
