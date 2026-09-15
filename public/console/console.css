@@ -143,3 +143,16 @@ form.setting input[disabled] { opacity: 0.6; }
 /* The log, and the log only: lower case, curt, monospaced numbers. */
 ul.log { list-style: none; margin: 0; padding: 0; font-variant-numeric: tabular-nums; }
 ul.log li { padding: var(--space-1, 4px) 0; border-bottom: var(--border-hair); color: var(--text-secondary); }
+
+
+/* The written record. `pre-wrap` because a recap keeps its newlines — that is
+   the one way `normaliseLogBody` differs from `normaliseNote`, and rendering it
+   as a single run would throw away the difference. */
+.logs { margin-block: var(--space-4, 16px); }
+.logs article { border-block-start: var(--border-hair); padding-block: var(--space-2, 8px); }
+.logs article p { margin-block: var(--space-1, 4px); }
+.log-body { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+form.recap { margin-block: var(--space-4, 16px); display: grid; gap: var(--space-2, 8px); }
+form.recap textarea { display: block; width: 100%; margin-block-start: var(--space-1, 4px); }
+form.recap button[disabled] { opacity: 0.6; }
