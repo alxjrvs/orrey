@@ -3,6 +3,7 @@ import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
 import { SETTING_KEYS, clearSetting, getSetting, setSetting } from "../db/settings.ts";
 import { GoogleError, accessToken, watchCalendarId } from "./calendar.ts";
+import { applyChange } from "./inbound.ts";
 import {
   classifyEvent,
   sessionIdOf,
@@ -151,7 +152,17 @@ export interface Classified {
 
 export async function runSync(env: Env): Promise<Classified[]> {
   const listing = await listCalendar(env);
-  return classifyAll(env, listing.events);
+  const classified = await classifyAll(env, listing.events);
+
+  for (const one of classified) {
+    // `echo` is Orrey reading its own handwriting, and `foreign` is somebody
+    // else's evening. Both are left exactly alone — which is most of what a
+    // quiet calendar produces, and why a nightly pass over one is free.
+    if (one.verdict !== "changed" || !one.sessionId) continue;
+    await applyChange(env, one.sessionId, one.event);
+  }
+
+  return classified;
 }
 
 export async function classifyAll(env: Env, events: CalendarEvent[]): Promise<Classified[]> {
