@@ -38,7 +38,7 @@ async function send(method: string, path: string, body?: unknown) {
     new Request(`https://orrey.test${path}`, {
       method,
       headers: {
-        cookie: `${SESSION_COOKIE}=${await issueSession(consoleEnv(), "1001", NOW)}`,
+        cookie: `${SESSION_COOKIE}=${await issueSession(consoleEnv(), "1001", new Date())}`,
         "content-type": "application/json",
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
