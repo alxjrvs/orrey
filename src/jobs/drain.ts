@@ -1,4 +1,4 @@
-import { and, eq, lte } from "drizzle-orm";
+import { and, eq, lte, or } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
 import { enqueueProjection } from "../projection/outbox.ts";
@@ -13,10 +13,35 @@ import { gmOf } from "../campaigns/roster.ts";
 import { attendanceRows } from "../attendance/rows.ts";
 import { confirmedNotice, correctionPost, jeopardyNotice } from "../attendance/render.ts";
 import { announceGameDay, postCloseNotice, postPollPost } from "../polls/post.ts";
+import { APPLY_JOB, applyFollowUp } from "../polls/canonise.ts";
 import { loadProjectionTarget } from "../projection/target.ts";
 
 const CLAIM_SECONDS = 60;
 const BATCH = 25;
+
+/**
+ * A job this drain is allowed to take: one nobody holds, or one whose lease has
+ * run out.
+ *
+ * The second half is what makes `claimed_until` mean anything. It was written
+ * and never read, so a job whose isolate died mid-run — a cron invocation
+ * evicted, a CPU limit — stayed `claimed` for ever and no later drain would look
+ * at it again. The lease was a lease nobody collected.
+ *
+ * Phase 5 is what makes that bite. A `game-day.lock` job that dies leaves the
+ * day in SEATING through its own evening, and a `game-day.post-signup` job that
+ * dies leaves a SEATING day with no post anybody can claim a seat on.
+ *
+ * The same expression guards the claim's `where`, and that is what keeps
+ * exactly-once per lease: the drain that wins sets `claimed_until` forward, so a
+ * concurrent drain's compare-and-set matches nothing.
+ */
+function reclaimable(now: number) {
+  return or(
+    eq(schema.jobs.state, "pending"),
+    and(eq(schema.jobs.state, "claimed"), lte(schema.jobs.claimedUntil, now)),
+  );
+}
 
 /**
  * Runs every minute. Claims due jobs with a lease so a slow run and the next
@@ -29,7 +54,7 @@ export async function drainJobs(env: Env): Promise<number> {
   const due = await d
     .select()
     .from(schema.jobs)
-    .where(and(eq(schema.jobs.state, "pending"), lte(schema.jobs.runAt, now)))
+    .where(and(reclaimable(now), lte(schema.jobs.runAt, now)))
     .limit(BATCH);
 
   let ran = 0;
@@ -37,7 +62,7 @@ export async function drainJobs(env: Env): Promise<number> {
     const claimed = await d
       .update(schema.jobs)
       .set({ state: "claimed", claimedUntil: now + CLAIM_SECONDS, attempts: job.attempts + 1 })
-      .where(and(eq(schema.jobs.id, job.id), eq(schema.jobs.state, "pending")))
+      .where(and(eq(schema.jobs.id, job.id), reclaimable(now)))
       .returning({ id: schema.jobs.id });
     if (claimed.length === 0) continue;
 
@@ -231,6 +256,28 @@ async function runJob(job: typeof schema.jobs.$inferSelect, env: Env): Promise<v
       if (!gameDayId) throw new Error(`gameday.announce job ${job.id} has no gameDayId`);
 
       await announceGameDay(env, gameDayId);
+      return;
+    }
+
+    /**
+     * What closing a poll set in motion.
+     *
+     * Armed in the same batch as the close, so "this poll is closed" and "the
+     * move it decided on is owed" are one fact rather than two that a refused
+     * Discord call can pull apart. Retried with backoff like every other job,
+     * and written to be retried: the move re-arms with upserts and posts its
+     * notice under a claim.
+     */
+    case APPLY_JOB: {
+      const { pollId, sessionId, wasStartsAt } = job.payload as {
+        pollId?: string;
+        sessionId?: string;
+        wasStartsAt?: number;
+      };
+      if (!pollId) throw new Error(`${APPLY_JOB} job ${job.id} has no pollId`);
+      if (!sessionId) return;
+
+      await applyFollowUp(env, pollId, sessionId, wasStartsAt);
       return;
     }
 

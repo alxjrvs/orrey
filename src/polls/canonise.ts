@@ -1,11 +1,11 @@
-import { eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
 import { SETTING_KEYS, getSetting } from "../db/settings.ts";
 import { rosterOf } from "../campaigns/roster.ts";
 import { decide } from "./win-rule.ts";
 import { pollView } from "./rows.ts";
-import { mintGameDays } from "./game-days.ts";
+import { mintStatements } from "./game-days.ts";
 import { anchorFrom, isFormingPoll } from "./anchor.ts";
 import { moveSession } from "./move.ts";
 import { carryOver } from "./carry-over.ts";
@@ -173,10 +173,14 @@ export async function applyOutcomes(
   // poll's date as won.
   const won = [...new Set(wonIds)].filter((id) => ids.includes(id));
 
+  // Guarded on the status this read saw, as well as being serialised by
+  // `PollLock`. The lock is what makes the check and the write one unit; this is
+  // what stops a caller that reaches `applyOutcomes` without going through it
+  // from closing a poll twice.
   const closed = d
     .update(schema.datePolls)
     .set({ status: "closed", updatedAt: sql`(unixepoch())` })
-    .where(eq(schema.datePolls.id, pollId));
+    .where(and(eq(schema.datePolls.id, pollId), eq(schema.datePolls.status, "open")));
 
   // Everything that did not win, loses. Written as one statement over the ids
   // this poll actually has, so it cannot reach a date belonging to another.
@@ -196,13 +200,15 @@ export async function applyOutcomes(
     ? [d.update(schema.pollDates).set({ outcome: "won" }).where(inArray(schema.pollDates.id, won))]
     : [];
 
-  // One batch. A poll marked closed with half its dates still `open` is a poll
-  // whose consequences would fire against a record nobody can read. `closed`
-  // leads so the tuple is non-empty however the dates fall.
   /**
    * An anchor is decided before anything closes, because it is the one outcome
    * that can be refused. A rule that returned a tie has to go back to the
    * organiser, and a poll that closed first could not.
+   *
+   * Writing it before the close is also the safe way round the other way: a
+   * crash between the two leaves a campaign anchored with its poll still open,
+   * and Apply can simply be pressed again. The reverse would leave it closed
+   * with no anchor and no way to make one.
    */
   const forming = !poll.targetSessionId && (await isFormingPoll(env, poll.campaignId));
   if (forming && won.length > 0) {
@@ -212,34 +218,124 @@ export async function applyOutcomes(
     if (anchored === "too-many") return pollView(env, pollId, new Date());
   }
 
-  await d.batch([closed, lost, ...marked]);
-
   // A poll with no target was looking for a day rather than moving one, so what
   // its winners become is a game day — one per winning date, because a
   // multi-kind poll can win more than one and then that is genuinely two days.
   // Unless it was looking for a *slot*, which is the branch above: a campaign
   // that has not started needs an anchor, not a Saturday.
-  if (!poll.targetSessionId && !forming && won.length > 0) {
-    await mintGameDays(env, pollId, won);
-  }
+  //
+  // The statements go in the batch below rather than being run after it. Minting
+  // afterwards meant the close committed first, and Apply's own guard refuses a
+  // closed poll — so a crash, an eviction or a D1 error in between left a poll
+  // permanently closed with winning dates and no day, with nothing able to make
+  // one. Nothing in the mint talks to Discord, so there is no reason for it to
+  // be anywhere but here.
+  const mint =
+    !poll.targetSessionId && !forming && won.length > 0
+      ? (await mintStatements(env, pollId, won)).statements
+      : [];
 
-  // The other consequence. A poll with a target is a poll about moving that
-  // session, so the date it settled on is the date the session takes — and the
-  // one date, because a session is on one day. A rule that returned a tie was
-  // resolved in the override view before this ran; anything still tied here is
-  // the organiser's own pick, and the earliest of it is the session's new date.
-  if (poll.targetSessionId && won.length > 0) {
-    const winner = await earliestOf(env, won);
-    if (winner) {
-      const moved = await moveSession(env, poll.targetSessionId, winner);
-      // Only when the date actually changed. A re-apply that settles on the date
-      // the session is already on must not wipe everybody's answers and post a
-      // second time.
-      if (moved) await carryOver(env, poll.targetSessionId, winner.id);
-    }
-  }
+  /**
+   * The consequence is a **job in the same batch**, not work done after it.
+   *
+   * A poll with a target is a poll about moving that session, and closing the
+   * poll is what says the move is owed. Doing the move after the batch meant the
+   * close committed first — and the guard at the top of this function is
+   * `status !== "open"`, with Apply as its only caller. So a Discord refusal, a
+   * 5xx or the interaction's own three-second budget left a poll permanently
+   * closed with a move that could never be retried: the session's date unmoved
+   * or moved with nothing re-projected, the reminders still pointing at the old
+   * day, and no notice ever posted.
+   *
+   * Writing the job alongside the close makes "closed" and "a move is owed" one
+   * fact. `drainJobs` then retries it with backoff until it lands, which is what
+   * every other piece of time-shifted work in this repo already does.
+   *
+   * `wasStartsAt` rides in the payload because by the time the job runs the
+   * session may already be at its new date, and the notice has to name where it
+   * moved *from*.
+   */
+  const session = poll.targetSessionId
+    ? await db(env)
+        .select({ startsAt: schema.sessions.startsAt })
+        .from(schema.sessions)
+        .where(eq(schema.sessions.id, poll.targetSessionId))
+        .get()
+    : undefined;
+
+  const follow =
+    poll.targetSessionId && won.length > 0
+      ? [
+          d
+            .insert(schema.jobs)
+            .values({
+              id: `${APPLY_JOB}:${pollId}`,
+              kind: APPLY_JOB,
+              payload: {
+                pollId,
+                sessionId: poll.targetSessionId,
+                ...(session ? { wasStartsAt: session.startsAt } : {}),
+              },
+              idempotencyKey: `${APPLY_JOB}:${pollId}`,
+              runAt: sql`(unixepoch())`,
+            })
+            .onConflictDoNothing(),
+        ]
+      : [];
+
+  // One batch. A poll marked closed with half its dates still `open` is a poll
+  // whose consequences would fire against a record nobody can read. `closed`
+  // leads so the tuple is non-empty however the dates fall.
+  await d.batch([closed, lost, ...marked, ...mint, ...follow]);
 
   return pollView(env, pollId, new Date());
+}
+
+/** What closing a poll sets in motion, once the close itself has committed. */
+export const APPLY_JOB = "poll.apply";
+
+/**
+ * The move the closed poll decided on.
+ *
+ * Run from the drain rather than from the interaction, so it can be retried —
+ * and written to be retried: `moveSession` re-arms with upserts and posts its
+ * notice under a claim, so running this twice moves nothing twice and says
+ * nothing twice.
+ *
+ * A poll whose winning dates have since been deleted, or whose session has gone,
+ * is nothing to do rather than something to fail on.
+ */
+export async function applyFollowUp(
+  env: Env,
+  pollId: string,
+  sessionId: string,
+  wasStartsAt?: number,
+): Promise<boolean> {
+  const won = await db(env)
+    .select({ id: schema.pollDates.id })
+    .from(schema.pollDates)
+    .where(and(eq(schema.pollDates.pollId, pollId), eq(schema.pollDates.outcome, "won")))
+    .all();
+  if (won.length === 0) return false;
+
+  // The one date, because a session is on one day. A rule that returned a tie
+  // was resolved in the override view before Apply ran; anything still tied here
+  // is the organiser's own pick, and the earliest of it is the new date.
+  const winner = await earliestOf(
+    env,
+    won.map((row) => row.id),
+  );
+  if (!winner) return false;
+
+  const moved = await moveSession(env, sessionId, winner, wasStartsAt);
+
+  // Only when the date actually changed. A re-apply that settles on the date the
+  // session is already on must not wipe everybody's answers — and `moveSession`
+  // returns false for exactly that case, including on a retry, because the date
+  // it moved *from* comes out of the job's payload rather than off the session.
+  if (moved) await carryOver(env, sessionId, winner.id);
+
+  return moved;
 }
 
 async function earliestOf(env: Env, ids: string[]) {

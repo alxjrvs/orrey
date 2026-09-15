@@ -13,7 +13,13 @@ import {
   refreshPoll,
 } from "../polls/respond.ts";
 import { renderUpcoming, upcomingWithTotal } from "../commands/upcoming.ts";
-import { MAX_CHOICES, renderWhosIn, sessionChoices, whosIn } from "../commands/whos-in.ts";
+import {
+  MAX_CHOICES,
+  isOnRoster,
+  renderWhosIn,
+  sessionChoices,
+  whosIn,
+} from "../commands/whos-in.ts";
 import { parseDates } from "../polls/parse-dates.ts";
 import { openPoll } from "../polls/open.ts";
 import { SETTING_KEYS, getSetting } from "../db/settings.ts";
@@ -187,6 +193,15 @@ async function reschedule(interaction: Interaction, env: Env): Promise<Json> {
   const target = await loadProjectionTarget(env, sessionId);
   if (!target) return ephemeral("Orrey does not know that session.");
 
+  // The autocomplete only ever offers the caller's own campaigns, and that is a
+  // convenience rather than an access check — `/whos-in` says so in as many
+  // words and checks the roster anyway. Session ids are `<slug>-s<n>`, so they
+  // are guessable; without this, anybody could open a date poll on anybody's
+  // session by typing its id. A one-off has no roster to be on.
+  if (target.campaign && !(await isOnRoster(env, target.campaign.id, actor.id))) {
+    return ephemeral("That session is not on a campaign you are on.");
+  }
+
   return datesModal(sessionId, sessionTitle(target));
 }
 
@@ -212,6 +227,14 @@ async function handleSuggest(
 
   const target = await loadProjectionTarget(env, sessionId);
   if (!target) return retiredPost();
+
+  // The same guard `/reschedule` has. This button sits on a post in a campaign's
+  // own channel, which is close to an access check and is not one: a `custom_id`
+  // is a string the client sends, and anybody who can read one post can send
+  // another post's id.
+  if (target.campaign && !(await isOnRoster(env, target.campaign.id, actor.id))) {
+    return ephemeral("That session is not on a campaign you are on.");
+  }
 
   return datesModal(sessionId, sessionTitle(target));
 }
@@ -263,6 +286,14 @@ async function openDatePoll(
 
   const target = await loadProjectionTarget(env, sessionId);
   if (!target) return retiredPost();
+
+  // Checked again on the way back, not only on the way out. The modal's
+  // `custom_id` is the only thing carried across the round trip, and it is a
+  // string the client sends — so trusting that the modal was issued to a member
+  // is trusting the caller with the guard.
+  if (target.campaign && !(await isOnRoster(env, target.campaign.id, actor.id))) {
+    return ephemeral("That session is not on a campaign you are on.");
+  }
 
   const text =
     interaction.data?.components

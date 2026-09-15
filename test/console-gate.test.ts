@@ -34,8 +34,17 @@ function consoleEnv() {
   };
 }
 
+/**
+ * Minted against the real clock, never the fixed `NOW` above.
+ *
+ * The gate checks a cookie's expiry against the clock it is actually running
+ * on, so a cookie minted at a date written into this file is valid for the seven
+ * days after it and then fails for ever, on a change to nothing. The tests below
+ * that pass `NOW` to `sessionFrom` are unaffected: a cookie minted now is
+ * unexpired at any date those tests name.
+ */
 async function cookieFor(userId: string): Promise<string> {
-  return `${SESSION_COOKIE}=${await issueSession(consoleEnv(), userId, NOW)}`;
+  return `${SESSION_COOKIE}=${await issueSession(consoleEnv(), userId, new Date())}`;
 }
 
 function api(path: string, cookie?: string) {

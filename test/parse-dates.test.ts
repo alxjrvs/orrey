@@ -155,3 +155,33 @@ describe("what it is not", () => {
     expect(parse(text)).toEqual(parse(text));
   });
 });
+
+describe("a date that does not exist", () => {
+  /**
+   * `Date.UTC` normalises rather than refusing, so every one of these used to be
+   * accepted and rolled onto a different day — silently, onto a poll, with the
+   * person who typed it told "Asking" rather than handed the line back.
+   */
+  for (const line of [
+    "2026-02-30 19:00",
+    "31 Feb 19:00",
+    "31 Sep 19:00",
+    "2026-13-01 19:00",
+    "2026-00-00 19:00",
+    "2027-02-29 19:00",
+  ]) {
+    it(`refuses ${line} rather than guessing`, () => {
+      const result = parse(line);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.unreadable).toEqual([line]);
+    });
+  }
+
+  it("still takes the 29th of a February that has one", () => {
+    expect(starts(parse("2028-02-29 19:00"))).toEqual([at("2028-02-29T19:00:00Z")]);
+  });
+
+  it("still takes an ordinary end-of-month date", () => {
+    expect(starts(parse("31 Oct 19:00"))).toEqual([at("2026-10-31T19:00:00Z")]);
+  });
+});

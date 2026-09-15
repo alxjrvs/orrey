@@ -9,6 +9,7 @@ import { InteractionType } from "../src/discord/types.ts";
 import { encodeCustomId } from "../src/discord/custom-id.ts";
 import { fakeDiscord } from "./discord.ts";
 import { isLapsedEvent } from "../src/discord/rest.ts";
+import { drainJobs } from "../src/jobs/drain.ts";
 
 /**
  * The date moves, and the two projections that show it follow. The Discord event
@@ -99,7 +100,18 @@ function jobs() {
     .then((rows) => rows.map((row) => row.kind).sort());
 }
 
+/**
+ * Canonise, pick, Apply — and then the drain, because Apply no longer does the
+ * move itself. It arms `poll.apply` in the same batch as the close, so that the
+ * close and the move it owes are one fact rather than two a refused Discord call
+ * can pull apart.
+ */
 async function canoniseWith(pollDateId: string) {
+  await apply(pollDateId);
+  await drainJobs(env);
+}
+
+async function apply(pollDateId: string) {
   await app.fetch(await click("canon"), discord.env(env));
   await app.fetch(await click("pick", [pollDateId]), discord.env(env));
   await app.fetch(await click("apply"), discord.env(env));
@@ -172,6 +184,7 @@ describe("the move", () => {
       [
         "attendance.assume",
         "jeopardy.check",
+        "poll.apply",
         "reminder.step",
         "reminder.step",
         "reminder.step",
@@ -189,8 +202,11 @@ describe("the move", () => {
     await app.fetch(await click("canon"), discord.env(env));
     await app.fetch(await click("pick", []), discord.env(env));
     await app.fetch(await click("apply"), discord.env(env));
+    await drainJobs(env);
 
     expect(await sessionRow()).toMatchObject({ startsAt: before!.startsAt });
+    // And nothing was even armed: there is no move owed.
+    expect(await jobs()).toEqual([]);
   });
 });
 
@@ -234,5 +250,72 @@ describe("the Discord event, which cannot be moved in place", () => {
     expect(isLapsedEvent(lapsed)).toBe(true);
     expect(isLapsedEvent(other)).toBe(false);
     expect(isLapsedEvent(new Error("Cannot update a scheduled event"))).toBe(false);
+  });
+});
+
+describe("what survives a refusal", () => {
+  it("does not lose the move when Discord refuses the notice", async () => {
+    await seed({ startsAt: NOW + 7 * DAY });
+
+    // The thread post fails, once. Everything else answers normally.
+    let failed = false;
+    const inner = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(
+        typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+      );
+      if (!failed && url.pathname.includes("/channels/thread-1/messages")) {
+        failed = true;
+        return Response.json({ message: "boom" }, { status: 500 });
+      }
+      return inner(input as RequestInfo, init);
+    }) as typeof fetch;
+
+    await apply(dates[1]!.id);
+    await drainJobs(env);
+
+    // The date moved and every job was re-armed *before* the notice was
+    // attempted, so the refusal cost the notice and nothing else. Before this
+    // fix the order was the other way round: the post went first, and a refusal
+    // left the session at its old date with nothing re-projected.
+    expect(await sessionRow()).toMatchObject({ startsAt: dates[1]!.startsAt });
+    expect(await jobs()).toContain("session.project");
+
+    // And the job is not done, so the drain owns it until it lands.
+    const job = await db(env)
+      .select()
+      .from(schema.jobs)
+      .where(eq(schema.jobs.kind, "poll.apply"))
+      .get();
+    expect(job?.state).not.toBe("done");
+
+    await db(env)
+      .update(schema.jobs)
+      .set({ state: "pending", attempts: 0 })
+      .where(eq(schema.jobs.kind, "poll.apply"));
+    await drainJobs(env);
+
+    // The retry converges rather than looping: the claim `postNoticeOnce` took
+    // stands, because a 5xx may have posted and a second "Moved." cannot be
+    // taken back. The date is right either way, and the attendance post renders
+    // it on the next click.
+    expect(
+      await db(env).select().from(schema.jobs).where(eq(schema.jobs.kind, "poll.apply")).get(),
+    ).toMatchObject({ state: "done" });
+  });
+
+  it("posts one notice however many times the job runs", async () => {
+    await seed({ startsAt: NOW + 7 * DAY });
+    await canoniseWith(dates[0]!.id);
+    calls = [];
+
+    await db(env).update(schema.jobs).set({ state: "pending", attempts: 0 });
+    await drainJobs(env);
+
+    // The notice is claimed under its own label, so re-entering the move says
+    // nothing a second time — and says nothing wrong either, because the date it
+    // moved *from* rides in the payload rather than being read back.
+    expect(calls.filter((call) => call.path === "/channels/thread-1/messages")).toEqual([]);
+    expect(await sessionRow()).toMatchObject({ startsAt: dates[0]!.startsAt });
   });
 });

@@ -101,10 +101,26 @@ export async function openPoll(
   const closesAt = Math.floor(now.getTime() / 1000) + windowHours * 3600;
   const pollId = mintId();
 
+  const d = db(env);
   try {
-    await db(env)
-      .insert(schema.datePolls)
-      .values({
+    /**
+     * One batch, and that is the whole point.
+     *
+     * The `date_polls` row **is** the lock: `date_polls_one_open_per_session` is
+     * a partial unique index on `target_session_id WHERE status = 'open'`, so
+     * writing that row is what claims the session. Committing it on its own and
+     * then writing the dates and the post job separately meant a throw in
+     * between left a poll with no dates and no post — holding the index against
+     * that session for good, with nothing able to open another and nothing able
+     * to close this one, because closing goes through a post nobody ever made.
+     *
+     * D1 runs a batch as one transaction, so either the claim and the thing it
+     * claims for both land, or neither does. The duplicate refusal still works:
+     * a unique violation inside a batch surfaces with the same message one
+     * `cause` deeper, which `isDuplicateOpenPoll` already walks.
+     */
+    await d.batch([
+      d.insert(schema.datePolls).values({
         id: pollId,
         ...(targetSessionId ? { targetSessionId } : {}),
         ...(campaignId ? { campaignId } : {}),
@@ -115,7 +131,25 @@ export async function openPoll(
         openedBy: actor.id,
         closesAt,
         discordChannelId: channelId,
-      });
+      }),
+      d.insert(schema.pollDates).values(
+        dates.map((date) => ({
+          id: mintId(),
+          pollId,
+          startsAt: date.startsAt,
+          endsAt: date.endsAt,
+        })),
+      ),
+      // Post it now. From a job rather than from inside this interaction, so the
+      // send stays inside the governor and off the three-second budget.
+      d.insert(schema.jobs).values({
+        id: `${POST_JOB}:${pollId}`,
+        kind: POST_JOB,
+        payload: { pollId },
+        idempotencyKey: `${POST_JOB}:${pollId}`,
+        runAt: Math.floor(now.getTime() / 1000),
+      }),
+    ]);
   } catch (error) {
     // The refusal comes from the partial unique index, not from a prior read.
     // "Select, then insert" races with itself — two `/reschedule` calls a second
@@ -126,27 +160,6 @@ export async function openPoll(
     }
     throw error;
   }
-
-  const d = db(env);
-  await d.batch([
-    d.insert(schema.pollDates).values(
-      dates.map((date) => ({
-        id: mintId(),
-        pollId,
-        startsAt: date.startsAt,
-        endsAt: date.endsAt,
-      })),
-    ),
-    // Post it now. From a job rather than from inside this interaction, so the
-    // send stays inside the governor and off the three-second budget.
-    d.insert(schema.jobs).values({
-      id: `${POST_JOB}:${pollId}`,
-      kind: POST_JOB,
-      payload: { pollId },
-      idempotencyKey: `${POST_JOB}:${pollId}`,
-      runAt: Math.floor(now.getTime() / 1000),
-    }),
-  ]);
 
   await armPollClose(env, pollId, closesAt);
 
