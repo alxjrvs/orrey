@@ -3,7 +3,7 @@ import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
 import { rosterOf } from "../campaigns/roster.ts";
 import { flakeFor, flakeLine } from "../campaigns/flake.ts";
-import { sessionTitle } from "../projection/target.ts";
+import { campaignTarget, sessionTitle } from "../projection/target.ts";
 import { escapeMarkdown } from "../attendance/render.ts";
 import { loadProjectionTarget } from "../projection/target.ts";
 
@@ -119,7 +119,7 @@ export async function sessionChoices(
 
   return rows
     .map((row) => ({
-      name: `${sessionTitle(row)} — ${stamp(row.session.startsAt)}`.slice(0, 100),
+      name: `${sessionTitle(campaignTarget(row.session, row.campaign))} — ${stamp(row.session.startsAt)}`.slice(0, 100),
       value: row.session.id,
     }))
     .slice(0, MAX_CHOICES);
