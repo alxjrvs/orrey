@@ -35,7 +35,7 @@ async function send(method: string, path: string, userId: string | null, origin 
     new Request(`${origin}${path}`, {
       method,
       headers: userId
-        ? { cookie: `${SESSION_COOKIE}=${await issueSession(consoleEnv(), userId, NOW)}` }
+        ? { cookie: `${SESSION_COOKIE}=${await issueSession(consoleEnv(), userId, new Date())}` }
         : {},
     }),
     consoleEnv(),
