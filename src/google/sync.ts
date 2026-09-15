@@ -3,7 +3,7 @@ import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
 import { SETTING_KEYS, clearSetting, getSetting, setSetting } from "../db/settings.ts";
 import { GoogleError, accessToken, watchCalendarId } from "./calendar.ts";
-import { applyChange } from "./inbound.ts";
+import { applyChange, applyDeletion } from "./inbound.ts";
 import {
   classifyEvent,
   sessionIdOf,
@@ -154,15 +154,77 @@ export async function runSync(env: Env): Promise<Classified[]> {
   const listing = await listCalendar(env);
   const classified = await classifyAll(env, listing.events);
 
-  for (const one of classified) {
-    // `echo` is Orrey reading its own handwriting, and `foreign` is somebody
-    // else's evening. Both are left exactly alone — which is most of what a
-    // quiet calendar produces, and why a nightly pass over one is free.
-    if (one.verdict !== "changed" || !one.sessionId) continue;
-    await applyChange(env, one.sessionId, one.event);
-  }
-
+  await act(env, classified);
   return classified;
+}
+
+/**
+ * Every verdict, handled.
+ *
+ * `echo` is Orrey reading its own handwriting and `foreign` is somebody else's
+ * evening. Both are left exactly alone — which is most of what a quiet calendar
+ * produces, and is why a nightly pass over one costs nothing.
+ */
+export async function act(env: Env, classified: Classified[]): Promise<void> {
+  for (const one of classified) {
+    if (!one.sessionId) continue;
+    if (one.verdict === "changed") await applyChange(env, one.sessionId, one.event);
+    else if (one.verdict === "deleted") await applyDeletion(env, one.sessionId);
+  }
+}
+
+/**
+ * The nightly sweep.
+ *
+ * `events.watch` is not completely reliable — #48 gives that as the reason this
+ * exists — and a full pass every night is what makes an unreliable channel
+ * merely slow. It lists with **no** `syncToken`, so it sees the whole calendar
+ * rather than what changed since a cursor that may have missed something, and
+ * puts every event through the same classifier and the same handlers the push
+ * path uses. There is no second interpretation of anything.
+ *
+ * It also finds the failure no push can ever report: a session whose
+ * `calendar_links` row names an event that is not on the calendar at all. A
+ * deletion Google never told anybody about produces no notification, so the only
+ * way to notice is to look.
+ *
+ * On a quiet calendar it issues **zero writes** — every fingerprint matches, so
+ * every verdict is `echo`. A sweep that rewrote everything every night would
+ * make the echo test meaningless and would be too expensive to run.
+ */
+export async function reconcile(env: Env): Promise<void> {
+  // Deliberately not `listCalendar`: a reconcile that used the stored cursor
+  // would see exactly what the pushes already saw, which is the thing it exists
+  // to not depend on.
+  const listing = await pages(env, undefined);
+  const classified = await classifyAll(env, listing.events);
+  await act(env, classified);
+
+  await reinsertMissing(
+    env,
+    new Set(classified.map((one) => one.event.id)),
+  );
+}
+
+/**
+ * Links naming an event the calendar does not have.
+ *
+ * The full list is the whole calendar, so anything Orrey has a link for and did
+ * not see is gone — including the deletions Google never pushed about.
+ */
+async function reinsertMissing(env: Env, seen: Set<string>): Promise<void> {
+  const links = await db(env)
+    .select({
+      sessionId: schema.calendarLinks.sessionId,
+      gcalEventId: schema.calendarLinks.gcalEventId,
+    })
+    .from(schema.calendarLinks)
+    .all();
+
+  for (const link of links) {
+    if (seen.has(link.gcalEventId)) continue;
+    await applyDeletion(env, link.sessionId);
+  }
 }
 
 export async function classifyAll(env: Env, events: CalendarEvent[]): Promise<Classified[]> {
