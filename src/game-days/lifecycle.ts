@@ -104,9 +104,29 @@ export async function transition(
 
   if (!EDGES[from].includes(to)) throw new IllegalDayTransition(gameDayId, from, to);
 
+  // How deep the queue was when the table settled, written in the same statement
+  // as the state that settled it. Counted as a sub-select rather than read first
+  // and written second: a withdrawal landing between the read and the write
+  // would record a depth that was never true at any instant.
+  //
+  // Only on the way into LOCKED. Every other transition leaves the column as it
+  // is, so a day that locked and then played keeps the number it recorded.
   const moved = d
     .update(schema.gameDays)
-    .set({ state: to, updatedAt: sql`(unixepoch())` })
+    .set({
+      state: to,
+      ...(to === "LOCKED"
+        ? {
+            waitlistAtLock: sql`(
+              SELECT COUNT(*) FROM signups
+              WHERE target_type = 'game_day'
+                AND target_id = ${gameDayId}
+                AND state = 'waitlisted'
+            )`,
+          }
+        : {}),
+      updatedAt: sql`(unixepoch())`,
+    })
     .where(eq(schema.gameDays.id, gameDayId));
 
   const logged = d.insert(schema.auditLog).values({
