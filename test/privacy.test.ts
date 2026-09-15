@@ -70,6 +70,26 @@ describe("the privacy policy page", () => {
 });
 
 describe("delete-my-data", () => {
+  it("hands out a login link that the front door actually accepts", async () => {
+    const json = await interact({
+      type: InteractionType.APPLICATION_COMMAND,
+      data: { name: "console" },
+      member: { user: { id: "1001", username: "ada" }, roles: [] },
+    });
+
+    const link = json.data.content.match(/<(https:\/\/orrey\.test\/console\/login\?t=[^>]+)>/)?.[1];
+    expect(link).toBeTruthy();
+
+    // The command and the route agree, which is the only thing worth asserting
+    // about a signed token: it is not a string that merely looks right.
+    const response = await app.fetch(
+      new Request(link!, { redirect: "manual" }),
+      discord.env(env),
+    );
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toContain("discord.com/oauth2/authorize");
+  });
+
   it("offers the delete button on /console, with a link to the policy", async () => {
     const json = await interact({
       type: InteractionType.APPLICATION_COMMAND,
