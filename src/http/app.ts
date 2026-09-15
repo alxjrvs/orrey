@@ -16,6 +16,8 @@ import {
 import { authorizeUrl, exchangeCode, identify, storeTokens } from "../console/oauth.ts";
 import { sessionFrom } from "../console/session.ts";
 import { deleteUserData, describeReceipt } from "../privacy/delete.ts";
+import { feedFor, icsResponse } from "../ics/feed.ts";
+import { feedsPanel, rotateFeedToken } from "../ics/feeds-panel.ts";
 import { NotConfigured, isOrganiser } from "../console/roles.ts";
 import { readLoginToken } from "../console/link.ts";
 import { campaignSummaries, gameDaySummaries, gameSummaries } from "../console/api.ts";
@@ -81,6 +83,34 @@ export function createApp() {
    * hand somebody a callback URL carrying their own code and have the victim's
    * browser log in as them.
    */
+  /**
+   * The ICS feeds. **Registered above the console's session middleware on
+   * purpose**: a calendar client cannot log in, and these routes must not
+   * require a cookie or read one. The token in the path is the only credential
+   * they accept, which is why `users.feed_token` is unique and unguessable.
+   *
+   * An unknown token and a real token asking for a campaign its holder is not on
+   * produce byte-identical empty 404s. A 401 here would confirm which tokens are
+   * real to whoever is trying them.
+   *
+   * Nothing on this path writes anything, and nothing on it logs the token.
+   */
+  app.get("/ics/:feedToken/all.ics", (c) => ics(c, c.req.param("feedToken")));
+  app.get("/ics/:feedToken/campaign/:file", (c) => {
+    /**
+     * The extension is stripped here rather than written into the pattern.
+     *
+     * Hono reads `:id.ics` as a parameter *named* `id.ics` whose value is
+     * `umbra.ics` — the dot is part of the name and the suffix is not a literal.
+     * The phase-0 stub `/ics/:token.ics` had the same shape and the same silent
+     * bug; it never mattered, because it answered 501 without reading the
+     * parameter.
+     */
+    const file = c.req.param("file");
+    if (!file.endsWith(".ics")) return c.body(null, 404);
+    return ics(c, c.req.param("feedToken"), file.slice(0, -".ics".length));
+  });
+
   app.get("/console/login", async (c) => {
     // The console has no public front door. A redirect to Discord's authorize
     // endpoint that anybody can trigger is a phishing primitive rather than a
@@ -500,6 +530,39 @@ export function createApp() {
     return c.json({ receipt, said: describeReceipt(receipt) });
   });
 
+  /**
+   * The holder's own feed URLs, and the rotate.
+   *
+   * **Not under `/api/*`**: these are everybody's feeds, not an organiser's
+   * page. The id comes off the session cookie and never off the query string — a
+   * panel that took an id would be a panel that shows somebody else's
+   * credentials.
+   */
+  app.get("/console/me/feeds", async (c) => {
+    const session = await sessionFrom(c.env, c.req.header("cookie"), new Date());
+    if (!session) return c.json({ error: "Not signed in. Run /console in Discord." }, 401);
+
+    // The request's own origin, so a copied URL works on the environment it was
+    // copied from. A hardcoded host is wrong everywhere but one place, and the
+    // person copying it has no way to tell.
+    const panel = await feedsPanel(c.env, session.userId, new URL(c.req.url).origin);
+    return panel ? c.json(panel) : c.json({ error: "Orrey does not know you yet." }, 404);
+  });
+
+  app.post("/console/me/feeds/rotate", async (c) => {
+    const session = await sessionFrom(c.env, c.req.header("cookie"), new Date());
+    if (!session) return c.json({ error: "Not signed in. Run /console in Discord." }, 401);
+
+    const rotated = await rotateFeedToken(c.env, session.userId);
+    if (!rotated) return c.json({ error: "Orrey does not know you yet." }, 404);
+
+    // The panel is re-read rather than the new token returned on its own: what
+    // somebody needs is the URLs, and handing back a bare credential invites it
+    // into a paste buffer that outlives the tab.
+    const panel = await feedsPanel(c.env, session.userId, new URL(c.req.url).origin);
+    return c.json(panel);
+  });
+
   app.post("/console/logout", (c) => {
     c.header("set-cookie", clear(SESSION_COOKIE));
     return c.redirect("/", 302);
@@ -507,7 +570,7 @@ export function createApp() {
 
   // Per-campaign ICS feeds. Calendar clients cannot do OAuth, so the token in
   // the path is the only credential — it must be unguessable.
-  app.get("/ics/:token.ics", (c) => c.text("Not implemented until phase 6.", 501));
+
 
   /**
    * Discord's terms require a stated privacy policy and a delete-my-data path.
@@ -532,6 +595,28 @@ export function createApp() {
  * for, so they are 400s carrying the reason — anything else is a fault and stays
  * a 500, because a bug dressed up as a polite refusal is a bug nobody finds.
  */
+/**
+ * One feed, or an empty 404.
+ *
+ * The 404 carries no body and no reason. Both the "no such token" and the "not
+ * your campaign" paths reach it, and they have to be indistinguishable.
+ */
+async function ics(
+  c: {
+    env: Env;
+    body: (body: null, status: 404) => Response;
+    text: (text: string, status: 200, headers: Record<string, string>) => Response;
+  },
+  feedToken: string,
+  campaignId?: string,
+): Promise<Response> {
+  const feed = await feedFor(c.env, feedToken, campaignId);
+  if (!feed) return c.body(null, 404);
+
+  const { body, headers } = await icsResponse(c.env, feed, Math.floor(Date.now() / 1000));
+  return c.text(body, 200, headers);
+}
+
 async function refusable(
   c: { json: (body: unknown, status?: 200 | 201 | 400) => Response },
   work: () => Promise<Response>,
