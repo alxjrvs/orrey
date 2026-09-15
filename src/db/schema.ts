@@ -1,5 +1,13 @@
 import { sql } from "drizzle-orm";
-import { check, index, integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import {
+  check,
+  index,
+  integer,
+  primaryKey,
+  sqliteTable,
+  text,
+  uniqueIndex,
+} from "drizzle-orm/sqlite-core";
 
 /**
  * The footings (phase 0), the smallest slice of the domain that can describe one
@@ -8,8 +16,10 @@ import { check, index, integer, primaryKey, sqliteTable, text } from "drizzle-or
  * campaigns — the game each plays, the cadence each keeps, who is on each, and a
  * record of who changed what (phase 2).
  *
- * The rest — date_polls, game_days, session_logs — lands in the phase that
- * actually reads it. See https://github.com/alxjrvs/orrey/issues/1.
+ * ...and asking a group which day works (phase 4).
+ *
+ * The rest — game_days' venue and seating, session_logs — lands in the phase
+ * that actually reads it. See https://github.com/alxjrvs/orrey/issues/1.
  */
 
 const now = sql`(unixepoch())`;
@@ -438,3 +448,121 @@ export const discordTokens = sqliteTable("discord_tokens", {
   expiresAt: integer("expires_at").notNull(),
   updatedAt: integer("updated_at").notNull().default(now),
 });
+
+/**
+ * Asking a group which day works.
+ *
+ * One poll, its candidate dates, and one row per person per date they said yes
+ * to. A poll either targets a session that already exists and needs moving
+ * (#36), or targets nothing and is looking for a day to mint (#37) — which is
+ * what `target_session_id` being nullable means.
+ *
+ * **At most one open poll per session**, and the partial unique index below is
+ * that rule written where it cannot be raced. Two `/reschedule` calls a second
+ * apart would otherwise open two polls on the same session, each with a live
+ * select, and nothing later in the phase could tell which one counted.
+ *
+ * There is deliberately **no `auto_resolve` column here**. #38 specifies that
+ * flag as `campaigns.auto_resolve_polls`, and a poll-level copy would have to be
+ * written by an opening path that does not exist for another nine PRs. The
+ * auto-resolve slice reads the campaign's flag live, through `campaign_id`.
+ */
+export const datePolls = sqliteTable(
+  "date_polls",
+  {
+    id: text("id").primaryKey(),
+    /**
+     * The session this poll is trying to move, or null for a poll that is
+     * looking for a day rather than moving one.
+     */
+    targetSessionId: text("target_session_id").references(() => sessions.id, {
+      onDelete: "cascade",
+    }),
+    /** Whose roster the quorum rule counts, and whose auto-resolve flag applies. */
+    campaignId: text("campaign_id").references(() => campaigns.id, { onDelete: "cascade" }),
+    /** What would be played on the day this poll is looking for. */
+    gameId: text("game_id").references(() => games.id, { onDelete: "set null" }),
+    gameDayKind: text("game_day_kind", { enum: ["single", "multi"] }),
+    /** What "winning" means for this poll. The rule itself is `src/polls/win-rule.ts`. */
+    winRule: text("win_rule", {
+      enum: ["min_players", "quorum_of_roster", "best_available", "organiser_picks"],
+    })
+      .notNull()
+      .default("best_available"),
+    /** The number `min_players` compares against, or the fraction `quorum_of_roster` does. */
+    winThreshold: integer("win_threshold"),
+    status: text("status", { enum: ["open", "closed"] })
+      .notNull()
+      .default("open"),
+    openedBy: text("opened_by").references(() => users.discordId, { onDelete: "set null" }),
+    /** When answering stops. Canonising does not — closing the answers is not closing the poll. */
+    closesAt: integer("closes_at"),
+    /** Recorded when the post goes up, then abandoned. Orrey never goes back to it. */
+    discordChannelId: text("discord_channel_id"),
+    discordMessageId: text("discord_message_id"),
+    createdAt: integer("created_at").notNull().default(now),
+    updatedAt: integer("updated_at").notNull().default(now),
+  },
+  (t) => [
+    /**
+     * One open poll per session. The index skips nulls, so any number of
+     * untargeted polls can be open at once — which is the point: those are not
+     * competing over anything.
+     */
+    uniqueIndex("date_polls_one_open_per_session")
+      .on(t.targetSessionId)
+      .where(sql`status = 'open' AND target_session_id IS NOT NULL`),
+    index("date_polls_campaign_idx").on(t.campaignId, t.status),
+  ],
+);
+
+/**
+ * One candidate date. `outcome` is written once, when the poll is canonised:
+ * every date ends `won` or `lost` and none is left `open`, because a poll that
+ * closed without saying so about a date is a poll nobody can read afterwards.
+ *
+ * `withdrawn` exists because #34 names it. Nothing in phase 4 writes it.
+ */
+export const pollDates = sqliteTable(
+  "poll_dates",
+  {
+    id: text("id").primaryKey(),
+    pollId: text("poll_id")
+      .notNull()
+      .references(() => datePolls.id, { onDelete: "cascade" }),
+    startsAt: integer("starts_at").notNull(),
+    endsAt: integer("ends_at").notNull(),
+    outcome: text("outcome", { enum: ["open", "won", "lost", "withdrawn"] })
+      .notNull()
+      .default("open"),
+    createdAt: integer("created_at").notNull().default(now),
+  },
+  (t) => [
+    index("poll_dates_poll_idx").on(t.pollId, t.startsAt),
+    check("poll_dates_order_ck", sql`ends_at > starts_at`),
+  ],
+);
+
+/**
+ * "Yes, that one works." One row per person per date, and **only** yeses: a
+ * person who has answered and chosen nothing has no rows at all, which is a real
+ * answer and not an absence of one. The renderer knows the difference by asking
+ * the roster, the same way the attendance post does.
+ *
+ * An answer is replaced whole rather than toggled, because Discord sends the
+ * complete selection every time.
+ */
+export const pollResponses = sqliteTable(
+  "poll_responses",
+  {
+    pollDateId: text("poll_date_id")
+      .notNull()
+      .references(() => pollDates.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.discordId, { onDelete: "cascade" }),
+    available: integer("available").notNull().default(1),
+    respondedAt: integer("responded_at").notNull().default(now),
+  },
+  (t) => [primaryKey({ columns: [t.pollDateId, t.userId] })],
+);
