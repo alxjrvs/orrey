@@ -14,6 +14,7 @@ import {
   type DaySignup,
 } from "../game-days/signups.ts";
 import { promoteFromWaitlist } from "../game-days/promote.ts";
+import { moveSession } from "../polls/move.ts";
 import type { AttendanceRow } from "../attendance/render.ts";
 import type { InteractionUser } from "../discord/types.ts";
 
@@ -176,6 +177,33 @@ export class SessionLock extends DurableObject<Env> {
       if (gave === "withdrawn") await promoteFromWaitlist(this.env, gameDayId);
       return this.seats(gameDayId);
     });
+  }
+
+  /**
+   * A drag in Google, applied to the row.
+   *
+   * Behind the same queue as every click, because a drag in Google and a click
+   * on the post are two writers to one session and the whole point of this
+   * object is that there is only ever one.
+   *
+   * It is `moveSession` — the same function a resolved poll and a reschedule
+   * call — so the audit row, the re-armed jobs, the notice and the projection
+   * are the ones that already exist, not a second set that could drift from
+   * them.
+   */
+  async moveFromGoogle(move: {
+    sessionId: string;
+    startsAt: number;
+    endsAt: number;
+    location: string | null;
+  }): Promise<boolean> {
+    return this.serialise(() =>
+      moveSession(this.env, move.sessionId, {
+        startsAt: move.startsAt,
+        endsAt: move.endsAt,
+        location: move.location,
+      }),
+    );
   }
 
   /** Refresh, on the same queue and for the same reason as `readIntents`. */
