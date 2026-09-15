@@ -798,7 +798,7 @@ const campaignState = { selected: null };
  * reasons that is. An empty table under a heading is the one thing this must
  * never render.
  */
-function campaignPageSection(plan, history) {
+function campaignPageSection(plan, history, polls) {
   const section = document.createElement("section");
   section.className = "campaign-page";
 
@@ -828,6 +828,7 @@ function campaignPageSection(plan, history) {
   }
 
   if (history) section.append(historySection(history));
+  if (polls) section.append(pollsSection(polls));
 
   return section;
 }
@@ -1050,6 +1051,130 @@ function playedTable(sessions) {
   return table;
 }
 
+const WAITING = {
+  responses: "Waiting on responses.",
+  gm: "Past its threshold, but not on a night the GM has marked available. Waiting on the GM.",
+  organiser: "Ready. Canonise is on the poll post — this page only shows it.",
+};
+
+/**
+ * The campaign's open date polls, and the one boolean beside them.
+ *
+ * Every row ends at a link to the post. Canonise is not here and is not in phase
+ * 6: it is an organiser-only button on the poll post, and a second way to reach
+ * the same decision would put it behind two different confirmations.
+ */
+function pollsSection(polls) {
+  const section = document.createElement("section");
+  section.append(subheading("Date polls"));
+  section.append(autoResolveToggle(polls));
+
+  if (polls.polls.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "note";
+    empty.textContent = "No open polls.";
+    section.append(empty);
+    return section;
+  }
+
+  for (const poll of polls.polls) section.append(pollCard(poll));
+  return section;
+}
+
+function autoResolveToggle(polls) {
+  const wrap = document.createElement("p");
+  const label = document.createElement("label");
+  const box = document.createElement("input");
+  box.type = "checkbox";
+  box.checked = polls.autoResolvePolls;
+  box.addEventListener("change", async () => {
+    box.disabled = true;
+    await act(() =>
+      api(`/api/campaigns/${encodeURIComponent(campaignState.selected)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ autoResolvePolls: box.checked }),
+      }),
+    );
+  });
+  label.append(box, document.createTextNode(" Resolve polls automatically"));
+  wrap.append(label);
+
+  // The constraint in the copy and not only in the code. A control labelled
+  // "resolve polls automatically" that quietly does something narrower is a
+  // control somebody turns on and then blames for the wrong thing.
+  const caveat = document.createElement("span");
+  caveat.className = "note";
+  caveat.textContent =
+    " — only onto a date the GM has marked available, and only for a rule with a fixed bar.";
+  wrap.append(caveat);
+  return wrap;
+}
+
+function pollCard(poll) {
+  const card = document.createElement("article");
+  card.className = "poll";
+
+  const line = document.createElement("p");
+  line.textContent = [
+    poll.winRule.replace(/_/g, " "),
+    poll.required === null ? null : `needs ${poll.required}`,
+    `${poll.rosterSize} on the roster`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  card.append(line);
+
+  const waiting = document.createElement("p");
+  waiting.className = "note";
+  waiting.textContent = WAITING[poll.waitingOn];
+  card.append(waiting);
+
+  const table = document.createElement("table");
+  const head = document.createElement("tr");
+  for (const [label, className] of [
+    ["Date", ""],
+    ["Yes", "numeric"],
+    ["GM", ""],
+    ["", ""],
+  ]) {
+    const th = document.createElement("th");
+    th.textContent = label;
+    if (className) th.className = className;
+    head.append(th);
+  }
+  const thead = document.createElement("thead");
+  thead.append(head);
+  table.append(thead);
+
+  const body = document.createElement("tbody");
+  const proposed = new Set(poll.proposed);
+  for (const date of poll.dates) {
+    const tr = document.createElement("tr");
+    cell(tr, when(date.startsAt));
+    cell(tr, String(date.yes), "numeric");
+    // Null is "nobody was asked" — a campaign with no GM is a real state, and
+    // rendering it as a refusal blames somebody who does not exist.
+    cell(tr, date.gmAvailable === null ? "no GM" : date.gmAvailable ? "yes" : "—");
+    cell(tr, proposed.has(date.pollDateId) ? "proposed" : "");
+    body.append(tr);
+  }
+  table.append(body);
+  card.append(table);
+
+  if (poll.postUrl) {
+    const links = document.createElement("p");
+    const link = document.createElement("a");
+    link.href = poll.postUrl;
+    link.rel = "noreferrer";
+    link.target = "_blank";
+    link.textContent = "Open the poll post";
+    links.append(link);
+    card.append(links);
+  }
+
+  return card;
+}
+
 function subheading(label) {
   const h = document.createElement("h4");
   h.textContent = label;
@@ -1081,7 +1206,7 @@ async function load() {
 
     // Likewise the campaign page: the summaries table needs none of it, and a
     // campaign nobody has opened is a query nobody has asked for.
-    const [plan, history] = campaignState.selected
+    const [plan, history, polls] = campaignState.selected
       ? await Promise.all([
           api(`/api/campaigns/${encodeURIComponent(campaignState.selected)}/page`).catch(
             () => null,
@@ -1089,8 +1214,11 @@ async function load() {
           api(`/api/campaigns/${encodeURIComponent(campaignState.selected)}/history`).catch(
             () => null,
           ),
+          api(`/api/campaigns/${encodeURIComponent(campaignState.selected)}/polls`).catch(
+            () => null,
+          ),
         ])
-      : [null, null];
+      : [null, null, null];
 
     who.textContent = `signed in as ${me.userId}`;
     const split = document.createElement("div");
@@ -1098,7 +1226,7 @@ async function load() {
     split.append(agendaSection(agenda), detailRail(detail));
     main.replaceChildren(split);
     main.append(heading("Campaigns"), campaignsTable(campaigns));
-    if (plan) main.append(campaignPageSection(plan.campaign, history));
+    if (plan) main.append(campaignPageSection(plan.campaign, history, polls));
     main.append(heading("Game days"), gameDaysTable(gameDays));
     main.append(heading("Games"), gamesTable(games), createForm());
   } catch (error) {
