@@ -18,6 +18,7 @@ import { sessionFrom } from "../console/session.ts";
 import { NotConfigured, isOrganiser } from "../console/roles.ts";
 import { readLoginToken } from "../console/link.ts";
 import { campaignSummaries, gameDaySummaries, gameSummaries } from "../console/api.ts";
+import { monthGrid } from "../console/month.ts";
 import { agendaBetween, windowAround } from "../console/agenda.ts";
 import { openPollFromConsole } from "../console/polls.ts";
 import { InvalidCampaign, createCampaign, updateCampaign } from "../campaigns/write.ts";
@@ -197,6 +198,23 @@ export function createApp() {
       return c.json({ ok: true });
     }),
   );
+
+  /**
+   * A month, as the grid draws it.
+   *
+   * The same window query the agenda uses, with the bounds set to the six weeks
+   * the grid shows rather than to the month proper — a grid that asked for the
+   * month would render the leading and trailing cells empty and be quietly
+   * wrong about the last week of March.
+   */
+  app.get("/api/month/:year/:month", async (c) => {
+    const year = Number(c.req.param("year"));
+    const month = Number(c.req.param("month"));
+    if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) {
+      return c.json({ error: "A month is a year and a number from 1 to 12." }, 400);
+    }
+    return c.json(await monthGrid(c.env, year, month, new Date()));
+  });
 
   app.get("/api/campaigns/:id/roster", async (c) =>
     c.json({ roster: await rosterRows(c.env, c.req.param("id")) }),
