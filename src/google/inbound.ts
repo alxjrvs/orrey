@@ -18,6 +18,32 @@ import type { CalendarEvent } from "./sync.ts";
  */
 export type ChangeOutcome = "moved" | "re-projected" | "nothing";
 
+/**
+ * Somebody deleted an event Orrey owns. **It comes back.**
+ *
+ * D1 is the source of truth, so a deletion on the calendar says nothing about
+ * whether the session is happening — #48 is explicit, and nothing here touches
+ * `sessions.state`.
+ *
+ * Clearing the fingerprint is the mechanism, not a tidy-up: `upsert` skips a
+ * write whose fingerprint already matches, so without the clear the re-insert
+ * would be skipped and the event would stay gone. An absent fingerprint is
+ * exactly "we do not know what is out there", and it needs no column to say so.
+ *
+ * It comes back at the same id, because `src/google/event-id.ts` mints it from
+ * the session id — so the re-insert is the ordinary `insert`, and on 409
+ * `update`, path that already exists.
+ */
+export async function applyDeletion(env: Env, sessionId: string): Promise<"re-inserted"> {
+  await db(env)
+    .update(schema.calendarLinks)
+    .set({ fingerprint: null })
+    .where(eq(schema.calendarLinks.sessionId, sessionId));
+
+  await enqueueProjection(env, sessionId, ["google"]);
+  return "re-inserted";
+}
+
 export async function applyChange(
   env: Env,
   sessionId: string,

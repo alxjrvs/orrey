@@ -2,6 +2,7 @@ import type { Env } from "../env.ts";
 import { drainJobs } from "../jobs/drain.ts";
 import { materialiseHorizon } from "../campaigns/materialise.ts";
 import { renewWatchIfDue } from "../google/watch.ts";
+import { reconcile } from "../google/sync.ts";
 
 /**
  * The clock. One cron expression, every minute, and the four logical schedules
@@ -45,7 +46,12 @@ export async function handleScheduled(event: ScheduledController, env: Env): Pro
         break;
 
       case "reconcile":
-        // Full reconcile: fingerprints vs Google, event ids vs Discord. Never messages.
+        // Full reconcile: the whole calendar through the same classifier the
+        // pushes use, with no `syncToken`. `events.watch` is not completely
+        // reliable, and a nightly pass is what makes an unreliable channel
+        // merely slow. Never messages — a change it finds goes through the same
+        // handlers, and those decide what is worth saying.
+        await reconcile(env);
         break;
     }
   }
