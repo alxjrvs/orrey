@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
+import { rearm, type ArmedJob } from "../jobs/arm.ts";
 import { SETTING_DEFAULTS, SETTING_KEYS, settingOr } from "../db/settings.ts";
 import { attendanceRows } from "./rows.ts";
 import { tryDm } from "./dm.ts";
@@ -22,37 +23,38 @@ import type { ProjectionTarget } from "../projection/target.ts";
  */
 export const REMINDER_JOB = "reminder.step";
 
-export async function armReminders(
+/**
+ * The ladder's rows, described — one per step. The steps are a settings read,
+ * so a caller batching these with a state write gets the read out of the way
+ * first, which is the point.
+ */
+export async function reminderJobs(
   env: Env,
   sessionId: string,
   startsAt: number,
-): Promise<void> {
+): Promise<ArmedJob[]> {
   const steps = await settingOr<number[]>(
     env,
     SETTING_KEYS.reminderStepsHours,
     SETTING_DEFAULTS["reminder.steps_hours"] as unknown as number[],
   );
 
-  for (const hours of steps) {
-    const id = `${REMINDER_JOB}:${sessionId}:${hours}`;
-    const runAt = startsAt - hours * 3600;
+  return steps.map((hours) => ({
+    id: `${REMINDER_JOB}:${sessionId}:${hours}`,
+    kind: REMINDER_JOB,
+    payload: { sessionId, hours },
+    runAt: startsAt - hours * 3600,
+  }));
+}
 
-    await db(env)
-      .insert(schema.jobs)
-      .values({
-        id,
-        kind: REMINDER_JOB,
-        payload: { sessionId, hours },
-        idempotencyKey: id,
-        runAt,
-      })
-      // A moved session moves its whole ladder, for the same reason the jeopardy
-      // check moves: a nudge at the old T-24h is a nudge on the wrong day.
-      .onConflictDoUpdate({
-        target: schema.jobs.id,
-        set: { runAt, state: "pending", attempts: 0, lastError: null },
-      });
-  }
+export async function armReminders(
+  env: Env,
+  sessionId: string,
+  startsAt: number,
+): Promise<void> {
+  // A moved session moves its whole ladder, for the same reason the jeopardy
+  // check moves: a nudge at the old T-24h is a nudge on the wrong day.
+  await rearm(db(env), await reminderJobs(env, sessionId, startsAt));
 }
 
 export interface ReminderOutcome {

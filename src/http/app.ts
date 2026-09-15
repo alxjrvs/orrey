@@ -17,10 +17,15 @@ import { authorizeUrl, exchangeCode, identify, storeTokens } from "../console/oa
 import { sessionFrom } from "../console/session.ts";
 import { NotConfigured, isOrganiser } from "../console/roles.ts";
 import { readLoginToken } from "../console/link.ts";
-import { campaignSummaries, gameSummaries } from "../console/api.ts";
+import { campaignSummaries, gameDaySummaries, gameSummaries } from "../console/api.ts";
 import { openPollFromConsole } from "../console/polls.ts";
 import { InvalidCampaign, createCampaign, updateCampaign } from "../campaigns/write.ts";
 import { IllegalTransition, transition, type CampaignState } from "../campaigns/lifecycle.ts";
+import {
+  IllegalDayTransition,
+  transition as transitionGameDay,
+  type GameDayState,
+} from "../game-days/lifecycle.ts";
 import {
   InvalidGame,
   putGame,
@@ -146,6 +151,7 @@ export function createApp() {
   // Discord back would be showing a projection as though it were the thing.
   app.get("/api/campaigns", async (c) => c.json({ campaigns: await campaignSummaries(c.env) }));
   app.get("/api/games", async (c) => c.json({ games: await gameSummaries(c.env) }));
+  app.get("/api/game-days", async (c) => c.json({ gameDays: await gameDaySummaries(c.env) }));
 
   /**
    * The write half. Each route is a thin wrapper over the domain function that
@@ -206,6 +212,32 @@ export function createApp() {
       return result.ok
         ? c.json({ id: result.pollId }, 201)
         : c.json({ error: result.error }, result.status);
+    }),
+  );
+
+  /**
+   * Opening seating on a day, locking it, calling it off.
+   *
+   * A console page rather than a fifth command — the rule the phase keeps
+   * testing. Opening seating is the one that does real work: it mints the day's
+   * session and arms the jobs that put it on a calendar, and `transition` is
+   * where all of that lives. This route reads a state and hands over.
+   */
+  app.post("/api/game-days/:id/transition", async (c) =>
+    refusable(c, async () => {
+      const { to } = (await c.req.json()) as { to?: GameDayState };
+      if (!to) return c.json({ error: "which state?" }, 400);
+
+      try {
+        return c.json(await transitionGameDay(c.env, c.req.param("id"), to, c.get("userId")));
+      } catch (error) {
+        // An illegal move is the domain saying no to what was asked — a sentence
+        // meant to be read, not a failure to log.
+        if (error instanceof IllegalDayTransition) {
+          return c.json({ error: error.message }, 400);
+        }
+        throw error;
+      }
     }),
   );
 

@@ -7,6 +7,7 @@ import { mintId } from "../src/db/ids.ts";
 import { decodeCustomId } from "../src/discord/custom-id.ts";
 import { drainJobs } from "../src/jobs/drain.ts";
 import { find } from "../src/projection/publications.ts";
+import { sessionIdFor } from "../src/game-days/lifecycle.ts";
 import {
   POST_SIGNUP_JOB,
   dayThreadName,
@@ -439,5 +440,56 @@ describe("the job", () => {
     // is nothing here that a later attempt could make go better.
     expect(calls).toEqual([]);
     expect(await dayRow()).toMatchObject({ discordMessageId: null, threadId: null });
+  });
+
+  it("arms the attendance post once the day has a thread to put it in", async () => {
+    await day();
+    await db(env)
+      .insert(schema.sessions)
+      .values({
+        id: sessionIdFor(DAY_ID),
+        kind: "one_off",
+        gameDayId: DAY_ID,
+        startsAt: START,
+        endsAt: START + 18_000,
+      });
+    await db(env)
+      .insert(schema.jobs)
+      .values({
+        id: `${POST_SIGNUP_JOB}:${DAY_ID}`,
+        kind: POST_SIGNUP_JOB,
+        payload: { gameDayId: DAY_ID },
+        idempotencyKey: `${POST_SIGNUP_JOB}:${DAY_ID}`,
+        runAt: sql`(unixepoch())`,
+      });
+
+    await drainJobs(env);
+
+    // Armed from the thread's own creation rather than by the transition that
+    // armed this job, so the attendance post cannot win a race against the
+    // thread it belongs in — and under send-only a post that went into the
+    // channel instead cannot be moved into one.
+    const armed = await db(env).select().from(schema.jobs).all();
+    expect(armed.map((job) => job.kind)).toContain("session.post-attendance");
+  });
+
+  it("arms nothing while there is still no thread", async () => {
+    await day();
+    threadResponse = () =>
+      Response.json({ code: 160004, message: "A thread has already been created" }, { status: 400 });
+    await db(env)
+      .insert(schema.jobs)
+      .values({
+        id: `${POST_SIGNUP_JOB}:${DAY_ID}`,
+        kind: POST_SIGNUP_JOB,
+        payload: { gameDayId: DAY_ID },
+        idempotencyKey: `${POST_SIGNUP_JOB}:${DAY_ID}`,
+        runAt: sql`(unixepoch())`,
+      });
+
+    await drainJobs(env);
+
+    const armed = await db(env).select().from(schema.jobs).all();
+    expect(armed.map((job) => job.kind)).not.toContain("session.post-attendance");
   });
 });
