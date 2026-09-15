@@ -1,9 +1,9 @@
-import { and, asc, eq, gte, inArray, ne } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
 import { quorumOf } from "../attendance/quorum.ts";
 import type { Quorum } from "../attendance/quorum.ts";
-import { campaignTarget, sessionTitle } from "../projection/target.ts";
+import { agendaBetween, windowAround } from "../console/agenda.ts";
 
 /**
  * The agenda: everything on the calendar, for you, right now.
@@ -38,69 +38,98 @@ export async function upcomingFor(env: Env, userId: string, asOf: Date): Promise
   return (await upcomingWithTotal(env, userId, asOf)).entries;
 }
 
+/**
+ * A year. `/upcoming` shows ten, and the horizon only has to be wide enough that
+ * the ten it shows are the right ten — the materialiser keeps four sessions per
+ * campaign ahead, so a year is already far past anything that exists.
+ */
+const HORIZON_DAYS = 365;
+
 export async function upcomingWithTotal(
   env: Env,
   userId: string,
   asOf: Date,
 ): Promise<Upcoming> {
-  const now = Math.floor(asOf.getTime() / 1000);
+  const mine = await campaignsOf(env, userId);
+  if (mine.size === 0) return { entries: [], total: 0 };
 
-  // The caller's campaigns, and the sessions of those still to come. A session
-  // that has been called off is not on anybody's agenda, and one that has been
-  // played is history — both are excluded by state rather than by time, because
-  // a session cancelled for next Tuesday is still in the future.
-  const rows = await db(env)
-    .select({ session: schema.sessions, campaign: schema.campaigns })
-    .from(schema.campaignMembers)
-    .innerJoin(schema.campaigns, eq(schema.campaigns.id, schema.campaignMembers.campaignId))
-    .innerJoin(schema.sessions, eq(schema.sessions.campaignId, schema.campaigns.id))
-    .where(
-      and(
-        eq(schema.campaignMembers.userId, userId),
-        gte(schema.sessions.startsAt, now),
-        ne(schema.sessions.state, "CANCELLED"),
-        ne(schema.sessions.state, "PLAYED"),
-      ),
-    )
-    .orderBy(asc(schema.sessions.startsAt), asc(schema.sessions.id))
-    .all();
+  /**
+   * The numbers come from the agenda model rather than from a second query here.
+   *
+   * #43 calls the console's agenda "the counterpart to `/upcoming`", and a
+   * counterpart that counts the same things a second way is one that disagrees
+   * with the first by the phase after next. So there is one window query, one
+   * roster count and one `quorumOf`, and this is a caller of it.
+   *
+   * It also picks up the model's rule that a campaign which is not RUNNING
+   * contributes nothing: a session Orrey is not putting on anybody's calendar is
+   * not one to put on somebody's agenda either.
+   */
+  const { from, to } = windowAround(asOf, HORIZON_DAYS);
+  const { rows } = await agendaBetween(env, from, to, asOf);
 
-  const wanted = rows.slice(0, HOW_MANY);
+  // A session that has been called off is not on anybody's agenda, and one that
+  // has been played is history — both excluded by state rather than by time,
+  // because a session cancelled for next Tuesday is still in the future.
+  const ours = rows.filter(
+    (row) =>
+      row.campaignId !== null &&
+      mine.has(row.campaignId) &&
+      row.state !== "CANCELLED" &&
+      row.state !== "PLAYED",
+  );
+
+  const wanted = ours.slice(0, HOW_MANY);
   if (wanted.length === 0) return { entries: [], total: 0 };
 
-  // One query for every register row of every session on the list, rather than
-  // one query per session. Quorum is a count of `in`, so this is all it needs.
-  const attendance = await db(env)
-    .select({
-      sessionId: schema.attendance.sessionId,
-      userId: schema.attendance.userId,
-      intent: schema.attendance.intent,
-    })
+  // The one thing the agenda cannot answer, because it is nobody's in
+  // particular: what *this* caller said.
+  const said = await intentsOf(
+    env,
+    userId,
+    wanted.map((row) => row.sessionId),
+  );
+
+  return {
+    entries: wanted.map((row) => ({
+      sessionId: row.sessionId,
+      title: row.title,
+      startsAt: row.startsAt,
+      state: row.state as UpcomingEntry["state"],
+      quorum: row.quorum,
+      mine: said.get(row.sessionId) ?? null,
+    })),
+    total: ours.length,
+  };
+}
+
+/** The campaigns this person is on. Membership is the whole of "yours". */
+async function campaignsOf(env: Env, userId: string): Promise<Set<string>> {
+  const rows = await db(env)
+    .select({ campaignId: schema.campaignMembers.campaignId })
+    .from(schema.campaignMembers)
+    .where(eq(schema.campaignMembers.userId, userId))
+    .all();
+  return new Set(rows.map((row) => row.campaignId));
+}
+
+async function intentsOf(
+  env: Env,
+  userId: string,
+  sessionIds: string[],
+): Promise<Map<string, "in" | "out" | "maybe" | null>> {
+  const rows = await db(env)
+    .select({ sessionId: schema.attendance.sessionId, intent: schema.attendance.intent })
     .from(schema.attendance)
     .where(
-      inArray(
-        schema.attendance.sessionId,
-        wanted.map((row) => row.session.id),
+      and(
+        eq(schema.attendance.userId, userId),
+        inArray(schema.attendance.sessionId, sessionIds),
       ),
     )
     .all();
 
-  const entries = wanted.map(({ session, campaign }) => {
-    const rowsForSession = attendance
-      .filter((row) => row.sessionId === session.id)
-      .map((row) => ({ userId: row.userId, name: row.userId, intent: row.intent, note: null }));
-
-    return {
-      sessionId: session.id,
-      title: sessionTitle(campaignTarget(session, campaign)),
-      startsAt: session.startsAt,
-      state: session.state as UpcomingEntry["state"],
-      quorum: quorumOf(campaignTarget(session, campaign), rowsForSession),
-      mine: rowsForSession.find((row) => row.userId === userId)?.intent ?? null,
-    };
-  });
-
-  return { entries, total: rows.length };
+  return new Map(rows.map((row) => [row.sessionId, row.intent]));
 }
 
 /**

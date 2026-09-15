@@ -15,9 +15,24 @@ import {
 } from "../console/cookies.ts";
 import { authorizeUrl, exchangeCode, identify, storeTokens } from "../console/oauth.ts";
 import { sessionFrom } from "../console/session.ts";
+import { deleteUserData, describeReceipt } from "../privacy/delete.ts";
+import { feedFor, icsResponse } from "../ics/feed.ts";
+import { feedsPanel, rotateFeedToken } from "../ics/feeds-panel.ts";
 import { NotConfigured, isOrganiser } from "../console/roles.ts";
 import { readLoginToken } from "../console/link.ts";
 import { campaignSummaries, gameDaySummaries, gameSummaries } from "../console/api.ts";
+import { campaignPage } from "../console/campaign.ts";
+import { campaignHistory } from "../console/campaign-history.ts";
+import { campaignPolls } from "../console/campaign-polls.ts";
+import { gameDayPage } from "../console/game-day.ts";
+import { monthGrid } from "../console/month.ts";
+import { deleteGame, gameRows } from "../console/games.ts";
+import { InvalidSetting, putSetting, settingsView } from "../console/settings.ts";
+import { auditActors, auditPage } from "../console/audit.ts";
+import { agendaBetween, windowAround } from "../console/agenda.ts";
+import { sessionDetail } from "../console/session-detail.ts";
+import { cancelSession, lockSession } from "../sessions/lifecycle.ts";
+import { SETTING_DEFAULTS, SETTING_KEYS, settingOr } from "../db/settings.ts";
 import { openPollFromConsole } from "../console/polls.ts";
 import { InvalidCampaign, createCampaign, updateCampaign } from "../campaigns/write.ts";
 import { IllegalTransition, transition, type CampaignState } from "../campaigns/lifecycle.ts";
@@ -68,6 +83,34 @@ export function createApp() {
    * hand somebody a callback URL carrying their own code and have the victim's
    * browser log in as them.
    */
+  /**
+   * The ICS feeds. **Registered above the console's session middleware on
+   * purpose**: a calendar client cannot log in, and these routes must not
+   * require a cookie or read one. The token in the path is the only credential
+   * they accept, which is why `users.feed_token` is unique and unguessable.
+   *
+   * An unknown token and a real token asking for a campaign its holder is not on
+   * produce byte-identical empty 404s. A 401 here would confirm which tokens are
+   * real to whoever is trying them.
+   *
+   * Nothing on this path writes anything, and nothing on it logs the token.
+   */
+  app.get("/ics/:feedToken/all.ics", (c) => ics(c, c.req.param("feedToken")));
+  app.get("/ics/:feedToken/campaign/:file", (c) => {
+    /**
+     * The extension is stripped here rather than written into the pattern.
+     *
+     * Hono reads `:id.ics` as a parameter *named* `id.ics` whose value is
+     * `umbra.ics` — the dot is part of the name and the suffix is not a literal.
+     * The phase-0 stub `/ics/:token.ics` had the same shape and the same silent
+     * bug; it never mattered, because it answered 501 without reading the
+     * parameter.
+     */
+    const file = c.req.param("file");
+    if (!file.endsWith(".ics")) return c.body(null, 404);
+    return ics(c, c.req.param("feedToken"), file.slice(0, -".ics".length));
+  });
+
   app.get("/console/login", async (c) => {
     // The console has no public front door. A redirect to Discord's authorize
     // endpoint that anybody can trigger is a phishing primitive rather than a
@@ -151,7 +194,64 @@ export function createApp() {
   // Discord back would be showing a projection as though it were the thing.
   app.get("/api/campaigns", async (c) => c.json({ campaigns: await campaignSummaries(c.env) }));
   app.get("/api/games", async (c) => c.json({ games: await gameSummaries(c.env) }));
+
+  /**
+   * The games admin's list: every game with who is holding it.
+   *
+   * The holders travel with the row so the page can say what a delete would
+   * break *before* it is attempted, rather than the organiser finding out
+   * afterwards.
+   */
+  app.get("/api/games/usage", async (c) => c.json({ games: await gameRows(c.env) }));
+
+  /**
+   * The settings page's fields: every key something in the Worker already reads,
+   * with its value, its default, and what changing it costs.
+   */
+  app.get("/api/settings", async (c) => c.json({ settings: await settingsView(c.env) }));
+
+  app.put("/api/settings/:key{.+}", async (c) =>
+    refusable(c, async () => {
+      const { value } = (await c.req.json()) as { value?: unknown };
+      await putSetting(c.env, c.req.param("key"), value, c.get("userId"));
+      return c.json({ ok: true });
+    }),
+  );
   app.get("/api/game-days", async (c) => c.json({ gameDays: await gameDaySummaries(c.env) }));
+
+  /**
+   * What is on, between these two moments.
+   *
+   * The window is the caller's to choose, half-open, so the month grid can ask
+   * for a month that has already been. The default is the fortnight ahead, which
+   * is what the agenda opens on.
+   *
+   * The envelope is `{ asOf, rows }` and every page of the console reuses it:
+   * the console carries the same as-of line the Discord posts do, because what
+   * it shows is a reading and the reader should know when of.
+   */
+  app.get("/api/agenda", async (c) => {
+    const asOf = new Date();
+    const fortnight = windowAround(asOf, 14);
+    const from = Number(c.req.query("from") ?? fortnight.from);
+    const to = Number(c.req.query("to") ?? fortnight.to);
+
+    // A window that is not a window is a 400 rather than a silent full scan.
+    if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) {
+      return c.json({ error: "from and to are unix seconds, and to comes after from" }, 400);
+    }
+
+    // The guild's zone, not the server's and not the reader's: the day a
+    // session falls on is a fact about the table, and two people in two zones
+    // must not see it on different days.
+    const timeZone = await settingOr<string>(
+      c.env,
+      SETTING_KEYS.timezone,
+      SETTING_DEFAULTS[SETTING_KEYS.timezone],
+    );
+
+    return c.json(await agendaBetween(c.env, from, to, asOf, timeZone));
+  });
 
   /**
    * The write half. Each route is a thin wrapper over the domain function that
@@ -172,6 +272,149 @@ export function createApp() {
     }),
   );
 
+  /**
+   * One session, for the rail beside the agenda. Read-only, and it calls nothing
+   * outward: the links are URLs assembled from ids and the sync state is what
+   * `calendar_links` says.
+   */
+  app.get("/api/sessions/:id", async (c) => {
+    const detail = await sessionDetail(c.env, c.req.param("id"));
+    return detail ? c.json(detail) : c.json({ error: "Orrey does not know that session." }, 404);
+  });
+
+  /**
+   * The three writes #43 asks for, each a thin wrapper over the domain function
+   * the bot calls. Opening a poll is #36's path invoked from a different
+   * surface, not a second implementation of it.
+   */
+  app.post("/api/sessions/:id/poll", async (c) =>
+    refusable(c, async () => {
+      const body = (await c.req.json()) as Record<string, unknown>;
+      const result = await openPollFromConsole(
+        c.env,
+        { ...body, targetSessionId: c.req.param("id") },
+        c.get("userId"),
+      );
+      return result.ok
+        ? c.json({ id: result.pollId }, 201)
+        : c.json({ error: result.error }, result.status);
+    }),
+  );
+
+  app.post("/api/sessions/:id/lock", async (c) =>
+    refusable(c, async () => {
+      const outcome = await lockSession(c.env, c.req.param("id"), c.get("userId"));
+      return outcome === "no-session"
+        ? c.json({ error: "Orrey does not know that session." }, 404)
+        : outcome === "too-late"
+          ? c.json({ error: "That session is over, or already off." }, 400)
+          : c.json({ outcome });
+    }),
+  );
+
+  app.post("/api/sessions/:id/cancel", async (c) =>
+    refusable(c, async () => {
+      const outcome = await cancelSession(c.env, c.req.param("id"), c.get("userId"));
+      return outcome === "no-session"
+        ? c.json({ error: "Orrey does not know that session." }, 404)
+        : outcome === "too-late"
+          ? c.json({ error: "That session has already been played." }, 400)
+          : c.json({ outcome });
+    }),
+  );
+
+  /**
+   * One campaign's plan: where it is, where it may go, what it runs on, who is
+   * on it, and what is coming.
+   *
+   * `asOf` is returned with the answer rather than left implicit, the same
+   * envelope the agenda uses. The page is a reading, and the reader should know
+   * when of.
+   */
+  app.get("/api/campaigns/:id/page", async (c) => {
+    const asOf = new Date();
+    const page = await campaignPage(c.env, c.req.param("id"), asOf);
+    return page
+      ? c.json({ asOf: Math.floor(asOf.getTime() / 1000), campaign: page })
+      : c.json({ error: "Orrey does not know that campaign." }, 404);
+  });
+
+  /**
+   * One campaign's record: what it has played, and the flake memory counted from
+   * exactly those rows.
+   *
+   * A second route rather than more of `/page`, because it is a different query
+   * with a different failure mode — and because a page that has to hold the plan
+   * and the record at once is a page where neither is legible.
+   */
+  app.get("/api/campaigns/:id/history", async (c) =>
+    c.json(await campaignHistory(c.env, c.req.param("id"))),
+  );
+
+  /**
+   * A campaign's open date polls, and its auto-resolve flag.
+   *
+   * Read-only. The toggle is written through `PATCH /api/campaigns/:id` like
+   * every other campaign field, so there is one write path into `audit_log` and
+   * not two — and canonising is not here at all: that is an organiser-only
+   * button on the poll post, and a second way to reach the same decision is a
+   * decision made twice.
+   */
+  app.get("/api/campaigns/:id/polls", async (c) =>
+    c.json(await campaignPolls(c.env, c.req.param("id"))),
+  );
+
+  /**
+   * One game day: who holds a seat, who is behind them, and — separately — who
+   * was on the register for the session the day owns.
+   *
+   * Two lists, never merged. Signups attach to the day and attendance attaches
+   * to the session, and a page that showed one roster would imply a signup is an
+   * intent.
+   */
+  app.get("/api/game-days/:id/page", async (c) => {
+    const page = await gameDayPage(c.env, c.req.param("id"));
+    return page ? c.json(page) : c.json({ error: "Orrey does not know that day." }, 404);
+  });
+
+  /**
+   * A month, as the grid draws it.
+   *
+   * The same window query the agenda uses, with the bounds set to the six weeks
+   * the grid shows rather than to the month proper — a grid that asked for the
+   * month would render the leading and trailing cells empty and be quietly
+   * wrong about the last week of March.
+   */
+  app.get("/api/month/:year/:month", async (c) => {
+    const year = Number(c.req.param("year"));
+    const month = Number(c.req.param("month"));
+    if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) {
+      return c.json({ error: "A month is a year and a number from 1 to 12." }, 400);
+    }
+    return c.json(await monthGrid(c.env, year, month, new Date()));
+  });
+
+  /**
+   * Who changed what. Read-only, newest first, keyset-paginated.
+   *
+   * The gate is the `/api/*` organiser check above, asked once for the request.
+   * Nothing below re-decides it per row: a gate asked once is a gate; a gate
+   * asked per row is a filter, and a filter with a bug shows one row too many.
+   */
+  app.get("/api/audit", async (c) =>
+    c.json(
+      await auditPage(c.env, {
+        actorUserId: c.req.query("actor"),
+        targetType: c.req.query("targetType"),
+        targetId: c.req.query("targetId"),
+        cursor: c.req.query("cursor"),
+        ...(c.req.query("limit") ? { limit: Number(c.req.query("limit")) } : {}),
+      }),
+    ),
+  );
+
+  app.get("/api/audit/actors", async (c) => c.json({ actors: await auditActors(c.env) }));
+
   app.get("/api/campaigns/:id/roster", async (c) =>
     c.json({ roster: await rosterRows(c.env, c.req.param("id")) }),
   );
@@ -186,6 +429,13 @@ export function createApp() {
   app.delete("/api/campaigns/:id/members/:userId", async (c) =>
     refusable(c, async () => {
       await removeMember(c.env, c.req.param("id"), c.req.param("userId"), c.get("userId"));
+      return c.json({ ok: true });
+    }),
+  );
+
+  app.delete("/api/games/:id", async (c) =>
+    refusable(c, async () => {
+      await deleteGame(c.env, c.req.param("id"), c.get("userId"));
       return c.json({ ok: true });
     }),
   );
@@ -252,6 +502,67 @@ export function createApp() {
   );
 
   /** Logging out is forgetting the cookie. The token pair is dropped with it. */
+  /**
+   * Delete my data.
+   *
+   * **Not under `/api/*`.** That gate is the organiser check, and this is the
+   * one console action that belongs to everybody: a person who has never been
+   * given a role still has data Orrey holds, and Discord's terms are about them.
+   * So it takes the session cookie and asks nothing else of it.
+   *
+   * The deleted id is `session.userId` and comes from nowhere else. **The body
+   * is not read at all** — an endpoint that accepts an id is an endpoint that
+   * erases someone else's data, which is precisely why phase 0 left `DELETE /me`
+   * at 405 rather than implementing it.
+   *
+   * No new deletion code: `deleteUserData` has been the one place since phase 0,
+   * and every phase that adds a user-keyed table adds its own delete and its own
+   * count there. Phase 6 adds none.
+   */
+  app.post("/console/me/delete", async (c) => {
+    const session = await sessionFrom(c.env, c.req.header("cookie"), new Date());
+    if (!session) return c.json({ error: "Not signed in. Run /console in Discord." }, 401);
+
+    const receipt = await deleteUserData(c.env, session.userId);
+    // The cookie goes with the row it authenticated. Leaving it set would mean a
+    // console that greets somebody it no longer holds anything about.
+    c.header("set-cookie", clear(SESSION_COOKIE));
+    return c.json({ receipt, said: describeReceipt(receipt) });
+  });
+
+  /**
+   * The holder's own feed URLs, and the rotate.
+   *
+   * **Not under `/api/*`**: these are everybody's feeds, not an organiser's
+   * page. The id comes off the session cookie and never off the query string — a
+   * panel that took an id would be a panel that shows somebody else's
+   * credentials.
+   */
+  app.get("/console/me/feeds", async (c) => {
+    const session = await sessionFrom(c.env, c.req.header("cookie"), new Date());
+    if (!session) return c.json({ error: "Not signed in. Run /console in Discord." }, 401);
+
+    // The request's own origin, so a copied URL works on the environment it was
+    // copied from. A hardcoded host is wrong everywhere but one place, and the
+    // person copying it has no way to tell.
+    const panel = await feedsPanel(c.env, session.userId, new URL(c.req.url).origin);
+    return panel ? c.json(panel) : c.json({ error: "Orrey does not know you yet." }, 404);
+  });
+
+  app.post("/console/me/feeds/rotate", async (c) => {
+    const session = await sessionFrom(c.env, c.req.header("cookie"), new Date());
+    if (!session) return c.json({ error: "Not signed in. Run /console in Discord." }, 401);
+
+    const rotated = await rotateFeedToken(c.env, session.userId);
+    if (!rotated) return c.json({ error: "Orrey does not know you yet." }, 404);
+
+    // The panel is re-read rather than the new token returned on its own: what
+    // somebody needs is the URLs, and handing back a bare credential invites it
+    // into a paste buffer that outlives the tab.
+    const panel = await feedsPanel(c.env, session.userId, new URL(c.req.url).origin);
+    return c.json(panel);
+  });
+
   app.post("/console/logout", (c) => {
     c.header("set-cookie", clear(SESSION_COOKIE));
     return c.redirect("/", 302);
@@ -259,7 +570,7 @@ export function createApp() {
 
   // Per-campaign ICS feeds. Calendar clients cannot do OAuth, so the token in
   // the path is the only credential — it must be unguessable.
-  app.get("/ics/:token.ics", (c) => c.text("Not implemented until phase 6.", 501));
+
 
   /**
    * Discord's terms require a stated privacy policy and a delete-my-data path.
@@ -284,6 +595,28 @@ export function createApp() {
  * for, so they are 400s carrying the reason — anything else is a fault and stays
  * a 500, because a bug dressed up as a polite refusal is a bug nobody finds.
  */
+/**
+ * One feed, or an empty 404.
+ *
+ * The 404 carries no body and no reason. Both the "no such token" and the "not
+ * your campaign" paths reach it, and they have to be indistinguishable.
+ */
+async function ics(
+  c: {
+    env: Env;
+    body: (body: null, status: 404) => Response;
+    text: (text: string, status: 200, headers: Record<string, string>) => Response;
+  },
+  feedToken: string,
+  campaignId?: string,
+): Promise<Response> {
+  const feed = await feedFor(c.env, feedToken, campaignId);
+  if (!feed) return c.body(null, 404);
+
+  const { body, headers } = await icsResponse(c.env, feed, Math.floor(Date.now() / 1000));
+  return c.text(body, 200, headers);
+}
+
 async function refusable(
   c: { json: (body: unknown, status?: 200 | 201 | 400) => Response },
   work: () => Promise<Response>,
@@ -294,7 +627,8 @@ async function refusable(
     if (
       error instanceof InvalidCampaign ||
       error instanceof IllegalTransition ||
-      error instanceof InvalidGame
+      error instanceof InvalidGame ||
+      error instanceof InvalidSetting
     ) {
       return c.json({ error: error.message }, 400);
     }

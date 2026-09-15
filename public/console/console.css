@@ -55,3 +55,91 @@ button {
 }
 button + button { margin-left: var(--space-2, 8px); }
 button[disabled] { opacity: .5; cursor: default; }
+
+/* The agenda. */
+.bar-inline { display: flex; align-items: baseline; gap: var(--space-3, 12px); }
+.bar-inline h1 { font: var(--type-title, inherit); margin: 0; }
+.controls { display: flex; gap: var(--space-3, 12px); align-items: center; flex-wrap: wrap; margin: var(--space-4, 16px) 0 var(--space-3, 12px); }
+.controls .primary { margin-left: auto; }
+
+/* Exactly one blurple element on the screen, and it is on the view with work in
+   it. The filters are not actions and must not look like them. */
+button.primary { background: var(--signal-500, #5865f2); }
+.segmented { display: inline-flex; border: var(--border-structural); border-radius: var(--radius-sm); overflow: hidden; }
+.segmented button { background: transparent; border: 0; border-radius: 0; color: var(--text-secondary); }
+.segmented button + button { margin-left: 0; border-left: var(--border-hair); }
+.segmented button[aria-current="true"] { background: var(--surface-inset, #1e1f22); color: inherit; }
+
+tr.day th { font: var(--type-caption, inherit); color: var(--text-secondary); padding-top: var(--space-4, 16px); border-bottom: var(--border-structural); }
+tbody tr[tabindex] { cursor: pointer; }
+tbody tr[aria-selected="true"] { background: var(--surface-inset, #1e1f22); }
+
+/* In / maybe / out / not heard from. Width is the count; the four are not a
+   severity scale, so they are hues rather than a gradient. */
+.meter { display: flex; height: 6px; border-radius: 3px; overflow: hidden; background: var(--surface-inset, #1e1f22); margin-bottom: var(--space-1, 4px); }
+.meter span[data-kind="in"] { background: var(--signal-500, #5865f2); }
+.meter span[data-kind="maybe"] { background: var(--amber-500, #d9a441); }
+.meter span[data-kind="out"] { background: var(--danger-500, #d84b4b); }
+.meter span[data-kind="none"] { background: transparent; }
+
+.as-of { margin-top: var(--space-4, 16px); font: var(--type-caption, inherit); }
+
+.state[data-state="CONFIRMED"] { color: var(--signal-500); }
+.state[data-state="JEOPARDY"] { color: var(--amber-500, #d9a441); }
+.state[data-state="CANCELLED"] { color: var(--danger-500, #d84b4b); }
+.state[data-state="SCHEDULED"], .state[data-state="PLAYED"] { color: var(--text-secondary); }
+
+/* The list and the rail, side by side. The rail is 300px because the design
+   says so: it is a glance, not a page. */
+.split { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: var(--space-5, 20px); align-items: start; }
+@media (max-width: 900px) { .split { grid-template-columns: minmax(0, 1fr); } }
+
+.rail { border-left: var(--border-structural); padding-left: var(--space-4, 16px); }
+.rail h2 { font: var(--type-heading, inherit); margin: 0 0 var(--space-2, 8px); }
+.rail p { margin: var(--space-2, 8px) 0; }
+.rail a { color: var(--signal-500, #5865f2); }
+
+.roster { display: grid; grid-template-columns: auto 1fr; gap: var(--space-1, 4px) var(--space-3, 12px); margin: var(--space-4, 16px) 0; }
+.roster dt { color: var(--text-secondary); }
+.roster dd { margin: 0; font: var(--type-caption, inherit); }
+.roster dd[data-intent="in"] { color: var(--signal-500, #5865f2); }
+.roster dd[data-intent="maybe"] { color: var(--amber-500, #d9a441); }
+.roster dd[data-intent="out"] { color: var(--danger-500, #d84b4b); }
+.roster dd[data-intent="none"] { color: var(--text-muted, #8b8d91); }
+
+/* Projection state is ambient. "Not projected" is a state, not an error. */
+.sync { font: var(--type-caption, inherit); }
+.sync[data-state="not-projected"] { color: var(--text-muted, #8b8d91); }
+.sync[data-state="synced"] { color: var(--text-secondary); }
+.sync[data-state="failing"] { color: var(--danger-500, #d84b4b); }
+
+/* A campaign's page, opened from its name in the table. */
+.campaign-page { border: var(--border-structural); border-radius: var(--radius-sm); padding: var(--space-4, 16px); margin-block: var(--space-4, 16px); }
+.campaign-page h3 { margin-top: 0; }
+.campaign-page h4 { margin-bottom: var(--space-1, 4px); }
+dl.facts { display: grid; grid-template-columns: max-content 1fr; gap: var(--space-1, 4px) var(--space-4, 16px); margin: 0; }
+dl.facts dt { color: var(--text-secondary); }
+dl.facts dd { margin: 0; }
+
+/* A name that opens something is a button, and reads as the name it opens. */
+button.link { background: none; border: 0; padding: 0; font: inherit; color: inherit; text-decoration: underline; cursor: pointer; }
+.poll { border: var(--border-hair); border-radius: var(--radius-sm); padding: var(--space-3, 12px); margin-block: var(--space-3, 12px); }
+.poll p { margin-block: var(--space-1, 4px); }
+
+
+/* The month grid. Not drawn by the author — tokens and primitives only. */
+.month-controls { display: flex; align-items: baseline; gap: var(--space-3, 12px); }
+.month { display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px; background: var(--border-hair-colour, #2a2b2e); border: var(--border-structural); }
+.month-head { padding: var(--space-2, 8px); color: var(--text-secondary); font: var(--type-caption, inherit); background: var(--surface-inset, #1e1f22); }
+.month-cell { min-height: 5rem; padding: var(--space-2, 8px); background: var(--surface, transparent); display: grid; align-content: start; gap: var(--space-1, 4px); }
+.month-cell[data-outside="true"] { opacity: 0.45; }
+.month-number { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.pip { display: block; width: 100%; text-align: left; border: 0; border-radius: var(--radius-sm); padding: 2px var(--space-1, 4px); color: #12131a; font: var(--type-caption, inherit); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+
+form.setting { margin-block: var(--space-4, 16px); }
+form.setting input[disabled] { opacity: 0.6; }
+
+
+/* The log, and the log only: lower case, curt, monospaced numbers. */
+ul.log { list-style: none; margin: 0; padding: 0; font-variant-numeric: tabular-nums; }
+ul.log li { padding: var(--space-1, 4px) 0; border-bottom: var(--border-hair); color: var(--text-secondary); }

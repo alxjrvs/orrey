@@ -219,8 +219,20 @@ export const sessions = sqliteTable(
     endsAt: integer("ends_at").notNull(),
     /** Free text for an EXTERNAL event; ignored for a VOICE one. */
     location: text("location"),
+    /**
+     * `LOCKED` joins the five in phase 6, and it costs **no migration**: this
+     * column carries no CHECK — `sessions_parent_ck` is about `kind` and
+     * `campaign_id` — so the set of words it holds is a TypeScript fact, the
+     * same way `signups.state` was when phase 5 widened it.
+     *
+     * It means the table has stopped moving: intent changes are refused, the
+     * jeopardy check no longer treats it as waiting, and a click cannot confirm
+     * it. It is not terminal — `attendance.assume` still plays it — and nothing
+     * unlocks, for the reason a locked game day does not: a table that can be
+     * un-stopped by a click never really stopped.
+     */
     state: text("state", {
-      enum: ["SCHEDULED", "CONFIRMED", "JEOPARDY", "CANCELLED", "PLAYED"],
+      enum: ["SCHEDULED", "CONFIRMED", "JEOPARDY", "LOCKED", "CANCELLED", "PLAYED"],
     })
       .notNull()
       .default("SCHEDULED"),
@@ -231,6 +243,21 @@ export const sessions = sqliteTable(
     /** The attendance post. Recorded, then forgotten — messages are send-only. */
     discordMessageId: text("discord_message_id"),
     threadId: text("thread_id"),
+    /**
+     * RFC 5545 `SEQUENCE` for the ICS feed: how many times this session has
+     * moved or been called off since subscribers first saw it.
+     *
+     * A stored counter rather than `updated_at`, which was the obvious
+     * alternative and is wrong: RFC 5545 caps `SEQUENCE` at a signed 32-bit
+     * integer, and unix seconds cross that in 2038. A client that will not take
+     * the number stops taking the update.
+     *
+     * It rises in one place — `bumpIcsSequence` in `src/ics/sequence.ts` — and a
+     * roster change is not one of them. `SEQUENCE` is about the event, and a
+     * client re-prompting every attendee because somebody clicked Maybe is a
+     * client nobody keeps subscribed.
+     */
+    icsSequence: integer("ics_sequence").notNull().default(0),
     createdAt: integer("created_at").notNull().default(now),
     updatedAt: integer("updated_at").notNull().default(now),
   },

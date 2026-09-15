@@ -1,0 +1,1 @@
+ALTER TABLE `sessions` ADD `ics_sequence` integer DEFAULT 0 NOT NULL;
