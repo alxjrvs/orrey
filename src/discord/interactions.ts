@@ -183,6 +183,40 @@ async function reschedule(interaction: Interaction, env: Env): Promise<Json> {
   return datesModal(sessionId, sessionTitle(target));
 }
 
+/**
+ * **Suggest another day**, from the post it concerns.
+ *
+ * The same modal `/reschedule` opens, with the session already decided — so the
+ * two entry points converge on one `MODAL_SUBMIT` path and one `openPoll`, and a
+ * session that already has an open poll gets the same refusal from the same
+ * constraint.
+ *
+ * The click itself writes nothing. Opening a modal is not opening a poll.
+ */
+async function handleSuggest(
+  interaction: Interaction,
+  env: Env,
+  sessionId: string | undefined,
+): Promise<Json> {
+  if (!sessionId) return retiredPost();
+
+  const actor = actorOf(interaction);
+  if (!actor) return ephemeral("Orrey could not tell who clicked that.");
+
+  const target = await loadProjectionTarget(env, sessionId);
+  if (!target) return retiredPost();
+
+  // The same guard `/reschedule` has. This button sits on a post in a campaign's
+  // own channel, which is close to an access check and is not one: a `custom_id`
+  // is a string the client sends, and anybody who can read one post can send
+  // another post's id.
+  if (target.campaign && !(await isOnRoster(env, target.campaign.id, actor.id))) {
+    return ephemeral("That session is not on a campaign you are on.");
+  }
+
+  return datesModal(sessionId, sessionTitle(target));
+}
+
 const DATES_INPUT = "dates";
 
 /**
@@ -386,6 +420,8 @@ async function handleComponent(
       return handlePrivacy(interaction, env, ctx, id.arg);
     case "poll":
       return handlePoll(interaction, env, id.arg, id.target);
+    case "suggest":
+      return handleSuggest(interaction, env, id.target);
     default:
       return retiredPost();
   }
