@@ -19,6 +19,7 @@ import { NotConfigured, isOrganiser } from "../console/roles.ts";
 import { readLoginToken } from "../console/link.ts";
 import { campaignSummaries, gameDaySummaries, gameSummaries } from "../console/api.ts";
 import { campaignPage } from "../console/campaign.ts";
+import { gameDayPage } from "../console/game-day.ts";
 import { agendaBetween, windowAround } from "../console/agenda.ts";
 import { sessionDetail } from "../console/session-detail.ts";
 import { SETTING_DEFAULTS, SETTING_KEYS, settingOr } from "../db/settings.ts";
@@ -234,6 +235,19 @@ export function createApp() {
     return page
       ? c.json({ asOf: Math.floor(asOf.getTime() / 1000), campaign: page })
       : c.json({ error: "Orrey does not know that campaign." }, 404);
+  });
+
+  /**
+   * One game day: who holds a seat, who is behind them, and — separately — who
+   * was on the register for the session the day owns.
+   *
+   * Two lists, never merged. Signups attach to the day and attendance attaches
+   * to the session, and a page that showed one roster would imply a signup is an
+   * intent.
+   */
+  app.get("/api/game-days/:id/page", async (c) => {
+    const page = await gameDayPage(c.env, c.req.param("id"));
+    return page ? c.json(page) : c.json({ error: "Orrey does not know that day." }, 404);
   });
 
   app.get("/api/campaigns/:id/roster", async (c) =>
