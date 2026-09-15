@@ -20,6 +20,13 @@ import { readLoginToken } from "../console/link.ts";
 import { campaignSummaries, gameSummaries } from "../console/api.ts";
 import { InvalidCampaign, createCampaign, updateCampaign } from "../campaigns/write.ts";
 import { IllegalTransition, transition, type CampaignState } from "../campaigns/lifecycle.ts";
+import {
+  InvalidGame,
+  putGame,
+  putMember,
+  removeMember,
+  rosterRows,
+} from "../campaigns/roster-write.ts";
 
 export function createApp() {
   const app = new Hono<{ Bindings: Env; Variables: { userId: string } }>();
@@ -158,6 +165,31 @@ export function createApp() {
     }),
   );
 
+  app.get("/api/campaigns/:id/roster", async (c) =>
+    c.json({ roster: await rosterRows(c.env, c.req.param("id")) }),
+  );
+
+  app.put("/api/campaigns/:id/members", async (c) =>
+    refusable(c, async () => {
+      await putMember(c.env, c.req.param("id"), await c.req.json(), c.get("userId"));
+      return c.json({ ok: true });
+    }),
+  );
+
+  app.delete("/api/campaigns/:id/members/:userId", async (c) =>
+    refusable(c, async () => {
+      await removeMember(c.env, c.req.param("id"), c.req.param("userId"), c.get("userId"));
+      return c.json({ ok: true });
+    }),
+  );
+
+  app.put("/api/games/:id?", async (c) =>
+    refusable(c, async () => {
+      const id = await putGame(c.env, c.req.param("id"), await c.req.json(), c.get("userId"));
+      return c.json({ id });
+    }),
+  );
+
   app.post("/api/campaigns/:id/transition", async (c) =>
     refusable(c, async () => {
       const { to } = (await c.req.json()) as { to?: CampaignState };
@@ -208,7 +240,11 @@ async function refusable(
   try {
     return await work();
   } catch (error) {
-    if (error instanceof InvalidCampaign || error instanceof IllegalTransition) {
+    if (
+      error instanceof InvalidCampaign ||
+      error instanceof IllegalTransition ||
+      error instanceof InvalidGame
+    ) {
       return c.json({ error: error.message }, 400);
     }
     throw error;
