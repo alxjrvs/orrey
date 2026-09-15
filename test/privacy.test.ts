@@ -249,7 +249,7 @@ describe("delete my data, from the console", () => {
         headers: {
           "content-type": "application/json",
           ...(userId
-            ? { cookie: `${SESSION_COOKIE}=${await issueSession(consoleEnv(), userId, NOW)}` }
+            ? { cookie: `${SESSION_COOKIE}=${await issueSession(consoleEnv(), userId, new Date())}` }
             : {}),
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
