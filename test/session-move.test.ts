@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { db, schema } from "../src/db/index.ts";
 import { SETTING_KEYS, setSetting } from "../src/db/settings.ts";
 import { mintId } from "../src/db/ids.ts";
+import { SESSION_MOVED } from "../src/db/audit.ts";
 import { createApp } from "../src/http/app.ts";
 import { InteractionType } from "../src/discord/types.ts";
 import { encodeCustomId } from "../src/discord/custom-id.ts";
@@ -128,6 +129,7 @@ beforeEach(async () => {
   }) as typeof fetch;
 
   for (const table of [
+    "audit_log",
     "publications",
     "poll_responses",
     "poll_dates",
@@ -160,6 +162,22 @@ describe("the move", () => {
       startsAt: dates[1]!.startsAt,
       endsAt: dates[1]!.startsAt + 4 * 3600,
     });
+  });
+
+  it("leaves the move on the record", async () => {
+    await seed({ startsAt: NOW + 7 * DAY });
+
+    await canoniseWith(dates[1]!.id);
+
+    // The row the schedule statistics count. A trail with a hole in it for one
+    // of the three ways a session moves is a number that undercounts without
+    // ever looking wrong — and `actor_user_id` is null because the clock moved
+    // this, not a person.
+    const moves = (await db(env).select().from(schema.auditLog).all()).filter(
+      (row) => row.action === SESSION_MOVED,
+    );
+    expect(moves).toHaveLength(1);
+    expect(moves[0]).toMatchObject({ targetType: "session", actorUserId: null });
   });
 
   it("posts one notice in the thread and edits nothing", async () => {
