@@ -49,15 +49,25 @@ async function send(method: string, path: string, body?: unknown) {
 }
 
 function audit() {
-  return db(env).select().from(schema.auditLog).orderBy(asc(schema.auditLog.createdAt)).all();
+  return db(env)
+    .select()
+    .from(schema.auditLog)
+    .orderBy(asc(schema.auditLog.createdAt))
+    .all();
 }
 
 function games() {
   return db(env).select().from(schema.games).all();
 }
 
-async function game(id: string, name: string, over: Partial<typeof schema.games.$inferInsert> = {}) {
-  await db(env).insert(schema.games).values({ id, name, ...over });
+async function game(
+  id: string,
+  name: string,
+  over: Partial<typeof schema.games.$inferInsert> = {},
+) {
+  await db(env)
+    .insert(schema.games)
+    .values({ id, name, ...over });
   return id;
 }
 
@@ -71,7 +81,12 @@ async function campaign(id: string, name: string, gameId: string | null) {
 beforeEach(async () => {
   roles = [ORGANISER_ROLE];
   globalThis.fetch = (async (input: RequestInfo | URL) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url;
     if (url.includes("/members/")) return Response.json({ roles });
     return new Response("unexpected", { status: 500 });
   }) as typeof fetch;
@@ -93,10 +108,22 @@ beforeEach(async () => {
   }
   await setSetting(env, SETTING_KEYS.guildId, "g1");
   await setSetting(env, SETTING_KEYS.organiserRoleId, ORGANISER_ROLE);
-  await db(env).insert(schema.users).values({ discordId: "1001", username: "ada", feedToken: "t" });
+  await db(env)
+    .insert(schema.users)
+    .values({ discordId: "1001", username: "ada", feedToken: "t" });
+  // Against the real clock rather than `NOW`. `sessionFrom` compares this to the
+  // clock it is actually running on, so an expiry anchored to a frozen date is a
+  // day of life measured from a day already gone. Every test through here then
+  // takes the refresh path into a fake fetch that has no token reply, and the
+  // file turns red on a change to nothing.
   await db(env)
     .insert(schema.discordTokens)
-    .values({ userId: "1001", accessToken: "at", refreshToken: "rt", expiresAt: seconds + 86_400 });
+    .values({
+      userId: "1001",
+      accessToken: "at",
+      refreshToken: "rt",
+      expiresAt: Math.floor(Date.now() / 1000) + 86_400,
+    });
 });
 
 afterEach(() => {
