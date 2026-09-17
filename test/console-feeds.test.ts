@@ -30,12 +30,19 @@ function consoleEnv() {
   };
 }
 
-async function send(method: string, path: string, userId: string | null, origin = "https://orrey.test") {
+async function send(
+  method: string,
+  path: string,
+  userId: string | null,
+  origin = "https://orrey.test",
+) {
   return app.fetch(
     new Request(`${origin}${path}`, {
       method,
       headers: userId
-        ? { cookie: `${SESSION_COOKIE}=${await issueSession(consoleEnv(), userId, new Date())}` }
+        ? {
+            cookie: `${SESSION_COOKIE}=${await issueSession(consoleEnv(), userId, new Date())}`,
+          }
         : {},
     }),
     consoleEnv(),
@@ -47,9 +54,19 @@ async function signedIn(discordId: string, token: string) {
     .insert(schema.users)
     .values({ discordId, username: discordId, feedToken: token })
     .onConflictDoNothing();
+  // Against the real clock rather than `NOW`. `sessionFrom` compares this to the
+  // clock it is actually running on, so an expiry anchored to a frozen date is a
+  // day of life measured from a day already gone. Every test through here then
+  // takes the refresh path into a fake fetch that has no token reply, and the
+  // file turns red on a change to nothing.
   await db(env)
     .insert(schema.discordTokens)
-    .values({ userId: discordId, accessToken: "at", refreshToken: "rt", expiresAt: seconds + 86_400 });
+    .values({
+      userId: discordId,
+      accessToken: "at",
+      refreshToken: "rt",
+      expiresAt: Math.floor(Date.now() / 1000) + 86_400,
+    });
 }
 
 function tokenOf(discordId: string) {
@@ -62,15 +79,23 @@ function tokenOf(discordId: string) {
 }
 
 function audit() {
-  return db(env).select().from(schema.auditLog).orderBy(asc(schema.auditLog.createdAt)).all();
+  return db(env)
+    .select()
+    .from(schema.auditLog)
+    .orderBy(asc(schema.auditLog.createdAt))
+    .all();
 }
 
 function feed(token: string, path = "all.ics") {
-  return app.fetch(new Request(`https://orrey.test/ics/${token}/${path}`), env as never);
+  return app.fetch(
+    new Request(`https://orrey.test/ics/${token}/${path}`),
+    env as never,
+  );
 }
 
 beforeEach(async () => {
-  globalThis.fetch = (async () => new Response("unexpected", { status: 500 })) as typeof fetch;
+  globalThis.fetch = (async () =>
+    new Response("unexpected", { status: 500 })) as typeof fetch;
 
   for (const table of [
     "audit_log",
@@ -95,16 +120,30 @@ describe("the panel", () => {
     await signedIn("ada", "tok-ada");
     await db(env)
       .insert(schema.campaigns)
-      .values({ id: "umbra", name: "Age of Umbra", kind: "run", state: "RUNNING" });
-    await db(env).insert(schema.campaignMembers).values({ campaignId: "umbra", userId: "ada" });
+      .values({
+        id: "umbra",
+        name: "Age of Umbra",
+        kind: "run",
+        state: "RUNNING",
+      });
+    await db(env)
+      .insert(schema.campaignMembers)
+      .values({ campaignId: "umbra", userId: "ada" });
 
-    const body = (await (await send("GET", "/console/me/feeds", "ada")).json()) as {
+    const body = (await (
+      await send("GET", "/console/me/feeds", "ada")
+    ).json()) as {
       links: { label: string; url: string }[];
     };
 
-    expect(body.links.map((link) => link.label)).toEqual(["Everything", "Age of Umbra"]);
+    expect(body.links.map((link) => link.label)).toEqual([
+      "Everything",
+      "Age of Umbra",
+    ]);
     expect(body.links[0]?.url).toBe("https://orrey.test/ics/tok-ada/all.ics");
-    expect(body.links[1]?.url).toBe("https://orrey.test/ics/tok-ada/campaign/umbra.ics");
+    expect(body.links[1]?.url).toBe(
+      "https://orrey.test/ics/tok-ada/campaign/umbra.ics",
+    );
   });
 
   it("builds the URLs from the request origin, not from a hardcoded host", async () => {
@@ -116,13 +155,17 @@ describe("the panel", () => {
 
     // A hardcoded host is wrong on every environment but one, and the person
     // copying the URL has no way to tell.
-    expect(body.links[0]?.url).toBe("https://orrey.example.dev/ics/tok-ada/all.ics");
+    expect(body.links[0]?.url).toBe(
+      "https://orrey.example.dev/ics/tok-ada/all.ics",
+    );
   });
 
   it("carries the lag, on the panel rather than in a tooltip", async () => {
     await signedIn("ada", "tok-ada");
 
-    const body = (await (await send("GET", "/console/me/feeds", "ada")).json()) as { lag: string };
+    const body = (await (
+      await send("GET", "/console/me/feeds", "ada")
+    ).json()) as { lag: string };
 
     // Somebody who does not know a subscribed feed refreshes overnight reads a
     // correct feed as a broken one.
@@ -185,7 +228,11 @@ describe("rotating it", () => {
 
     const rows = await audit();
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ action: "feed.rotate", targetType: "user", targetId: "ada" });
+    expect(rows[0]).toMatchObject({
+      action: "feed.rotate",
+      targetType: "user",
+      targetId: "ada",
+    });
 
     // Neither the old token nor the new one. An audit log holding a credential
     // is a credential store with a retention policy nobody wrote.
@@ -197,7 +244,9 @@ describe("rotating it", () => {
   it("refuses without a session, and rotates nothing", async () => {
     await signedIn("ada", "tok-ada");
 
-    expect((await send("POST", "/console/me/feeds/rotate", null)).status).toBe(401);
+    expect((await send("POST", "/console/me/feeds/rotate", null)).status).toBe(
+      401,
+    );
     expect(await tokenOf("ada")).toBe("tok-ada");
     expect(await audit()).toEqual([]);
   });
