@@ -38,7 +38,9 @@ function consoleEnv() {
 async function get(path: string) {
   return app.fetch(
     new Request(`https://orrey.test${path}`, {
-      headers: { cookie: `${SESSION_COOKIE}=${await issueSession(consoleEnv(), "1001", new Date())}` },
+      headers: {
+        cookie: `${SESSION_COOKIE}=${await issueSession(consoleEnv(), "1001", new Date())}`,
+      },
     }),
     consoleEnv(),
   );
@@ -47,7 +49,12 @@ async function get(path: string) {
 async function person(id: string) {
   await db(env)
     .insert(schema.users)
-    .values({ discordId: id, username: id, globalName: `Player ${id}`, feedToken: `t-${id}` })
+    .values({
+      discordId: id,
+      username: id,
+      globalName: `Player ${id}`,
+      feedToken: `t-${id}`,
+    })
     .onConflictDoNothing();
 }
 
@@ -93,7 +100,11 @@ async function played() {
 }
 
 /** A register row on the session the day owns — never on the day. */
-async function onRegister(userId: string, attended: boolean, tablesPlayed?: string) {
+async function onRegister(
+  userId: string,
+  attended: boolean,
+  tablesPlayed?: string,
+) {
   await person(userId);
   await db(env)
     .insert(schema.attendance)
@@ -109,8 +120,14 @@ async function onRegister(userId: string, attended: boolean, tablesPlayed?: stri
 
 beforeEach(async () => {
   globalThis.fetch = (async (input: RequestInfo | URL) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    if (url.includes("/members/")) return Response.json({ roles: [ORGANISER_ROLE] });
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url;
+    if (url.includes("/members/"))
+      return Response.json({ roles: [ORGANISER_ROLE] });
     return new Response("unexpected", { status: 500 });
   }) as typeof fetch;
 
@@ -131,11 +148,26 @@ beforeEach(async () => {
   await setSetting(env, SETTING_KEYS.organiserRoleId, ORGANISER_ROLE);
   await db(env)
     .insert(schema.games)
-    .values({ id: "blades", name: "Blades in the Dark", minPlayers: 3, maxPlayers: 4 });
+    .values({
+      id: "blades",
+      name: "Blades in the Dark",
+      minPlayers: 3,
+      maxPlayers: 4,
+    });
   await person("1001");
+  // Against the real clock rather than `NOW`. `sessionFrom` compares this to the
+  // clock it is actually running on, so an expiry anchored to a frozen date is a
+  // day of life measured from a day already gone. Every test through here then
+  // takes the refresh path into a fake fetch that has no token reply, and the
+  // file turns red on a change to nothing.
   await db(env)
     .insert(schema.discordTokens)
-    .values({ userId: "1001", accessToken: "at", refreshToken: "rt", expiresAt: seconds + 86_400 });
+    .values({
+      userId: "1001",
+      accessToken: "at",
+      refreshToken: "rt",
+      expiresAt: Math.floor(Date.now() / 1000) + 86_400,
+    });
 });
 
 afterEach(() => {
@@ -271,7 +303,11 @@ describe("what was played", () => {
     // there is no `tables` table and no per-table seating. Somebody who has not
     // said gets a null rather than being left out.
     expect(tables).toEqual([
-      { userId: "a", name: "Player a", tablesPlayed: "Blades, then Mausritter" },
+      {
+        userId: "a",
+        name: "Player a",
+        tablesPlayed: "Blades, then Mausritter",
+      },
       { userId: "b", name: "Player b", tablesPlayed: null },
     ]);
   });
@@ -280,7 +316,10 @@ describe("what was played", () => {
 describe("where the day may go", () => {
   it("offers the edges its own map offers, and nothing from a terminal state", async () => {
     await day({ state: "SEATING" });
-    expect((await gameDayPage(env, DAY_ID))!.nextStates).toEqual(["LOCKED", "CANCELLED"]);
+    expect((await gameDayPage(env, DAY_ID))!.nextStates).toEqual([
+      "LOCKED",
+      "CANCELLED",
+    ]);
 
     await db(env)
       .update(schema.gameDays)
