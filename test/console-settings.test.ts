@@ -52,13 +52,22 @@ function put(key: string, value: unknown) {
 }
 
 function audit() {
-  return db(env).select().from(schema.auditLog).orderBy(asc(schema.auditLog.createdAt)).all();
+  return db(env)
+    .select()
+    .from(schema.auditLog)
+    .orderBy(asc(schema.auditLog.createdAt))
+    .all();
 }
 
 beforeEach(async () => {
   roles = [ORGANISER_ROLE];
   globalThis.fetch = (async (input: RequestInfo | URL) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url;
     if (url.includes("/members/")) return Response.json({ roles });
     return new Response("unexpected", { status: 500 });
   }) as typeof fetch;
@@ -68,10 +77,22 @@ beforeEach(async () => {
   }
   await setSetting(env, SETTING_KEYS.guildId, "g1");
   await setSetting(env, SETTING_KEYS.organiserRoleId, ORGANISER_ROLE);
-  await db(env).insert(schema.users).values({ discordId: "1001", username: "ada", feedToken: "t" });
+  await db(env)
+    .insert(schema.users)
+    .values({ discordId: "1001", username: "ada", feedToken: "t" });
+  // Against the real clock rather than `NOW`. `sessionFrom` compares this to the
+  // clock it is actually running on, so an expiry anchored to a frozen date is a
+  // day of life measured from a day already gone. Every test through here then
+  // takes the refresh path into a fake fetch that has no token reply, and the
+  // file turns red on a change to nothing.
   await db(env)
     .insert(schema.discordTokens)
-    .values({ userId: "1001", accessToken: "at", refreshToken: "rt", expiresAt: seconds + 86_400 });
+    .values({
+      userId: "1001",
+      accessToken: "at",
+      refreshToken: "rt",
+      expiresAt: Math.floor(Date.now() / 1000) + 86_400,
+    });
 });
 
 afterEach(() => {
@@ -109,7 +130,9 @@ describe("the allow-list", () => {
   });
 
   it("renders the guild read-only rather than hiding it", async () => {
-    const guild = (await settingsView(env)).find((f) => f.key === SETTING_KEYS.guildId);
+    const guild = (await settingsView(env)).find(
+      (f) => f.key === SETTING_KEYS.guildId,
+    );
     expect(guild?.writable).toBe(false);
     expect(guild?.value).toBe("g1");
   });
@@ -117,8 +140,12 @@ describe("the allow-list", () => {
 
 describe("what a value has to be", () => {
   it("takes a reminder ladder that counts down to the session", async () => {
-    expect((await put(SETTING_KEYS.reminderStepsHours, [72, 24, 2])).status).toBe(200);
-    expect(await getSetting(env, SETTING_KEYS.reminderStepsHours)).toEqual([72, 24, 2]);
+    expect(
+      (await put(SETTING_KEYS.reminderStepsHours, [72, 24, 2])).status,
+    ).toBe(200);
+    expect(await getSetting(env, SETTING_KEYS.reminderStepsHours)).toEqual([
+      72, 24, 2,
+    ]);
   });
 
   it("refuses one that does not", async () => {
@@ -127,16 +154,24 @@ describe("what a value has to be", () => {
     // "Hours before the session" only means anything in order. A ladder that is
     // not ordered is one where "the next step" is whichever row was read first.
     expect(res.status).toBe(400);
-    expect(await getSetting(env, SETTING_KEYS.reminderStepsHours)).toBeUndefined();
+    expect(
+      await getSetting(env, SETTING_KEYS.reminderStepsHours),
+    ).toBeUndefined();
   });
 
   it("refuses a ladder with a repeated step", async () => {
-    expect((await put(SETTING_KEYS.reminderStepsHours, [24, 24])).status).toBe(400);
+    expect((await put(SETTING_KEYS.reminderStepsHours, [24, 24])).status).toBe(
+      400,
+    );
   });
 
   it("takes a timezone this runtime knows", async () => {
-    expect((await put(SETTING_KEYS.timezone, "Pacific/Auckland")).status).toBe(200);
-    expect(await getSetting(env, SETTING_KEYS.timezone)).toBe("Pacific/Auckland");
+    expect((await put(SETTING_KEYS.timezone, "Pacific/Auckland")).status).toBe(
+      200,
+    );
+    expect(await getSetting(env, SETTING_KEYS.timezone)).toBe(
+      "Pacific/Auckland",
+    );
   });
 
   it("refuses one it does not", async () => {
@@ -175,19 +210,28 @@ describe("the audit row", () => {
 
   it("records null for a key that had never been written", async () => {
     await put(SETTING_KEYS.pollWindowHours, 48);
-    expect((await audit())[0]?.detail).toMatchObject({ before: null, after: 48 });
+    expect((await audit())[0]?.detail).toMatchObject({
+      before: null,
+      after: 48,
+    });
   });
 });
 
 describe("what the page says a change costs", () => {
   it("says shrinking the horizon deletes nothing", async () => {
-    const horizon = (await settingsView(env)).find((f) => f.key === SETTING_KEYS.horizonSessions);
-    expect(horizon?.caveat).toContain("does not delete sessions already materialised");
+    const horizon = (await settingsView(env)).find(
+      (f) => f.key === SETTING_KEYS.horizonSessions,
+    );
+    expect(horizon?.caveat).toContain(
+      "does not delete sessions already materialised",
+    );
   });
 
   it("gives every field its default, so a blank one is not a mystery", async () => {
     const view = await settingsView(env);
-    expect(view.find((f) => f.key === SETTING_KEYS.gameDayLockLeadHours)?.fallback).toBe(48);
+    expect(
+      view.find((f) => f.key === SETTING_KEYS.gameDayLockLeadHours)?.fallback,
+    ).toBe(48);
   });
 });
 
