@@ -1459,7 +1459,6 @@ async function load() {
       api("/api/game-days"),
       api("/api/settings"),
       api(
-    main.append(heading("Your data"), deleteMeSection());
         `/api/audit?limit=50${auditState.actor ? `&actor=${encodeURIComponent(auditState.actor)}` : ""}${
           auditState.cursor ? `&cursor=${encodeURIComponent(auditState.cursor)}` : ""
         }`,
@@ -1501,6 +1500,7 @@ async function load() {
     main.append(heading("Games"), gamesTable(games), createForm());
     main.append(heading("Settings"), settingsSection(settings.settings));
     if (log) main.append(heading("Log"), auditSection(log, actors));
+    main.append(heading("Your data"), deleteMeSection());
   } catch (error) {
     const message =
       error instanceof Refusal ? error.message : "Orrey could not load that. Try again.";
