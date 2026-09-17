@@ -317,11 +317,18 @@ describe("moving it through its lifecycle", () => {
 async function person(id: string) {
   await db(env)
     .insert(schema.users)
-    .values({ discordId: id, username: id, globalName: `Player ${id}`, feedToken: `t-${id}` })
+    .values({
+      discordId: id,
+      username: id,
+      globalName: `Player ${id}`,
+      feedToken: `t-${id}`,
+    })
     .onConflictDoNothing();
 }
 
-async function planned(over: Partial<typeof schema.campaigns.$inferInsert> = {}) {
+async function planned(
+  over: Partial<typeof schema.campaigns.$inferInsert> = {},
+) {
   await db(env)
     .insert(schema.campaigns)
     .values({
@@ -337,7 +344,9 @@ async function planned(over: Partial<typeof schema.campaigns.$inferInsert> = {})
     });
   for (const who of ["a", "b", "c"]) {
     await person(who);
-    await db(env).insert(schema.campaignMembers).values({ campaignId: "umbra", userId: who });
+    await db(env)
+      .insert(schema.campaignMembers)
+      .values({ campaignId: "umbra", userId: who });
   }
   return "umbra";
 }
@@ -398,7 +407,9 @@ describe("what is coming", () => {
   it("carries the tally and the quorum the agenda carries", async () => {
     await planned();
     const id = await played(1, 1);
-    await db(env).insert(schema.attendance).values({ sessionId: id, userId: "a", intent: "in" });
+    await db(env)
+      .insert(schema.attendance)
+      .values({ sessionId: id, userId: "a", intent: "in" });
 
     const row = (await page())!.upcoming[0];
 
@@ -426,9 +437,17 @@ describe("what is coming", () => {
     const id = await played(1, 1);
     await db(env)
       .insert(schema.calendarLinks)
-      .values({ sessionId: id, gcalEventId: "ev-1", syncedAt: seconds - 3600, lastError: "403" });
+      .values({
+        sessionId: id,
+        gcalEventId: "ev-1",
+        syncedAt: seconds - 3600,
+        lastError: "403",
+      });
 
-    expect((await page())!.upcoming[0]?.sync).toMatchObject({ state: "failing", lastError: "403" });
+    expect((await page())!.upcoming[0]?.sync).toMatchObject({
+      state: "failing",
+      lastError: "403",
+    });
   });
 });
 
@@ -526,7 +545,12 @@ describe("who the page says is on it", () => {
     await person("d");
     await db(env)
       .insert(schema.signups)
-      .values({ targetType: "campaign_forming", targetId: "umbra", userId: "d", state: "in" });
+      .values({
+        targetType: "campaign_forming",
+        targetId: "umbra",
+        userId: "d",
+        state: "in",
+      });
 
     expect((await page())!.roster.map((row) => row.userId)).toEqual(["d"]);
   });
@@ -538,7 +562,10 @@ describe("the page over HTTP", () => {
     await played(1, 1);
 
     const res = await send("GET", "/api/campaigns/umbra/page");
-    const body = (await res.json()) as { asOf: number; campaign: { id: string } };
+    const body = (await res.json()) as {
+      asOf: number;
+      campaign: { id: string };
+    };
 
     expect(res.status).toBe(200);
     expect(body.campaign.id).toBe("umbra");
@@ -549,6 +576,8 @@ describe("the page over HTTP", () => {
     const res = await send("GET", "/api/campaigns/nowhere/page");
 
     expect(res.status).toBe(404);
-    expect((await res.json()) as { error: string }).toMatchObject({ error: expect.any(String) });
+    expect((await res.json()) as { error: string }).toMatchObject({
+      error: expect.any(String),
+    });
   });
 });
