@@ -193,12 +193,23 @@ export async function claimSeat(
  * Nothing is promoted here. A seat coming free is `p5/7`'s to notice, and doing
  * it in the same breath as the withdrawal would put a Discord post inside a
  * click handler that has not finished answering yet.
+ *
+ * The day's state is read here and not only at the route, for the same reason
+ * `claimSeat` reads it here: the route reads it before the click enters the
+ * lock, and the lock job can land in between. A click that leaves on time and
+ * arrives late would otherwise move a table that has stopped moving — and once
+ * `p5/7` promotes on the freed seat, pull somebody off the waitlist into a day
+ * whose seating is settled.
  */
 export async function withdraw(
   env: Env,
   gameDayId: string,
   userId: string,
-): Promise<"withdrawn" | "not-claimed"> {
+): Promise<"withdrawn" | "not-claimed" | "not-seating"> {
+  const day = await dayWithCapacity(env, gameDayId);
+  if (!day) return "not-claimed";
+  if (day.state !== "SEATING") return "not-seating";
+
   const existing = await signupOf(env, gameDayId, userId);
   if (!existing || existing.state === "out") return "not-claimed";
 
