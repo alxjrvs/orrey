@@ -4,7 +4,12 @@ import { db, schema } from "../src/db/index.ts";
 import { SETTING_KEYS, setSetting } from "../src/db/settings.ts";
 import { createApp } from "../src/http/app.ts";
 import { SESSION_COOKIE, issueSession } from "../src/console/cookies.ts";
-import { auditActors, auditLine, auditPage, type AuditRow } from "../src/console/audit.ts";
+import {
+  auditActors,
+  auditLine,
+  auditPage,
+  type AuditRow,
+} from "../src/console/audit.ts";
 
 /**
  * The audit log.
@@ -35,7 +40,9 @@ function consoleEnv() {
 async function get(path: string) {
   return app.fetch(
     new Request(`https://orrey.test${path}`, {
-      headers: { cookie: `${SESSION_COOKIE}=${await issueSession(consoleEnv(), "1001", new Date())}` },
+      headers: {
+        cookie: `${SESSION_COOKIE}=${await issueSession(consoleEnv(), "1001", new Date())}`,
+      },
     }),
     consoleEnv(),
   );
@@ -44,7 +51,12 @@ async function get(path: string) {
 async function person(id: string, name: string) {
   await db(env)
     .insert(schema.users)
-    .values({ discordId: id, username: id, globalName: name, feedToken: `t-${id}` })
+    .values({
+      discordId: id,
+      username: id,
+      globalName: name,
+      feedToken: `t-${id}`,
+    })
     .onConflictDoNothing();
 }
 
@@ -71,7 +83,12 @@ async function entry(
 beforeEach(async () => {
   roles = [ORGANISER_ROLE];
   globalThis.fetch = (async (input: RequestInfo | URL) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url;
     if (url.includes("/members/")) return Response.json({ roles });
     return new Response("unexpected", { status: 500 });
   }) as typeof fetch;
@@ -82,9 +99,19 @@ beforeEach(async () => {
   await setSetting(env, SETTING_KEYS.guildId, "g1");
   await setSetting(env, SETTING_KEYS.organiserRoleId, ORGANISER_ROLE);
   await person("1001", "alx");
+  // Against the real clock rather than `NOW`. `sessionFrom` compares this to the
+  // clock it is actually running on, so an expiry anchored to a frozen date is a
+  // day of life measured from a day already gone. Every test through here then
+  // takes the refresh path into a fake fetch that has no token reply, and the
+  // file turns red on a change to nothing.
   await db(env)
     .insert(schema.discordTokens)
-    .values({ userId: "1001", accessToken: "at", refreshToken: "rt", expiresAt: seconds + 86_400 });
+    .values({
+      userId: "1001",
+      accessToken: "at",
+      refreshToken: "rt",
+      expiresAt: Math.floor(Date.now() / 1000) + 86_400,
+    });
 });
 
 afterEach(() => {
@@ -105,7 +132,10 @@ describe("the pager", () => {
     // showing `e3` twice.
     await entry("e6", 6);
 
-    const second = await auditPage(env, { limit: 3, cursor: first.cursor ?? undefined });
+    const second = await auditPage(env, {
+      limit: 3,
+      cursor: first.cursor ?? undefined,
+    });
 
     expect(second.rows.map((row) => row.id)).toEqual(["e2", "e1", "e0"]);
     expect(second.cursor).toBeNull();
@@ -115,7 +145,10 @@ describe("the pager", () => {
     for (const id of ["a", "b", "c", "d"]) await entry(id, 0);
 
     const first = await auditPage(env, { limit: 2 });
-    const second = await auditPage(env, { limit: 2, cursor: first.cursor ?? undefined });
+    const second = await auditPage(env, {
+      limit: 2,
+      cursor: first.cursor ?? undefined,
+    });
 
     // The tie-break on id is the only thing making this pageable. Without it a
     // cursor of "older than this second" would skip the rest of the second.
@@ -150,7 +183,9 @@ describe("filtering", () => {
     await entry("campaign", 0);
     await entry("game", 1, { targetType: "game", targetId: "blades" });
 
-    expect((await auditPage(env, { targetType: "game" })).rows.map((r) => r.id)).toEqual(["game"]);
+    expect(
+      (await auditPage(env, { targetType: "game" })).rows.map((r) => r.id),
+    ).toEqual(["game"]);
   });
 
   it("lists the actors that appear, and never the clock", async () => {
@@ -181,28 +216,34 @@ describe("the line", () => {
   };
 
   it("reads in the log's own register", async () => {
-    expect(auditLine(base)).toBe("18:51 alx → campaign age-of-umbra state running → hiatus");
+    expect(auditLine(base)).toBe(
+      "18:51 alx → campaign age-of-umbra state running → hiatus",
+    );
   });
 
   it("has no arrow when there is nothing on the left of it", async () => {
     // A creation has no previous value, and "→ hiatus" with a space in front
     // reads as a missing word rather than as an absence.
-    expect(auditLine({ ...base, detail: { before: null, after: "FORMING" } })).toBe(
-      "18:51 alx → campaign age-of-umbra state forming",
-    );
+    expect(
+      auditLine({ ...base, detail: { before: null, after: "FORMING" } }),
+    ).toBe("18:51 alx → campaign age-of-umbra state forming");
   });
 
   it("says orrey when the clock did it", async () => {
-    expect(auditLine({ ...base, actorUserId: null, actorName: null, detail: null })).toContain(
-      "orrey →",
-    );
+    expect(
+      auditLine({ ...base, actorUserId: null, actorName: null, detail: null }),
+    ).toContain("orrey →");
   });
 
   it("leaves a whole-row diff out of the line", async () => {
     // `{ before: {…}, after: {…} }` is a row, not a transition. The line says
     // the action happened; the diff is for whoever opens the row.
     expect(
-      auditLine({ ...base, action: "game.update", detail: { before: { name: "a" }, after: { name: "b" } } }),
+      auditLine({
+        ...base,
+        action: "game.update",
+        detail: { before: { name: "a" }, after: { name: "b" } },
+      }),
     ).toBe("18:51 alx → campaign age-of-umbra update");
   });
 
@@ -226,7 +267,10 @@ describe("the gate", () => {
     for (let i = 0; i < 3; i++) await entry(`e${i}`, i);
 
     const res = await get("/api/audit?limit=2");
-    const body = (await res.json()) as { rows: AuditRow[]; cursor: string | null };
+    const body = (await res.json()) as {
+      rows: AuditRow[];
+      cursor: string | null;
+    };
 
     expect(res.status).toBe(200);
     expect(body.rows.map((row) => row.id)).toEqual(["e2", "e1"]);
