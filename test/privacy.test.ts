@@ -5,7 +5,10 @@ import { deleteUserData, describeReceipt } from "../src/privacy/delete.ts";
 import { SESSION_COOKIE, issueSession } from "../src/console/cookies.ts";
 import { seedStatements } from "../src/db/seed-sql.ts";
 import { encodeCustomId } from "../src/discord/custom-id.ts";
-import { InteractionResponseType, InteractionType } from "../src/discord/types.ts";
+import {
+  InteractionResponseType,
+  InteractionType,
+} from "../src/discord/types.ts";
 import { fakeDiscord } from "./discord.ts";
 
 const discord = await fakeDiscord();
@@ -13,7 +16,10 @@ const app = createApp();
 
 interface Response4Or7 {
   type: number;
-  data: { content: string; components?: { components: { custom_id: string }[] }[] };
+  data: {
+    content: string;
+    components?: { components: { custom_id: string }[] }[];
+  };
 }
 
 async function interact(body: unknown): Promise<Response4Or7> {
@@ -32,13 +38,17 @@ function click(customId: string, userId = "1001") {
 }
 
 async function seedUser(discordId: string) {
-  await env.DB.prepare("INSERT INTO users (discord_id, username, feed_token) VALUES (?, ?, ?)")
+  await env.DB.prepare(
+    "INSERT INTO users (discord_id, username, feed_token) VALUES (?, ?, ?)",
+  )
     .bind(discordId, `user-${discordId}`, `token-${discordId}`)
     .run();
 }
 
 async function userCount(discordId: string) {
-  const row = await env.DB.prepare("SELECT count(*) AS n FROM users WHERE discord_id = ?")
+  const row = await env.DB.prepare(
+    "SELECT count(*) AS n FROM users WHERE discord_id = ?",
+  )
     .bind(discordId)
     .first<{ n: number }>();
   return row?.n ?? 0;
@@ -78,7 +88,9 @@ describe("delete-my-data", () => {
       member: { user: { id: "1001", username: "ada" }, roles: [] },
     });
 
-    const link = json.data.content.match(/<(https:\/\/orrey\.test\/console\/login\?t=[^>]+)>/)?.[1];
+    const link = json.data.content.match(
+      /<(https:\/\/orrey\.test\/console\/login\?t=[^>]+)>/,
+    )?.[1];
     expect(link).toBeTruthy();
 
     // The command and the route agree, which is the only thing worth asserting
@@ -88,7 +100,9 @@ describe("delete-my-data", () => {
       discord.env(env),
     );
     expect(response.status).toBe(302);
-    expect(response.headers.get("location")).toContain("discord.com/oauth2/authorize");
+    expect(response.headers.get("location")).toContain(
+      "discord.com/oauth2/authorize",
+    );
   });
 
   it("offers the delete button on /console, with a link to the policy", async () => {
@@ -98,18 +112,24 @@ describe("delete-my-data", () => {
       member: { user: { id: "1001", username: "ada" }, roles: [] },
     });
     expect(json.data.content).toMatch(/https:\/\/orrey\.test\/privacy/);
-    expect(json.data.components?.[0]?.components?.[0]?.custom_id).toBe("o1:privacy:delete");
+    expect(json.data.components?.[0]?.components?.[0]?.custom_id).toBe(
+      "o1:privacy:delete",
+    );
   });
 
   it("asks once before deleting, and keeps the data if told to", async () => {
     await seedUser("1001");
 
-    const confirm = await click(encodeCustomId({ action: "privacy", arg: "delete" }));
+    const confirm = await click(
+      encodeCustomId({ action: "privacy", arg: "delete" }),
+    );
     expect(confirm.type).toBe(InteractionResponseType.UPDATE_MESSAGE);
     expect(confirm.data.content).toMatch(/cannot be undone/);
     expect(await userCount("1001")).toBe(1);
 
-    const kept = await click(encodeCustomId({ action: "privacy", arg: "cancel" }));
+    const kept = await click(
+      encodeCustomId({ action: "privacy", arg: "cancel" }),
+    );
     expect(kept.data.content).toMatch(/Nothing deleted/);
     expect(await userCount("1001")).toBe(1);
   });
@@ -118,7 +138,10 @@ describe("delete-my-data", () => {
     await seedUser("1001");
     await seedUser("2002");
 
-    const done = await click(encodeCustomId({ action: "privacy", arg: "confirm" }), "1001");
+    const done = await click(
+      encodeCustomId({ action: "privacy", arg: "confirm" }),
+      "1001",
+    );
     expect(done.type).toBe(InteractionResponseType.UPDATE_MESSAGE);
     expect(done.data.content).toMatch(/users \(1\)/);
 
@@ -128,7 +151,10 @@ describe("delete-my-data", () => {
   });
 
   it("is honest when Orrey held nothing", async () => {
-    const done = await click(encodeCustomId({ action: "privacy", arg: "confirm" }), "3003");
+    const done = await click(
+      encodeCustomId({ action: "privacy", arg: "confirm" }),
+      "3003",
+    );
     expect(done.data.content).toMatch(/held no data/);
   });
 
@@ -184,8 +210,15 @@ describe("delete-my-data", () => {
       discord_tokens: 1,
     });
 
-    for (const table of ["attendance", "campaign_members", "signups", "discord_tokens"]) {
-      const left = await env.DB.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first<{ n: number }>();
+    for (const table of [
+      "attendance",
+      "campaign_members",
+      "signups",
+      "discord_tokens",
+    ]) {
+      const left = await env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM ${table}`,
+      ).first<{ n: number }>();
       expect(left?.n, table).toBe(0);
     }
   });
@@ -201,9 +234,13 @@ describe("delete-my-data", () => {
     // The actor is `set null` on delete: the person is forgotten, the fact that
     // the campaign was concluded is not. Deleting the entry outright would erase
     // somebody else's history as well as their own.
-    const row = await env.DB.prepare("SELECT actor_user_id, action FROM audit_log WHERE id = 'a1'")
-      .first<{ actor_user_id: string | null; action: string }>();
-    expect(row).toMatchObject({ actor_user_id: null, action: "campaign.conclude" });
+    const row = await env.DB.prepare(
+      "SELECT actor_user_id, action FROM audit_log WHERE id = 'a1'",
+    ).first<{ actor_user_id: string | null; action: string }>();
+    expect(row).toMatchObject({
+      actor_user_id: null,
+      action: "campaign.conclude",
+    });
   });
 });
 
@@ -238,7 +275,7 @@ describe("delete my data, from the console", () => {
     await env.DB.prepare(
       "INSERT INTO discord_tokens (user_id, access_token, refresh_token, expires_at) VALUES (?, 'at', 'rt', ?)",
     )
-      .bind(discordId, Math.floor(NOW.getTime() / 1000) + 86_400)
+      .bind(discordId, Math.floor(Date.now() / 1000) + 86_400)
       .run();
   }
 
@@ -249,7 +286,9 @@ describe("delete my data, from the console", () => {
         headers: {
           "content-type": "application/json",
           ...(userId
-            ? { cookie: `${SESSION_COOKIE}=${await issueSession(consoleEnv(), userId, new Date())}` }
+            ? {
+                cookie: `${SESSION_COOKIE}=${await issueSession(consoleEnv(), userId, new Date())}`,
+              }
             : {}),
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -300,7 +339,9 @@ describe("delete my data, from the console", () => {
     // sentence, not a failure. Reaching it through the console a second time is
     // not possible — the token pair the cookie is checked against went with
     // everything else — so this asks the function the route calls.
-    expect(describeReceipt(await deleteUserData(env, "1001"))).toContain("no data for you");
+    expect(describeReceipt(await deleteUserData(env, "1001"))).toContain(
+      "no data for you",
+    );
   });
 
   it("stops recognising the session, because the pair it checked is gone", async () => {
