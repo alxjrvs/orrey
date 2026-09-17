@@ -613,14 +613,21 @@ async function opened(
   return pollId;
 }
 
-async function candidate(pollId: string, id: string, days: number, yeses: string[]) {
+async function candidate(
+  pollId: string,
+  id: string,
+  days: number,
+  yeses: string[],
+) {
   const startsAt = seconds + days * 86_400;
   await db(env)
     .insert(schema.pollDates)
     .values({ id, pollId, startsAt, endsAt: startsAt + 4 * 3600 });
   for (const userId of yeses) {
     await person(userId);
-    await db(env).insert(schema.pollResponses).values({ pollDateId: id, userId });
+    await db(env)
+      .insert(schema.pollResponses)
+      .values({ pollDateId: id, userId });
   }
   return id;
 }
@@ -645,7 +652,9 @@ describe("the open polls", () => {
 
     expect(polls).toHaveLength(1);
     expect(polls[0]?.dates.map((date) => date.yes)).toEqual([2, 1]);
-    expect(polls[0]?.postUrl).toBe("https://discord.com/channels/g1/chan-1/msg-1");
+    expect(polls[0]?.postUrl).toBe(
+      "https://discord.com/channels/g1/chan-1/msg-1",
+    );
     expect(polls[0]?.required).toBe(2);
   });
 
@@ -671,7 +680,9 @@ describe("the open polls", () => {
     await opened("p1");
     await candidate("p1", "d1", 7, ["a", "b", "gm"]);
 
-    expect((await campaignPolls(env, "umbra")).polls[0]?.waitingOn).toBe("organiser");
+    expect((await campaignPolls(env, "umbra")).polls[0]?.waitingOn).toBe(
+      "organiser",
+    );
   });
 
   it("is waiting on the GM when the threshold is met on a night they have not marked", async () => {
@@ -708,7 +719,9 @@ describe("the open polls", () => {
 
     // A campaign with no GM is a real state. Rendering `false` would read as a
     // refusal by somebody who does not exist.
-    expect((await campaignPolls(env, "umbra")).polls[0]?.dates[0]?.gmAvailable).toBeNull();
+    expect(
+      (await campaignPolls(env, "umbra")).polls[0]?.dates[0]?.gmAvailable,
+    ).toBeNull();
   });
 
   it("lists no closed poll", async () => {
@@ -726,7 +739,9 @@ describe("the auto-resolve toggle", () => {
     await opened("p1");
     await candidate("p1", "d1", 7, ["a", "b", "c"]);
 
-    const res = await send("PATCH", "/api/campaigns/umbra", { autoResolvePolls: true });
+    const res = await send("PATCH", "/api/campaigns/umbra", {
+      autoResolvePolls: true,
+    });
 
     expect(res.status).toBe(200);
     expect((await campaignPolls(env, "umbra")).autoResolvePolls).toBe(true);
@@ -735,7 +750,10 @@ describe("the auto-resolve toggle", () => {
     // through. A second write path for one boolean is a second thing to review.
     const rows = await audit();
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ action: "campaign.update", targetId: "umbra" });
+    expect(rows[0]).toMatchObject({
+      action: "campaign.update",
+      targetId: "umbra",
+    });
 
     // Turning it on is a statement about the *next* click, not about the polls
     // already open. Nothing here closed, canonised or re-decided one.
@@ -765,7 +783,9 @@ describe("the polls over HTTP", () => {
     await candidate("p1", "d1", 7, ["a"]);
 
     const res = await send("GET", "/api/campaigns/umbra/polls");
-    const body = (await res.json()) as Awaited<ReturnType<typeof campaignPolls>>;
+    const body = (await res.json()) as Awaited<
+      ReturnType<typeof campaignPolls>
+    >;
 
     expect(res.status).toBe(200);
     expect(body.autoResolvePolls).toBe(true);
