@@ -310,6 +310,26 @@ describe("giving the place back", () => {
 
     expect(await withdraw(env, id, user!)).toBe("not-claimed");
   });
+
+  // The route refuses an Out on a locked day before the click ever reaches the
+  // lock. This is the other order: the click passed that check while the day was
+  // still seating, and the lock job landed before the write did. Calling
+  // `withdraw` directly is how that gap is reached, because there is no way to
+  // hold a request still across it.
+  it("refuses once the table is locked, however the click got here", async () => {
+    const id = await day();
+    const [user] = await people(1);
+    await claimSeat(env, id, user!);
+
+    await db(env).update(schema.gameDays).set({ state: "LOCKED" }).where(eq(schema.gameDays.id, id));
+
+    expect(await withdraw(env, id, user!)).toBe("not-seating");
+
+    // The seat is still theirs. A withdrawal that half-happened — the row out,
+    // the table settled around it — is the shape this guard exists to prevent,
+    // and at `p5/7` it is also what would promote somebody into a locked day.
+    expect(await signupsForDay(env, id)).toMatchObject([{ userId: user, state: "in" }]);
+  });
 });
 
 describe("counting the seats", () => {
