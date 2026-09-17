@@ -595,7 +595,11 @@ async function joined(userId: string, daysAgo: number) {
   await person(userId);
   await db(env)
     .insert(schema.campaignMembers)
-    .values({ campaignId: "umbra", userId, joinedAt: seconds - daysAgo * 86_400 })
+    .values({
+      campaignId: "umbra",
+      userId,
+      joinedAt: seconds - daysAgo * 86_400,
+    })
     .onConflictDoNothing();
 }
 
@@ -633,7 +637,10 @@ async function ran(
   return id;
 }
 
-function record(userId: string, history: Awaited<ReturnType<typeof campaignHistory>>) {
+function record(
+  userId: string,
+  history: Awaited<ReturnType<typeof campaignHistory>>,
+) {
   return history.members.find((member) => member.userId === userId);
 }
 
@@ -641,13 +648,20 @@ describe("the denominator", () => {
   it("does not score somebody against sessions that ran before they joined", async () => {
     await db(env)
       .insert(schema.campaigns)
-      .values({ id: "umbra", name: "Age of Umbra", kind: "run", state: "RUNNING" });
+      .values({
+        id: "umbra",
+        name: "Age of Umbra",
+        kind: "run",
+        state: "RUNNING",
+      });
     await joined("old", 400);
     await joined("new", 7);
     for (const n of [1, 2, 3, 4, 5]) {
       await ran(n, 100 - n, [
         ["old", "in", true],
-        ...(n === 5 ? ([["new", "in", true]] as [string, "in", boolean][]) : []),
+        ...(n === 5
+          ? ([["new", "in", true]] as [string, "in", boolean][])
+          : []),
       ]);
     }
     // Session 5 ran 95 days ago, which is still before `new` joined a week ago.
@@ -663,7 +677,12 @@ describe("the denominator", () => {
   it("counts a session with no register toward neither side", async () => {
     await db(env)
       .insert(schema.campaigns)
-      .values({ id: "umbra", name: "Age of Umbra", kind: "run", state: "RUNNING" });
+      .values({
+        id: "umbra",
+        name: "Age of Umbra",
+        kind: "run",
+        state: "RUNNING",
+      });
     await joined("ada", 400);
     await ran(1, 30, [["ada", "in", true]]);
     await ran(2, 20, [["ada", "in", null]]);
@@ -686,7 +705,12 @@ describe("the denominator", () => {
   it("counts only played sessions, never a cancelled or a coming one", async () => {
     await db(env)
       .insert(schema.campaigns)
-      .values({ id: "umbra", name: "Age of Umbra", kind: "run", state: "RUNNING" });
+      .values({
+        id: "umbra",
+        name: "Age of Umbra",
+        kind: "run",
+        state: "RUNNING",
+      });
     await joined("ada", 400);
     await ran(1, 30, [["ada", "in", true]]);
     const cancelled = await ran(2, 20, [["ada", "in", false]]);
@@ -706,7 +730,12 @@ describe("the streak", () => {
   it("breaks on a session they came to", async () => {
     await db(env)
       .insert(schema.campaigns)
-      .values({ id: "umbra", name: "Age of Umbra", kind: "run", state: "RUNNING" });
+      .values({
+        id: "umbra",
+        name: "Age of Umbra",
+        kind: "run",
+        state: "RUNNING",
+      });
     await joined("ada", 400);
     await ran(1, 40, [["ada", "in", false]]);
     await ran(2, 30, [["ada", "in", false]]);
@@ -715,13 +744,20 @@ describe("the streak", () => {
 
     // "Missed two, came, missed one" is a streak of one. Saying three would be a
     // lie about now.
-    expect(record("ada", await campaignHistory(env, "umbra"))?.noShowStreak).toBe(1);
+    expect(
+      record("ada", await campaignHistory(env, "umbra"))?.noShowStreak,
+    ).toBe(1);
   });
 
   it("does not break on a session they said out to, and does not count it either", async () => {
     await db(env)
       .insert(schema.campaigns)
-      .values({ id: "umbra", name: "Age of Umbra", kind: "run", state: "RUNNING" });
+      .values({
+        id: "umbra",
+        name: "Age of Umbra",
+        kind: "run",
+        state: "RUNNING",
+      });
     await joined("ada", 400);
     await ran(1, 30, [["ada", "in", false]]);
     await ran(2, 20, [["ada", "out", false]]);
@@ -749,7 +785,12 @@ describe("a record with nothing in it", () => {
   it("states no proportion at all below the threshold", async () => {
     await db(env)
       .insert(schema.campaigns)
-      .values({ id: "umbra", name: "Age of Umbra", kind: "run", state: "RUNNING" });
+      .values({
+        id: "umbra",
+        name: "Age of Umbra",
+        kind: "run",
+        state: "RUNNING",
+      });
     await joined("ada", 400);
     await ran(1, 30, [["ada", "in", true]]);
     await ran(2, 20, [["ada", "in", false]]);
@@ -767,9 +808,15 @@ describe("a record with nothing in it", () => {
   it("states one once there is enough to state", async () => {
     await db(env)
       .insert(schema.campaigns)
-      .values({ id: "umbra", name: "Age of Umbra", kind: "run", state: "RUNNING" });
+      .values({
+        id: "umbra",
+        name: "Age of Umbra",
+        kind: "run",
+        state: "RUNNING",
+      });
     await joined("ada", 400);
-    for (const n of [1, 2, 3, 4]) await ran(n, 40 - n, [["ada", "in", n !== 4]]);
+    for (const n of [1, 2, 3, 4])
+      await ran(n, 40 - n, [["ada", "in", n !== 4]]);
 
     const ada = record("ada", await campaignHistory(env, "umbra"));
 
@@ -783,17 +830,31 @@ describe("the record over HTTP", () => {
   it("carries the sessions the numbers were counted from", async () => {
     await db(env)
       .insert(schema.campaigns)
-      .values({ id: "umbra", name: "Age of Umbra", kind: "run", state: "RUNNING" });
+      .values({
+        id: "umbra",
+        name: "Age of Umbra",
+        kind: "run",
+        state: "RUNNING",
+      });
     await joined("ada", 400);
     await ran(1, 30, [["ada", "in", true]]);
 
     const res = await send("GET", "/api/campaigns/umbra/history");
-    const body = (await res.json()) as Awaited<ReturnType<typeof campaignHistory>>;
+    const body = (await res.json()) as Awaited<
+      ReturnType<typeof campaignHistory>
+    >;
 
     // The table and the number travel together or the number cannot be checked.
     expect(res.status).toBe(200);
     expect(body.sessions).toHaveLength(1);
-    expect(body.sessions[0]?.register[0]).toMatchObject({ userId: "ada", attended: true });
-    expect(body.members[0]).toMatchObject({ userId: "ada", played: 1, attended: 1 });
+    expect(body.sessions[0]?.register[0]).toMatchObject({
+      userId: "ada",
+      attended: true,
+    });
+    expect(body.members[0]).toMatchObject({
+      userId: "ada",
+      played: 1,
+      attended: 1,
+    });
   });
 });

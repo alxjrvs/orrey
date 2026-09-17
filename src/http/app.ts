@@ -277,6 +277,7 @@ export function createApp() {
           ? c.json({ error: "That session has already been played." }, 400)
           : c.json({ outcome });
     }),
+  );
 
   /**
    * One campaign's record: what it has played, and the flake memory counted from
