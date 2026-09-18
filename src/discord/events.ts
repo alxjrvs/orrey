@@ -3,6 +3,7 @@ import type { Env, OutboxMessage } from "../env.ts";
 import { db, schema } from "../db/index.ts";
 import { requireGuildId } from "../db/settings.ts";
 import { discordFingerprint, sessionTitle, type ProjectionTarget } from "../projection/target.ts";
+import { find, record, retract, type PublicationRef } from "../projection/publications.ts";
 import { throughGovernor } from "./governor.ts";
 import {
   createScheduledEvent,
@@ -63,13 +64,23 @@ export async function projectDiscordEvent(
     : upsert(env, target, guildId);
 }
 
+/** This session's entry in the ledger of what Orrey has put into the world. */
+function refFor(sessionId: string): PublicationRef {
+  return { surface: "discord", kind: "event", targetId: sessionId };
+}
+
 async function upsert(env: Env, target: ProjectionTarget, guildId: string): Promise<void> {
   const { session } = target;
   const fingerprint = await discordFingerprint(target);
 
   // The redelivery case, and the "nothing actually changed" case: a write that
-  // would set what is already set is a rate-limit slot spent for nothing.
-  if (session.discordEventId && session.discordEventFingerprint === fingerprint) return;
+  // would set what is already set is a rate-limit slot spent for nothing. The
+  // record of it is not skippable, though — see the same guard in the Google
+  // projector for why.
+  if (session.discordEventId && session.discordEventFingerprint === fingerprint) {
+    await ensureRecorded(env, session.id, session.discordEventId);
+    return;
+  }
 
   const body = scheduledEventBody(target);
   const event = await throughGovernor(env, guildId, async () => {
@@ -83,6 +94,11 @@ async function upsert(env: Env, target: ProjectionTarget, guildId: string): Prom
       throw error;
     }
   });
+
+  // The ledger first, then the session column. `sessions.discord_event_id`
+  // cascades away with the row; this does not, and after a delete it is the only
+  // thing that can still say what is up in Discord and needs taking down.
+  await record(env, refFor(session.id), event.id);
 
   await db(env)
     .update(schema.sessions)
@@ -107,6 +123,10 @@ async function unproject(env: Env, target: ProjectionTarget, guildId: string): P
     if (!isUnknownEvent(error)) throw error;
   }
 
+  // Retracted, not forgotten: the row and its `remote_id` stay, so phase 7's
+  // reconcile can account for an event it finds rather than being puzzled by it.
+  await retract(env, refFor(session.id));
+
   await db(env)
     .update(schema.sessions)
     .set({ discordEventId: null, discordEventFingerprint: null, updatedAt: sql`(unixepoch())` })
@@ -119,4 +139,14 @@ export function isDiscordEventKind(kind: OutboxMessage["kind"]): boolean {
 
 function isoOf(unixSeconds: number): string {
   return new Date(unixSeconds * 1000).toISOString();
+}
+
+/** The ledger learns about an event published before there was a ledger. */
+async function ensureRecorded(env: Env, sessionId: string, eventId: string): Promise<void> {
+  const ref = refFor(sessionId);
+  const known = await find(env, ref);
+  if (known?.state === "published" && known.remoteId === eventId) return;
+  // A retraction is a decision, not a gap. Do not undo one by backfilling.
+  if (known?.state === "retracted") return;
+  await record(env, ref, eventId);
 }
