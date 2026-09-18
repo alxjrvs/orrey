@@ -42,13 +42,21 @@ async function member(
     .values({ campaignId, userId, role, joinedAt: NOW - 365 * DAY });
 }
 
+// `inDays` counts from `ASOF` because most tests here hand `ASOF` to the thing
+// they are testing, and a frozen pair keeps the rendered timestamps assertable.
+// A test that goes through `app.fetch` gets no such say: the route reads the
+// real clock, so it passes `REAL_NOW` and the seeded session is upcoming today
+// as well as on the day this was written.
+const REAL_NOW = () => Math.floor(Date.now() / 1000);
+
 async function session(
   campaignId: string,
   number: number,
   inDays: number,
   state: "SCHEDULED" | "CONFIRMED" | "JEOPARDY" | "CANCELLED" | "PLAYED" = "SCHEDULED",
+  from: number = NOW,
 ) {
-  const startsAt = NOW + inDays * DAY;
+  const startsAt = from + inDays * DAY;
   await db(env).insert(schema.sessions).values({
     id: `${campaignId}-s${number}`,
     kind: "campaign_session",
@@ -283,7 +291,7 @@ describe("autocomplete", () => {
   it("answers the interaction with choices rather than an empty list", async () => {
     await campaign("umbra", "Age of Umbra");
     await member("umbra", "ada", "Ada");
-    await session("umbra", 4, 3);
+    await session("umbra", 4, 3, "SCHEDULED", REAL_NOW());
 
     const res = await app.fetch(
       await discord.request({
@@ -305,7 +313,7 @@ describe("the command", () => {
   it("answers ephemerally and writes nothing", async () => {
     await campaign("umbra", "Age of Umbra");
     await member("umbra", "ada", "Ada");
-    const id = await session("umbra", 1, 3);
+    const id = await session("umbra", 1, 3, "SCHEDULED", REAL_NOW());
     await said(id, "ada", "in");
 
     const res = await app.fetch(await command("ada"), discord.env(env));
