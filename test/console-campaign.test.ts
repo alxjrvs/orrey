@@ -6,6 +6,7 @@ import { SETTING_KEYS, setSetting } from "../src/db/settings.ts";
 import { createApp } from "../src/http/app.ts";
 import { SESSION_COOKIE, issueSession } from "../src/console/cookies.ts";
 import { campaignPage } from "../src/console/campaign.ts";
+import { campaignHistory } from "../src/console/campaign-history.ts";
 import { rosterOf } from "../src/campaigns/roster.ts";
 
 /**
@@ -578,6 +579,282 @@ describe("the page over HTTP", () => {
     expect(res.status).toBe(404);
     expect((await res.json()) as { error: string }).toMatchObject({
       error: expect.any(String),
+    });
+  });
+});
+
+/**
+ * The campaign's record, and what it implies.
+ *
+ * Every number here is a ratio, and a ratio that silently counts sessions
+ * somebody could not have been at is a number that accuses them. So the
+ * denominator is what these test: who was on the roster when, and which rows the
+ * register was actually written for.
+ */
+async function joined(userId: string, daysAgo: number) {
+  await person(userId);
+  await db(env)
+    .insert(schema.campaignMembers)
+    .values({
+      campaignId: "umbra",
+      userId,
+      joinedAt: seconds - daysAgo * 86_400,
+    })
+    .onConflictDoNothing();
+}
+
+/** A played session `daysAgo` back, with the register rows given. */
+async function ran(
+  number: number,
+  daysAgo: number,
+  register: [string, "in" | "out" | "maybe" | null, boolean | null][],
+) {
+  const startsAt = seconds - daysAgo * 86_400;
+  const id = `umbra-p${number}`;
+  await db(env)
+    .insert(schema.sessions)
+    .values({
+      id,
+      kind: "campaign_session",
+      campaignId: "umbra",
+      number,
+      startsAt,
+      endsAt: startsAt + 4 * 3600,
+      location: "The Wreck",
+      state: "PLAYED",
+    });
+  for (const [userId, intent, attended] of register) {
+    await db(env)
+      .insert(schema.attendance)
+      .values({
+        sessionId: id,
+        userId,
+        intent,
+        attended: attended === null ? null : attended ? 1 : 0,
+        ...(attended === null ? {} : { attendedSource: "auto" as const }),
+      });
+  }
+  return id;
+}
+
+function record(
+  userId: string,
+  history: Awaited<ReturnType<typeof campaignHistory>>,
+) {
+  return history.members.find((member) => member.userId === userId);
+}
+
+describe("the denominator", () => {
+  it("does not score somebody against sessions that ran before they joined", async () => {
+    await db(env)
+      .insert(schema.campaigns)
+      .values({
+        id: "umbra",
+        name: "Age of Umbra",
+        kind: "run",
+        state: "RUNNING",
+      });
+    await joined("old", 400);
+    await joined("new", 7);
+    for (const n of [1, 2, 3, 4, 5]) {
+      await ran(n, 100 - n, [
+        ["old", "in", true],
+        ...(n === 5
+          ? ([["new", "in", true]] as [string, "in", boolean][])
+          : []),
+      ]);
+    }
+    // Session 5 ran 95 days ago, which is still before `new` joined a week ago.
+    const history = await campaignHistory(env, "umbra");
+
+    // "Came to 1 of 5" about somebody who was on the roster for none of them is
+    // the worst thing this module could say.
+    expect(record("old", history)?.played).toBe(5);
+    expect(record("new", history)?.played).toBe(0);
+    expect(record("new", history)?.attended).toBe(0);
+  });
+
+  it("counts a session with no register toward neither side", async () => {
+    await db(env)
+      .insert(schema.campaigns)
+      .values({
+        id: "umbra",
+        name: "Age of Umbra",
+        kind: "run",
+        state: "RUNNING",
+      });
+    await joined("ada", 400);
+    await ran(1, 30, [["ada", "in", true]]);
+    await ran(2, 20, [["ada", "in", null]]);
+    await ran(3, 10, [["ada", "in", false]]);
+
+    const history = await campaignHistory(env, "umbra");
+
+    // Two answers, not three. A session Orrey holds no answer about is not one
+    // she failed to come to, and putting it in the denominator turns missing
+    // data into an accusation.
+    expect(record("ada", history)?.played).toBe(2);
+    expect(record("ada", history)?.attended).toBe(1);
+    expect(history.sessions.find((row) => row.number === 2)).toMatchObject({
+      came: 0,
+      missed: 0,
+      unrecorded: 1,
+    });
+  });
+
+  it("counts only played sessions, never a cancelled or a coming one", async () => {
+    await db(env)
+      .insert(schema.campaigns)
+      .values({
+        id: "umbra",
+        name: "Age of Umbra",
+        kind: "run",
+        state: "RUNNING",
+      });
+    await joined("ada", 400);
+    await ran(1, 30, [["ada", "in", true]]);
+    const cancelled = await ran(2, 20, [["ada", "in", false]]);
+    await db(env)
+      .update(schema.sessions)
+      .set({ state: "CANCELLED" })
+      .where(eq(schema.sessions.id, cancelled));
+
+    const history = await campaignHistory(env, "umbra");
+
+    expect(history.sessions.map((row) => row.number)).toEqual([1]);
+    expect(record("ada", history)?.played).toBe(1);
+  });
+});
+
+describe("the streak", () => {
+  it("breaks on a session they came to", async () => {
+    await db(env)
+      .insert(schema.campaigns)
+      .values({
+        id: "umbra",
+        name: "Age of Umbra",
+        kind: "run",
+        state: "RUNNING",
+      });
+    await joined("ada", 400);
+    await ran(1, 40, [["ada", "in", false]]);
+    await ran(2, 30, [["ada", "in", false]]);
+    await ran(3, 20, [["ada", "in", true]]);
+    await ran(4, 10, [["ada", "in", false]]);
+
+    // "Missed two, came, missed one" is a streak of one. Saying three would be a
+    // lie about now.
+    expect(
+      record("ada", await campaignHistory(env, "umbra"))?.noShowStreak,
+    ).toBe(1);
+  });
+
+  it("does not break on a session they said out to, and does not count it either", async () => {
+    await db(env)
+      .insert(schema.campaigns)
+      .values({
+        id: "umbra",
+        name: "Age of Umbra",
+        kind: "run",
+        state: "RUNNING",
+      });
+    await joined("ada", 400);
+    await ran(1, 30, [["ada", "in", false]]);
+    await ran(2, 20, [["ada", "out", false]]);
+    await ran(3, 10, [["ada", "in", false]]);
+
+    // Saying out and not coming is not a no-show — it is the system working.
+    // What the streak is about is people who said they would be there.
+    const ada = record("ada", await campaignHistory(env, "umbra"));
+    expect(ada?.noShowStreak).toBe(1);
+    expect(ada?.played).toBe(3);
+  });
+});
+
+describe("a record with nothing in it", () => {
+  it("says so in words rather than showing a column of zeroes", async () => {
+    await planned();
+
+    const history = await campaignHistory(env, "umbra");
+
+    expect(history.sessions).toEqual([]);
+    expect(history.members.map((member) => member.played)).toEqual([0, 0, 0]);
+    expect(history.note).toContain("History starts empty");
+  });
+
+  it("states no proportion at all below the threshold", async () => {
+    await db(env)
+      .insert(schema.campaigns)
+      .values({
+        id: "umbra",
+        name: "Age of Umbra",
+        kind: "run",
+        state: "RUNNING",
+      });
+    await joined("ada", 400);
+    await ran(1, 30, [["ada", "in", true]]);
+    await ran(2, 20, [["ada", "in", false]]);
+
+    const ada = record("ada", await campaignHistory(env, "umbra"));
+
+    // "Came to 1 of 2" reads as a judgement rather than as the shrug it should
+    // be. The absence is the warning, made structural rather than left to a
+    // caption somebody can miss.
+    expect(ada?.enough).toBe(false);
+    expect(ada?.rate).toBeNull();
+    expect(ada?.played).toBe(2);
+  });
+
+  it("states one once there is enough to state", async () => {
+    await db(env)
+      .insert(schema.campaigns)
+      .values({
+        id: "umbra",
+        name: "Age of Umbra",
+        kind: "run",
+        state: "RUNNING",
+      });
+    await joined("ada", 400);
+    for (const n of [1, 2, 3, 4])
+      await ran(n, 40 - n, [["ada", "in", n !== 4]]);
+
+    const ada = record("ada", await campaignHistory(env, "umbra"));
+
+    expect(ada?.enough).toBe(true);
+    expect(ada?.rate).toBeCloseTo(3 / 4);
+    expect((await campaignHistory(env, "umbra")).note).toBeNull();
+  });
+});
+
+describe("the record over HTTP", () => {
+  it("carries the sessions the numbers were counted from", async () => {
+    await db(env)
+      .insert(schema.campaigns)
+      .values({
+        id: "umbra",
+        name: "Age of Umbra",
+        kind: "run",
+        state: "RUNNING",
+      });
+    await joined("ada", 400);
+    await ran(1, 30, [["ada", "in", true]]);
+
+    const res = await send("GET", "/api/campaigns/umbra/history");
+    const body = (await res.json()) as Awaited<
+      ReturnType<typeof campaignHistory>
+    >;
+
+    // The table and the number travel together or the number cannot be checked.
+    expect(res.status).toBe(200);
+    expect(body.sessions).toHaveLength(1);
+    expect(body.sessions[0]?.register[0]).toMatchObject({
+      userId: "ada",
+      attended: true,
+    });
+    expect(body.members[0]).toMatchObject({
+      userId: "ada",
+      played: 1,
+      attended: 1,
     });
   });
 });
