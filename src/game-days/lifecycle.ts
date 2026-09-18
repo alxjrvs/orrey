@@ -1,6 +1,7 @@
 import { eq, sql } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
+import { bumpIcsSequence } from "../ics/sequence.ts";
 import {
   SETTING_DEFAULTS,
   SETTING_KEYS,
@@ -141,7 +142,10 @@ export async function transition(
       // and `assumeAttendance` reads exactly this column to decide.
       d
         .update(schema.sessions)
-        .set({ state: "CANCELLED", updatedAt: sql`(unixepoch())` })
+        // Called off, so every subscribed calendar has to be told this update
+        // supersedes the one it holds — `STATUS:CANCELLED` at a sequence the
+        // client has not seen. The `+ 1` itself lives in one place.
+        .set({ state: "CANCELLED", ...bumpIcsSequence, updatedAt: sql`(unixepoch())` })
         .where(eq(schema.sessions.id, existing.id)),
       // One notice, in the day's thread. A job rather than a post made here, so
       // the console's click answers at once — and claimed under its own label,
