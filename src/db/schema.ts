@@ -417,3 +417,24 @@ export const auditLog = sqliteTable(
   },
   (t) => [index("audit_target_idx").on(t.targetType, t.targetId, t.createdAt)],
 );
+
+/**
+ * The Discord OAuth pair for one person, replaced whole on every refresh.
+ *
+ * Discord rotates refresh tokens — a refresh returns a *new* one and retires the
+ * old — so there is no "add a token" here, only "replace the pair". Keeping the
+ * old refresh token is how somebody ends up permanently logged out a week later.
+ *
+ * It is user-keyed, so `src/privacy/delete.ts` deletes it and counts it: this is
+ * the most sensitive thing Orrey holds about anybody.
+ */
+export const discordTokens = sqliteTable("discord_tokens", {
+  userId: text("user_id")
+    .primaryKey()
+    .references(() => users.discordId, { onDelete: "cascade" }),
+  accessToken: text("access_token").notNull(),
+  refreshToken: text("refresh_token").notNull(),
+  /** Unix seconds. Discord's access tokens last about a week. */
+  expiresAt: integer("expires_at").notNull(),
+  updatedAt: integer("updated_at").notNull().default(now),
+});

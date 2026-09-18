@@ -70,6 +70,26 @@ describe("the privacy policy page", () => {
 });
 
 describe("delete-my-data", () => {
+  it("hands out a login link that the front door actually accepts", async () => {
+    const json = await interact({
+      type: InteractionType.APPLICATION_COMMAND,
+      data: { name: "console" },
+      member: { user: { id: "1001", username: "ada" }, roles: [] },
+    });
+
+    const link = json.data.content.match(/<(https:\/\/orrey\.test\/console\/login\?t=[^>]+)>/)?.[1];
+    expect(link).toBeTruthy();
+
+    // The command and the route agree, which is the only thing worth asserting
+    // about a signed token: it is not a string that merely looks right.
+    const response = await app.fetch(
+      new Request(link!, { redirect: "manual" }),
+      discord.env(env),
+    );
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toContain("discord.com/oauth2/authorize");
+  });
+
   it("offers the delete button on /console, with a link to the policy", async () => {
     const json = await interact({
       type: InteractionType.APPLICATION_COMMAND,
@@ -141,10 +161,17 @@ describe("delete-my-data", () => {
       "INSERT INTO signups (target_type, target_id, user_id, state) VALUES ('campaign_forming', 'age-of-umbra', '1001', 'in')",
     ).run();
 
+    // The console's token pair. The most sensitive row Orrey holds, and the one
+    // whose deletion has an effect outside Orrey.
+    await env.DB.prepare(
+      "INSERT INTO discord_tokens (user_id, access_token, refresh_token, expires_at) VALUES ('1001', 'a', 'r', 1)",
+    ).run();
+
     const receipt = await deleteUserData(env, "1001");
     expect(Object.keys(receipt.removed).sort()).toEqual([
       "attendance",
       "campaign_members",
+      "discord_tokens",
       "signups",
       "users",
     ]);
@@ -153,9 +180,10 @@ describe("delete-my-data", () => {
       attendance: 1,
       campaign_members: 1,
       signups: 1,
+      discord_tokens: 1,
     });
 
-    for (const table of ["attendance", "campaign_members", "signups"]) {
+    for (const table of ["attendance", "campaign_members", "signups", "discord_tokens"]) {
       const left = await env.DB.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first<{ n: number }>();
       expect(left?.n, table).toBe(0);
     }

@@ -1,0 +1,10 @@
+html{color-scheme:dark}
+body{margin:0;background:var(--surface-page);color:var(--text-primary);font:var(--type-body);font-feature-settings:"tnum" 1;-webkit-font-smoothing:antialiased}
+a{color:var(--text-link);text-decoration:none}
+a:hover{color:var(--text-link-hover);text-decoration:underline;text-underline-offset:2px}
+*:focus-visible{outline:1px solid var(--focus-ring);outline-offset:1px}
+::selection{background:var(--signal-500);color:var(--action-ink)}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:var(--slate-750);border:3px solid var(--surface-page)}
+::-webkit-scrollbar-thumb:hover{background:var(--slate-700)}
+::-webkit-scrollbar-track{background:transparent}

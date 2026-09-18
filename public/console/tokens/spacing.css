@@ -1,0 +1,32 @@
+:root{
+  /* 2px base. The console is dense; most gaps are 6-14px, not 16-24px. */
+  --space-0:0;
+  --space-1:2px;
+  --space-2:4px;
+  --space-3:6px;
+  --space-4:8px;
+  --space-5:10px;
+  --space-6:12px;
+  --space-7:14px;
+  --space-8:18px;
+  --space-9:24px;
+  --space-10:30px;
+  --space-11:40px;
+
+  /* Fixed chrome dimensions */
+  --chrome-topbar:44px;
+  --chrome-statusbar:26px;
+  --chrome-sidebar:210px;
+  --chrome-rail:300px;
+  --chrome-gutter:18px;
+
+  /* Control heights */
+  --control-sm:26px;
+  --control-md:32px;
+  --control-lg:38px;
+
+  /* Row rhythm */
+  --row-dense:34px;
+  --row-default:44px;
+  --row-agenda:58px;
+}

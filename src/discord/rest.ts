@@ -103,6 +103,26 @@ function retryAfterMs(response: Response, fromBody: number | undefined): number 
 }
 
 /**
+ * One guild member, read with the **bot** token. This is where roles come from,
+ * and the reason the console's OAuth scope can stay `identify`: the user's own
+ * token is never asked what they are allowed to do.
+ */
+export interface GuildMember {
+  roles: string[];
+  user?: { id: string };
+}
+
+export function getGuildMember(env: BotAuth, guildId: string, userId: string) {
+  return discordFetch<GuildMember>(env, `/guilds/${guildId}/members/${userId}`);
+}
+
+/** 404 / 10007 — not in the guild. Not an error; an answer. */
+export function isUnknownMember(error: unknown): boolean {
+  const failure = asDiscordFailure(error);
+  return failure !== undefined && (failure.code === 10007 || failure.status === 404);
+}
+
+/**
  * Scheduled events are the only Discord objects Orrey reconciles, so these are
  * the only Discord writes that ever happen twice for the same thing.
  */

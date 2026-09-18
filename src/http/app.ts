@@ -3,9 +3,33 @@ import type { Env } from "../env.ts";
 import { verifyDiscordRequest } from "../discord/verify.ts";
 import { handleInteraction } from "../discord/interactions.ts";
 import type { Interaction } from "../discord/types.ts";
+import {
+  SESSION_COOKIE,
+  STATE_COOKIE,
+  clear,
+  mintState,
+  readCookie,
+  sessionCookie,
+  stateCookie,
+  issueSession,
+} from "../console/cookies.ts";
+import { authorizeUrl, exchangeCode, identify, storeTokens } from "../console/oauth.ts";
+import { sessionFrom } from "../console/session.ts";
+import { NotConfigured, isOrganiser } from "../console/roles.ts";
+import { readLoginToken } from "../console/link.ts";
+import { campaignSummaries, gameSummaries } from "../console/api.ts";
+import { InvalidCampaign, createCampaign, updateCampaign } from "../campaigns/write.ts";
+import { IllegalTransition, transition, type CampaignState } from "../campaigns/lifecycle.ts";
+import {
+  InvalidGame,
+  putGame,
+  putMember,
+  removeMember,
+  rosterRows,
+} from "../campaigns/roster-write.ts";
 
 export function createApp() {
-  const app = new Hono<{ Bindings: Env }>();
+  const app = new Hono<{ Bindings: Env; Variables: { userId: string } }>();
 
   app.get("/healthz", (c) => c.json({ ok: true, environment: c.env.ENVIRONMENT }));
 
@@ -30,6 +54,158 @@ export function createApp() {
     return c.json(response);
   });
 
+  /**
+   * Console login, Discord OAuth, `identify` scope and nothing else.
+   *
+   * The `state` is minted here and set as a short-lived cookie; the callback
+   * refuses to exchange anything until the two match. Without it, anybody could
+   * hand somebody a callback URL carrying their own code and have the victim's
+   * browser log in as them.
+   */
+  app.get("/console/login", async (c) => {
+    // The console has no public front door. A redirect to Discord's authorize
+    // endpoint that anybody can trigger is a phishing primitive rather than a
+    // convenience, so the link has to have come from `/console` just now.
+    if (!(await readLoginToken(c.env, c.req.query("t"), new Date()))) {
+      return c.text("That login link has expired. Run /console in Discord again.", 400);
+    }
+
+    const state = mintState();
+    c.header("set-cookie", stateCookie(state));
+    return c.redirect(authorizeUrl(c.env, new URL(c.req.url).origin, state), 302);
+  });
+
+  app.get("/console/callback", async (c) => {
+    const code = c.req.query("code");
+    const returned = c.req.query("state");
+    const expected = readCookie(c.req.header("cookie"), STATE_COOKIE);
+
+    // The state check comes first, before the code is worth anything. One
+    // response for every way this can fail: saying which half was wrong tells
+    // somebody guessing which half to keep.
+    if (!code || !returned || !expected || returned !== expected) {
+      c.header("set-cookie", clear(STATE_COOKIE));
+      return c.text("That login link did not check out. Run /console again.", 400);
+    }
+
+    const origin = new URL(c.req.url).origin;
+    try {
+      const pair = await exchangeCode(c.env, origin, code);
+      const user = await identify(pair.accessToken);
+      await storeTokens(c.env, user, pair);
+
+      c.header("set-cookie", clear(STATE_COOKIE));
+      c.header("set-cookie", sessionCookie(await issueSession(c.env, user.id, new Date())), {
+        append: true,
+      });
+      return c.redirect("/console", 302);
+    } catch (error) {
+      console.error("console login failed", error);
+      c.header("set-cookie", clear(STATE_COOKIE));
+      return c.text("Discord would not complete that login. Run /console again.", 502);
+    }
+  });
+
+  /**
+   * The gate every administering route sits behind.
+   *
+   * It answers 403 rather than redirecting, because the caller is `fetch` from
+   * the SPA and a 302 to Discord would arrive as an opaque CORS failure rather
+   * than as "you are not allowed to do that".
+   *
+   * The role is read fresh, with the bot token, on every request. Nothing is
+   * carried in the cookie and nothing is cached, so a role removed in Discord is
+   * a permission gone on the next request rather than on the next login.
+   */
+  app.use("/api/*", async (c, next) => {
+    const session = await sessionFrom(c.env, c.req.header("cookie"), new Date());
+    if (!session) return c.json({ error: "Not signed in. Run /console in Discord." }, 401);
+
+    try {
+      if (!(await isOrganiser(c.env, session.userId))) {
+        return c.json({ error: "That is an organiser's to do." }, 403);
+      }
+    } catch (error) {
+      // Orrey does not know which role administers, so nobody does. A 503 says
+      // that plainly rather than answering 403 and sending somebody hunting for
+      // a permission they already have.
+      if (!(error instanceof NotConfigured)) throw error;
+      return c.json({ error: error.message }, 503);
+    }
+
+    c.set("userId", session.userId);
+    await next();
+    return undefined;
+  });
+
+  /** Who Orrey thinks you are. The first thing the console asks. */
+  app.get("/api/me", (c) => c.json({ userId: c.get("userId") }));
+
+  // The read half of the console. Every field comes from D1: a console that read
+  // Discord back would be showing a projection as though it were the thing.
+  app.get("/api/campaigns", async (c) => c.json({ campaigns: await campaignSummaries(c.env) }));
+  app.get("/api/games", async (c) => c.json({ games: await gameSummaries(c.env) }));
+
+  /**
+   * The write half. Each route is a thin wrapper over the domain function that
+   * does the work — the console is a caller, not a second implementation, which
+   * is what keeps "every write lands in audit_log" true rather than hopeful.
+   */
+  app.post("/api/campaigns", async (c) =>
+    refusable(c, async () => {
+      const id = await createCampaign(c.env, await c.req.json(), c.get("userId"));
+      return c.json({ id }, 201);
+    }),
+  );
+
+  app.patch("/api/campaigns/:id", async (c) =>
+    refusable(c, async () => {
+      await updateCampaign(c.env, c.req.param("id"), await c.req.json(), c.get("userId"));
+      return c.json({ ok: true });
+    }),
+  );
+
+  app.get("/api/campaigns/:id/roster", async (c) =>
+    c.json({ roster: await rosterRows(c.env, c.req.param("id")) }),
+  );
+
+  app.put("/api/campaigns/:id/members", async (c) =>
+    refusable(c, async () => {
+      await putMember(c.env, c.req.param("id"), await c.req.json(), c.get("userId"));
+      return c.json({ ok: true });
+    }),
+  );
+
+  app.delete("/api/campaigns/:id/members/:userId", async (c) =>
+    refusable(c, async () => {
+      await removeMember(c.env, c.req.param("id"), c.req.param("userId"), c.get("userId"));
+      return c.json({ ok: true });
+    }),
+  );
+
+  app.put("/api/games/:id?", async (c) =>
+    refusable(c, async () => {
+      const id = await putGame(c.env, c.req.param("id"), await c.req.json(), c.get("userId"));
+      return c.json({ id });
+    }),
+  );
+
+  app.post("/api/campaigns/:id/transition", async (c) =>
+    refusable(c, async () => {
+      const { to } = (await c.req.json()) as { to?: CampaignState };
+      if (!to) return c.json({ error: "which state?" }, 400);
+
+      const result = await transition(c.env, c.req.param("id"), to, c.get("userId"));
+      return c.json(result);
+    }),
+  );
+
+  /** Logging out is forgetting the cookie. The token pair is dropped with it. */
+  app.post("/console/logout", (c) => {
+    c.header("set-cookie", clear(SESSION_COOKIE));
+    return c.redirect("/", 302);
+  });
+
   // Per-campaign ICS feeds. Calendar clients cannot do OAuth, so the token in
   // the path is the only credential — it must be unguessable.
   app.get("/ics/:token.ics", (c) => c.text("Not implemented until phase 6.", 501));
@@ -49,4 +225,28 @@ export function createApp() {
   app.all("*", (c) => c.env.ASSETS.fetch(c.req.raw));
 
   return app;
+}
+
+/**
+ * A refused write is a sentence, not a stack trace. `InvalidCampaign` and
+ * `IllegalTransition` are both the domain saying no to something a person asked
+ * for, so they are 400s carrying the reason — anything else is a fault and stays
+ * a 500, because a bug dressed up as a polite refusal is a bug nobody finds.
+ */
+async function refusable(
+  c: { json: (body: unknown, status?: 200 | 201 | 400) => Response },
+  work: () => Promise<Response>,
+): Promise<Response> {
+  try {
+    return await work();
+  } catch (error) {
+    if (
+      error instanceof InvalidCampaign ||
+      error instanceof IllegalTransition ||
+      error instanceof InvalidGame
+    ) {
+      return c.json({ error: error.message }, 400);
+    }
+    throw error;
+  }
 }
