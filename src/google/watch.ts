@@ -21,8 +21,25 @@ import { GoogleError, accessToken, watchCalendarId } from "./calendar.ts";
  */
 const API = "https://www.googleapis.com/calendar/v3";
 
-/** Replace a channel with less than this left on it. */
-const RENEW_WITHIN_SECONDS = 48 * 3600;
+/**
+ * Replace a channel with less than this left on it.
+ *
+ * Two days against the roughly seven Google is understood to issue, so a renewal
+ * tick that fails has two more before anything lapses. Exported because it is an
+ * assumption about somebody else's service rather than a choice of Orrey's, and
+ * `scripts/probe-watch.ts` is what settles it: if the measured TTL is shorter
+ * than `ASSUMED_TTL_SECONDS`, this number shrinks and the test that names both
+ * is what says so.
+ */
+export const RENEW_WITHIN_SECONDS = 48 * 3600;
+
+/**
+ * What Google is understood to issue, pending the probe.
+ *
+ * Stated here so the gap between it and the renewal window is a thing a test can
+ * assert, rather than a number in a comment that nothing checks.
+ */
+export const ASSUMED_TTL_SECONDS = 7 * 86_400;
 
 export interface Watch {
   channelId: string;
@@ -73,7 +90,7 @@ export async function startWatch(env: Env): Promise<Watch> {
     // which the renewal window will act on well before it matters.
     expiresAt: opened.expiration
       ? Math.floor(Number(opened.expiration) / 1000)
-      : Math.floor(Date.now() / 1000) + 7 * 86_400,
+      : Math.floor(Date.now() / 1000) + ASSUMED_TTL_SECONDS,
   };
 
   // Recorded first. Everything after this point is tidying.
