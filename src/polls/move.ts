@@ -1,6 +1,7 @@
 import { eq, sql } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
+import { SESSION_MOVED } from "../db/audit.ts";
 import { bumpIcsSequence } from "../ics/sequence.ts";
 import { armAssume } from "../attendance/assume.ts";
 import { armJeopardyCheck } from "../attendance/jeopardy.ts";
@@ -77,6 +78,22 @@ export async function moveSession(
       updatedAt: sql`(unixepoch())`,
     })
     .where(eq(schema.sessions.id, sessionId));
+
+  // The move, on the record. Written here rather than at each caller because a
+  // session moves from three places — a poll that resolved, a reschedule, and
+  // from `p7/12` an edit somebody made in Google — and a trail with a hole in it
+  // for one of them is a statistic that undercounts without ever looking wrong.
+  await db(env)
+    .insert(schema.auditLog)
+    .values({
+      id: crypto.randomUUID(),
+      // Null is the clock. A move Orrey made on nobody's behalf says so.
+      actorUserId: null,
+      action: SESSION_MOVED,
+      targetType: "session",
+      targetId: sessionId,
+      detail: { before: { startsAt: from, endsAt: session.endsAt }, after: when },
+    });
 
   const after = await loadProjectionTarget(env, sessionId);
   if (!after) return false;

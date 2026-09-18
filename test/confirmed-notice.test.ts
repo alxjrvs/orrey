@@ -2,6 +2,7 @@ import { env } from "cloudflare:test";
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { db, schema } from "../src/db/index.ts";
+import { SESSION_CONFIRMED } from "../src/db/audit.ts";
 import { SETTING_KEYS, setSetting } from "../src/db/settings.ts";
 import { seedStatements } from "../src/db/seed-sql.ts";
 import { drainJobs } from "../src/jobs/drain.ts";
@@ -73,7 +74,7 @@ beforeEach(async () => {
     return postResponse();
   }) as typeof fetch;
 
-  for (const table of ["publications", "attendance", "jobs", "sessions", "campaigns", "users", "settings"]) {
+  for (const table of ["audit_log", "publications", "attendance", "jobs", "sessions", "campaigns", "users", "settings"]) {
     await env.DB.prepare(`DELETE FROM ${table}`).run();
   }
   await setSetting(env, SETTING_KEYS.guildId, "g1");
@@ -174,6 +175,22 @@ describe("the crossing arms it", () => {
     expect(await jobs()).toMatchObject([
       { kind: "session.confirmed-notice", state: "pending" },
     ]);
+  });
+
+  it("leaves the confirmation on the record, in the same batch", async () => {
+    await lock().setIntent({ sessionId: SESSION_ID, actor: actor("1"), intent: "in" });
+    await lock().setIntent({ sessionId: SESSION_ID, actor: actor("2"), intent: "in" });
+
+    // The row the lead-time statistic measures to. It is in the batch with the
+    // state it records, so a confirmation cannot commit without it and quietly
+    // leave the average.
+    const rows = (await db(env).select().from(schema.auditLog).all()).filter(
+      (row) => row.action === SESSION_CONFIRMED,
+    );
+    expect(rows).toHaveLength(1);
+    // Nobody decided this — the count did. Attributing it to whoever happened
+    // to click the crossing one would read as though they confirmed it.
+    expect(rows[0]).toMatchObject({ targetId: SESSION_ID, actorUserId: null });
   });
 
   it("posts it on the next drain", async () => {
