@@ -20,6 +20,7 @@ import { readLoginToken } from "../console/link.ts";
 import { campaignSummaries, gameDaySummaries, gameSummaries } from "../console/api.ts";
 import { campaignPage } from "../console/campaign.ts";
 import { campaignHistory } from "../console/campaign-history.ts";
+import { campaignPolls } from "../console/campaign-polls.ts";
 import { agendaBetween, windowAround } from "../console/agenda.ts";
 import { sessionDetail } from "../console/session-detail.ts";
 import { cancelSession, lockSession } from "../sessions/lifecycle.ts";
@@ -289,6 +290,19 @@ export function createApp() {
    */
   app.get("/api/campaigns/:id/history", async (c) =>
     c.json(await campaignHistory(c.env, c.req.param("id"))),
+  );
+
+  /**
+   * A campaign's open date polls, and its auto-resolve flag.
+   *
+   * Read-only. The toggle is written through `PATCH /api/campaigns/:id` like
+   * every other campaign field, so there is one write path into `audit_log` and
+   * not two — and canonising is not here at all: that is an organiser-only
+   * button on the poll post, and a second way to reach the same decision is a
+   * decision made twice.
+   */
+  app.get("/api/campaigns/:id/polls", async (c) =>
+    c.json(await campaignPolls(c.env, c.req.param("id"))),
   );
 
   app.get("/api/campaigns/:id/roster", async (c) =>
