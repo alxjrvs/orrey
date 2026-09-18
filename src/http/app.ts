@@ -34,6 +34,7 @@ import { agendaBetween, windowAround } from "../console/agenda.ts";
 import { sessionDetail } from "../console/session-detail.ts";
 import { storedWatch } from "../google/watch.ts";
 import { armSync } from "../google/sync.ts";
+import { writeRecap } from "../logs/recap.ts";
 import { cancelSession, lockSession } from "../sessions/lifecycle.ts";
 import { SETTING_DEFAULTS, SETTING_KEYS, settingOr } from "../db/settings.ts";
 import { openPollFromConsole } from "../console/polls.ts";
@@ -328,6 +329,39 @@ export function createApp() {
         : outcome === "too-late"
           ? c.json({ error: "That session is over, or already off." }, 400)
           : c.json({ outcome });
+    }),
+  );
+
+  /**
+   * The second door on to one writer.
+   *
+   * `writeRecap` **unchanged** — the same permission check, the same
+   * normalisation, the same row, the same post into the thread. A console recap
+   * that landed in D1 and never reached the thread would be the failure this
+   * phase is least likely to notice, and the only way to be sure of it is for
+   * there to be nothing here that could diverge.
+   */
+  app.post("/api/sessions/:id/recap", async (c) =>
+    refusable(c, async () => {
+      const body = (await c.req.json()) as { body?: unknown };
+      const outcome = await writeRecap(c.env, {
+        sessionId: c.req.param("id"),
+        authorId: c.get("userId"),
+        body: typeof body.body === "string" ? body.body : "",
+      });
+
+      switch (outcome.outcome) {
+        case "written":
+          return c.json({ body: outcome.body }, 201);
+        case "nothing-written":
+          return c.json({ error: "Nothing to write down." }, 400);
+        case "no-session":
+          return c.json({ error: "Orrey does not know that session." }, 404);
+        case "nobody-running-it":
+          return c.json({ error: "Nobody is down as running that day." }, 403);
+        default:
+          return c.json({ error: "Only whoever ran it can write it up." }, 403);
+      }
     }),
   );
 

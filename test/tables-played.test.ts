@@ -304,7 +304,13 @@ describe("Refresh", () => {
     });
 
     const rows = payload.components as { components: { custom_id: string; label?: string }[] }[];
-    expect(rows.at(-1)?.components.map((c) => c.label)).toEqual(["Tables played", "Refresh"]);
+    // Recap joins them on this branch: one row, because a row holds five buttons
+    // and a second row for one button would cost a toggle.
+    expect(rows.at(-1)?.components.map((c) => c.label)).toEqual([
+      "Tables played",
+      "Refresh",
+      "Recap",
+    ]);
   });
 
   it("rewrites the post it came from, with the lines on it", async () => {

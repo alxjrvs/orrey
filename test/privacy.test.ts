@@ -194,11 +194,16 @@ describe("delete-my-data", () => {
       "INSERT INTO discord_tokens (user_id, access_token, refresh_token, expires_at) VALUES ('1001', 'a', 'r', 1)",
     ).run();
 
+    await env.DB.prepare(
+      "INSERT INTO session_logs (session_id, author, body) VALUES ('age-of-umbra-s12', '1001', 'a recap')",
+    ).run();
+
     const receipt = await deleteUserData(env, "1001");
     expect(Object.keys(receipt.removed).sort()).toEqual([
       "attendance",
       "campaign_members",
       "discord_tokens",
+      "session_logs",
       "signups",
       "users",
     ]);
@@ -208,6 +213,7 @@ describe("delete-my-data", () => {
       campaign_members: 1,
       signups: 1,
       discord_tokens: 1,
+      session_logs: 1,
     });
 
     for (const table of [
@@ -215,6 +221,7 @@ describe("delete-my-data", () => {
       "campaign_members",
       "signups",
       "discord_tokens",
+      "session_logs",
     ]) {
       const left = await env.DB.prepare(
         `SELECT COUNT(*) AS n FROM ${table}`,
@@ -320,11 +327,12 @@ describe("delete my data, from the console", () => {
 
     // The counts come from `src/privacy/delete.ts`, which is where every phase
     // that adds a user-keyed table adds its own delete and its own count. Phase
-    // 6 adds none.
+    // 6 added none; phase 7 adds `session_logs`.
     expect(Object.keys(body.receipt.removed).sort()).toEqual([
       "attendance",
       "campaign_members",
       "discord_tokens",
+      "session_logs",
       "signups",
       "users",
     ]);
