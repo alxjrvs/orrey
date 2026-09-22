@@ -118,7 +118,10 @@ describe("the post", () => {
     const post = posts.at(-1)!;
     expect(post.path).toBe("/channels/thread-1/messages");
     expect(post.body.content).toContain("Who came?");
-    expect(post.body.content).toContain("2 of 3");
+    // Three of three: the campaign has a roster and no quorum, so the evening ran
+    // under the veto rule, and `p-2` saying nothing was the rule's own yes rather
+    // than an absence to assume. The toggles are how the GM says otherwise.
+    expect(post.body.content).toContain("3 of 3");
 
     const buttons = (post.body.components as { components: { custom_id: string }[] }[])
       .flatMap((row) => row.components);
@@ -155,6 +158,15 @@ describe("the post", () => {
 
 describe("the toggle", () => {
   beforeEach(async () => {
+    // Under a count, so that `out` is somebody who is not coming rather than a veto
+    // that says the evening could not run — which would assume everybody absent and
+    // make this a test about the veto rule instead of about the toggle. The toggle
+    // itself is rule-agnostic, and `test/assume.test.ts` is where each rule's
+    // register is pinned.
+    await db(env)
+      .update(schema.campaigns)
+      .set({ quorum: 3 })
+      .where(eq(schema.campaigns.id, "age-of-umbra"));
     await member(GM, "gm", "in");
     await member("p-1", "player", "out");
     await armAssume(env, SESSION_ID, Math.floor(Date.now() / 1000) - 60);
