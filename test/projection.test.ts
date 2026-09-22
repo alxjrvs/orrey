@@ -47,10 +47,27 @@ const campaign = {
   discordRoleId: "200",
 } as const;
 
+/**
+ * A week out, off the real clock rather than a date typed into this file.
+ *
+ * `session.project` asks `surfacesFor(env, id, new Date())` whether the session is
+ * one of its campaign's next two, because a Discord scheduled event further out
+ * than that is a slot spent on an evening nobody is looking at yet. A session
+ * dated `2026-09-20` was in that campaign's future when this file was written and
+ * in its past from the 21st — from which point Discord was dropped from every
+ * projection here and two tests asserted a surface that no longer went out.
+ *
+ * Same shape as every clock bomb this repo has found: a dated artefact minted at a
+ * frozen date, under code that reads the clock. The fixture moves with the clock
+ * instead, so what these tests are about — that the job becomes two messages, once
+ * — stops depending on what day they are run.
+ */
+const startsAt = Math.floor(Date.now() / 1000) + 7 * 86_400;
+
 const session = {
   number: 12,
-  startsAt: Date.parse("2026-09-20T19:00:00Z") / 1000,
-  endsAt: Date.parse("2026-09-20T23:00:00Z") / 1000,
+  startsAt,
+  endsAt: startsAt + 4 * 3600,
   location: "The Wreck",
 };
 
