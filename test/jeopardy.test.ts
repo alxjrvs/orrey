@@ -59,6 +59,26 @@ async function setQuorum(quorum: number | null) {
     .where(eq(schema.campaigns.id, "age-of-umbra"));
 }
 
+async function roster(gm: string, players: string[]) {
+  for (const id of [gm, ...players]) {
+    await db(env)
+      .insert(schema.users)
+      .values({ discordId: id, username: `u${id}`, feedToken: `tok${id}` })
+      .onConflictDoNothing();
+  }
+  await db(env)
+    .insert(schema.campaignMembers)
+    .values([
+      { campaignId: "age-of-umbra", userId: gm, role: "gm", joinedAt: 1 },
+      ...players.map((id, i) => ({
+        campaignId: "age-of-umbra",
+        userId: id,
+        role: "player" as const,
+        joinedAt: 2 + i,
+      })),
+    ]);
+}
+
 async function saidIn(count: number) {
   for (let i = 0; i < count; i++) {
     await db(env)
@@ -192,6 +212,55 @@ describe("what the check writes", () => {
     expect(await stateOf()).toBe("SCHEDULED");
   });
 
+  it("says nothing when the objection was taken back before the drain ran", async () => {
+    await setQuorum(null);
+    await roster("gm-1", ["p-1"]);
+    await db(env)
+      .insert(schema.attendance)
+      .values({ sessionId: SESSION_ID, userId: "p-1", intent: "out" });
+    await armJeopardyCheck(env, SESSION_ID, Math.floor(Date.now() / 1000) + 3600);
+    await checkJeopardy(env, await target());
+
+    // Marked, and then withdrawn before the notice went out. The notice keys on
+    // the rule rather than the outcome, so it used to take the veto branch anyway
+    // and announce "0 of 1 cannot make it".
+    await db(env)
+      .update(schema.attendance)
+      .set({ intent: "in" })
+      .where(eq(schema.attendance.userId, "p-1"));
+    posted = [];
+
+    await drainJobs(env);
+
+    expect(posted).toEqual([]);
+  });
+
+  it("tells the table again when a second date is vetoed too", async () => {
+    await setQuorum(null);
+    await roster("gm-1", ["p-1"]);
+    await db(env)
+      .insert(schema.attendance)
+      .values({ sessionId: SESSION_ID, userId: "p-1", intent: "out" });
+
+    await armJeopardyCheck(env, SESSION_ID, Math.floor(Date.now() / 1000) + 3600);
+    await drainJobs(env);
+    const first = posted.length;
+
+    // The evening moves, and the new date does not work either. A session-scoped
+    // claim meant the table was told once and never again, however many dates the
+    // campaign worked through.
+    const moved = STARTS_AT + 7 * 86_400;
+    await db(env)
+      .update(schema.sessions)
+      .set({ startsAt: moved, endsAt: moved + 4 * 3600, state: "SCHEDULED" })
+      .where(eq(schema.sessions.id, SESSION_ID));
+    await armJeopardyCheck(env, SESSION_ID, Math.floor(Date.now() / 1000) + 3600);
+    await drainJobs(env);
+
+    expect(first).toBeGreaterThan(0);
+    expect(posted.length).toBeGreaterThan(first);
+  });
+
   it("leaves a confirmed session confirmed, however few are in now", async () => {
     await db(env)
       .update(schema.sessions)
@@ -276,26 +345,6 @@ describe("the drain", () => {
 });
 
 describe("the notice", () => {
-  async function roster(gm: string, players: string[]) {
-    for (const id of [gm, ...players]) {
-      await db(env)
-        .insert(schema.users)
-        .values({ discordId: id, username: `u${id}`, feedToken: `tok${id}` })
-        .onConflictDoNothing();
-    }
-    await db(env)
-      .insert(schema.campaignMembers)
-      .values([
-        { campaignId: "age-of-umbra", userId: gm, role: "gm", joinedAt: 1 },
-        ...players.map((id, i) => ({
-          campaignId: "age-of-umbra",
-          userId: id,
-          role: "player" as const,
-          joinedAt: 2 + i,
-        })),
-      ]);
-  }
-
   it("names who has not answered, and who decides", async () => {
     await roster("gm-1", ["p-1", "p-2"]);
     await db(env)
@@ -367,5 +416,148 @@ describe("the notice", () => {
     await drainJobs(env);
 
     expect(posted.at(-1)!.body.content).toContain("Whoever is running it decides");
+  });
+});
+
+/**
+ * The veto rule, a day out (#173). Nothing here counts anything: the check is
+ * asking whether anybody assigned to the evening has said they cannot make it.
+ */
+describe("what the check writes, once there is a roster", () => {
+  beforeEach(async () => {
+    await setQuorum(null);
+  });
+
+  it("marks a session one person on the roster cannot make", async () => {
+    await roster("gm-1", ["p-1", "p-2"]);
+    await db(env)
+      .insert(schema.attendance)
+      .values({ sessionId: SESSION_ID, userId: "p-1", intent: "out" });
+
+    expect(await checkJeopardy(env, await target())).toBe("in-jeopardy");
+    expect(await stateOf()).toBe("JEOPARDY");
+  });
+
+  it("leaves a session nobody has objected to alone", async () => {
+    await roster("gm-1", ["p-1", "p-2"]);
+
+    // Not one click, and it is on. Under this rule an unanswered post is a
+    // table with nothing to say, and the clock has nothing to say about it.
+    expect(await checkJeopardy(env, await target())).toBe("confirmed");
+    expect(await stateOf()).toBe("SCHEDULED");
+  });
+
+  it("does not read silence as a shortfall", async () => {
+    await roster("gm-1", ["p-1", "p-2"]);
+    await db(env)
+      .insert(schema.attendance)
+      .values({ sessionId: SESSION_ID, userId: "p-1", intent: "maybe" });
+
+    // Reading `required` before the rule made this answer `no-quorum-set` — and a
+    // campaign on the veto rule was the one campaign the check could not speak
+    // about at all.
+    expect(await checkJeopardy(env, await target())).toBe("confirmed");
+  });
+
+  it("still never cancels anything", async () => {
+    await roster("gm-1", ["p-1"]);
+    await db(env)
+      .insert(schema.attendance)
+      .values({ sessionId: SESSION_ID, userId: "p-1", intent: "out" });
+
+    await checkJeopardy(env, await target());
+
+    // The rule changed; #1 did not. When the answer is no the response is a date
+    // poll, and this marks the session and leaves the deciding to people.
+    expect(await stateOf()).toBe("JEOPARDY");
+  });
+
+  it("finds an objection on a session that had already been confirmed", async () => {
+    await roster("gm-1", ["p-1", "p-2"]);
+    await db(env)
+      .update(schema.sessions)
+      .set({ state: "CONFIRMED" })
+      .where(eq(schema.sessions.id, SESSION_ID));
+    await db(env)
+      .insert(schema.attendance)
+      .values({ sessionId: SESSION_ID, userId: "p-1", intent: "out" });
+
+    // CONFIRMED is settled under a count and is not under this rule — `vetoed()`
+    // lists it. Answering "confirmed" without looking meant an `out` arriving from
+    // the console after a confirmation was invisible to the clock, over a post
+    // already reading "Can't run as it stands".
+    expect(await checkJeopardy(env, await target())).toBe("in-jeopardy");
+    expect(await stateOf()).toBe("JEOPARDY");
+  });
+
+  it("goes back to counting when the organiser sets a quorum", async () => {
+    await setQuorum(3);
+    await roster("gm-1", ["p-1", "p-2"]);
+    await db(env)
+      .insert(schema.attendance)
+      .values({ sessionId: SESSION_ID, userId: "p-1", intent: "out" });
+
+    // One `out` of three assigned, and two who have said nothing: short of three
+    // either way, but it is the tally that found it and the notice will say so.
+    expect(await checkJeopardy(env, await target())).toBe("in-jeopardy");
+  });
+});
+
+describe("the notice, once there is a roster", () => {
+  beforeEach(async () => {
+    await setQuorum(null);
+    await roster("gm-1", ["p-1", "p-2"]);
+  });
+
+  async function noticeAfterVeto(by = "p-1") {
+    await db(env)
+      .insert(schema.attendance)
+      .values({ sessionId: SESSION_ID, userId: by, intent: "out" });
+    await armJeopardyCheck(env, SESSION_ID, Math.floor(Date.now() / 1000) + 3600);
+    await drainJobs(env);
+    return posted.at(-1)!;
+  }
+
+  it("says the evening has to move, and names who cannot make it", async () => {
+    const notice = await noticeAfterVeto();
+
+    expect(notice.body.content).toContain("This one has to move");
+    expect(notice.body.content).toContain("up-1 cannot make it");
+    // There is no bar, so there is no tally to print against one.
+    expect(notice.body.content).not.toMatch(/\d+ of \d+ in/);
+    expect(notice.body.content).toContain("<@gm-1> decides whether it runs");
+  });
+
+  it("wakes the GM and nobody else", async () => {
+    const mentions = (await noticeAfterVeto()).body.allowed_mentions as {
+      parse: string[];
+      roles: string[];
+      users: string[];
+    };
+
+    // Under this rule silence is already a yes, so pinging everybody who has said
+    // nothing would be waking the table to do nothing about an evening that is not
+    // in doubt for any of them. And the person who cannot make it is named rather
+    // than mentioned: the notice is here to move a date, not to put somebody on
+    // the spot for having a Tuesday.
+    expect(mentions.parse).toEqual([]);
+    expect(mentions.roles).toEqual(["role-1"]);
+    expect(mentions.users).toEqual(["gm-1"]);
+  });
+
+  it("still carries the Suggest a day button", async () => {
+    const notice = await noticeAfterVeto();
+    const rows = notice.body.components as { components: { custom_id: string }[] }[];
+
+    // The next step is a date poll, so the button that opens one has to be on the
+    // message that says a date has to change.
+    expect(rows[0]?.components?.[0]?.custom_id).toContain("suggest");
+  });
+
+  it("goes out for a session the clock finds vetoed, not only a clicked one", async () => {
+    // The whole reason the check still runs the veto rule: an `out` can reach D1
+    // from the console, and somebody can be added to a roster after the post went
+    // up. Neither of those is a click on the post.
+    expect((await noticeAfterVeto()).path).toContain("/messages");
   });
 });

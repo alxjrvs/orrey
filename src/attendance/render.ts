@@ -5,7 +5,7 @@ import { escapeMarkdown } from "../discord/markdown.ts";
 
 export { escapeMarkdown };
 import { suggestRow } from "../polls/buttons.ts";
-import { quorumLine, quorumOf } from "./quorum.ts";
+import { quorumLine, quorumOf, type Quorum } from "./quorum.ts";
 
 /**
  * The attendance post, rendered from D1 and nothing else.
@@ -225,25 +225,46 @@ export function jeopardyNotice({
   target,
   rows,
   gmId,
-  required,
+  quorum,
   asOf,
 }: {
   target: ProjectionTarget;
   rows: AttendanceRow[];
   gmId: string | undefined;
-  required: number;
+  /** The verdict, so the notice says which rule found the session short. */
+  quorum: Quorum;
   asOf: Date;
 }): MessagePayload {
   const { session, campaign } = target;
-  const saidIn = rows.filter((row) => row.intent === "in").length;
   const silent = rows.filter((row) => row.intent === null);
 
-  const lines = [
-    `**Is this one happening?** ${escapeMarkdown(sessionTitle(target))}`,
-    `<t:${session.startsAt}:F> — ${saidIn} of ${required} in.`,
-  ];
+  /**
+   * **Who to chase, and it is not the same people under the two rules.**
+   *
+   * Under a quorum the answer is the silence: those are the people whose click
+   * could still clear the bar, so the notice names them and pings them.
+   *
+   * Under the veto rule silence is already a yes. Pinging everybody who has said
+   * nothing would be waking the whole table to do nothing, about an evening that
+   * is not in doubt for any of them — so nobody is mentioned but the GM, who is
+   * the one with something to do. The people who cannot make it are *named* and
+   * not mentioned: the notice exists to move a date, not to put anybody on the
+   * spot for having a Tuesday.
+   */
+  const veto = quorum.rule === "unanimous";
+  const chased = veto ? [] : silent.map((row) => row.userId);
 
-  if (silent.length > 0) {
+  const lines = veto
+    ? [
+        `**This one has to move.** ${escapeMarkdown(sessionTitle(target))}`,
+        `<t:${session.startsAt}:F> — ${outNames(rows, quorum)} cannot make it.`,
+      ]
+    : [
+        `**Is this one happening?** ${escapeMarkdown(sessionTitle(target))}`,
+        `<t:${session.startsAt}:F> — ${tallyPhrase(quorum)}.`,
+      ];
+
+  if (!veto && silent.length > 0) {
     lines.push(
       "",
       `Not heard from: ${silent.map((row) => `<@${row.userId}>`).join(", ")}`,
@@ -272,9 +293,30 @@ export function jeopardyNotice({
       // Deduplicated: a GM who has not answered is in both lists, and Discord
       // caps this at 100 ids — a list that repeats people runs out sooner than
       // the number of people in it suggests.
-      users: [...new Set([...silent.map((row) => row.userId), ...(gmId ? [gmId] : [])])],
+      users: [...new Set([...chased, ...(gmId ? [gmId] : [])])],
     },
   };
+}
+
+/** Who vetoed it, by display name — the ids are in `quorum.vetoes`. */
+function outNames(rows: AttendanceRow[], quorum: Quorum): string {
+  const out = new Set(quorum.vetoes);
+  const names = rows.filter((row) => out.has(row.userId)).map((row) => escapeMarkdown(row.name));
+  // A veto with no row to name it cannot happen — the ids come from these rows —
+  // but a notice that renders an empty list is worse than one that counts.
+  if (names.length === 0) return `${out.size} of ${quorum.roster}`;
+  return names.join(", ");
+}
+
+/**
+ * The tally, which needs a bar to read against. `required` is null only when
+ * nobody set one, and `checkJeopardy` answers `no-quorum-set` rather than
+ * `in-jeopardy` in that case — so this is unreachable rather than impossible, and
+ * it says the true thing instead of printing "of null".
+ */
+function tallyPhrase(quorum: Quorum): string {
+  const { saidIn, required } = quorum;
+  return required === null ? `${saidIn} in` : `${saidIn} of ${required} in`;
 }
 
 /**
