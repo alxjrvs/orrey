@@ -220,6 +220,38 @@ describe("how it reads", () => {
     );
   });
 
+  it("says on, and nothing that reads like a shortfall", () => {
+    const unanimous = counted({
+      rule: "unanimous",
+      required: null,
+      saidIn: 3,
+      roster: 5,
+      met: true,
+    });
+
+    const content = renderUpcoming([entry({ quorum: unanimous })], ASOF);
+    // "3 of 5 in" over a session that is going ahead is exactly the reading the
+    // veto rule exists to stop, and `/upcoming` is where six of them are skimmed
+    // at once.
+    expect(content).toContain("on");
+    expect(content).not.toMatch(/\d+ of \d+ in/);
+    expect(content).not.toContain("short by");
+  });
+
+  it("says a vetoed session is moving, and how many are out", () => {
+    const vetoed = counted({
+      rule: "unanimous",
+      required: null,
+      saidIn: 2,
+      roster: 4,
+      vetoes: ["p-1"],
+    });
+
+    expect(renderUpcoming([entry({ state: "JEOPARDY", quorum: vetoed })], ASOF)).toContain(
+      "moving — 1 person of 4 out",
+    );
+  });
+
   it("says in jeopardy for a session the clock has marked", () => {
     const content = renderUpcoming(
       [
