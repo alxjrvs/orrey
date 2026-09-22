@@ -118,7 +118,10 @@ describe("the post", () => {
     const post = posts.at(-1)!;
     expect(post.path).toBe("/channels/thread-1/messages");
     expect(post.body.content).toContain("Who came?");
-    expect(post.body.content).toContain("2 of 3");
+    // Three of three: the campaign has a roster and no quorum, so the evening ran
+    // under the veto rule, and `p-2` saying nothing was the rule's own yes rather
+    // than an absence to assume. The toggles are how the GM says otherwise.
+    expect(post.body.content).toContain("3 of 3");
 
     const buttons = (post.body.components as { components: { custom_id: string }[] }[])
       .flatMap((row) => row.components);
