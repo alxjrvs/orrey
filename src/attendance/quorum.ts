@@ -63,6 +63,18 @@ export interface Quorum {
   /** Whether the session has been confirmed at some point. */
   confirmed: boolean;
   /**
+   * The session's own state, carried so the line can be rendered from the verdict
+   * alone.
+   *
+   * `quorumLine` is what the post says about whether the evening is on, and under
+   * the veto rule it says so in words rather than as a tally — which made it the
+   * first version of that line that could be *wrong* rather than merely
+   * uninformative. Refresh is never refused, and `cancelSession` deliberately
+   * leaves the attendance post alone so the next click re-renders it, so a click
+   * on a cancelled session was answered with "**On** — 3 on the roster".
+   */
+  state: string;
+  /**
    * Confirmed, and since fallen below. The post says so and nothing else
    * happens: whether that un-confirms the session is the organiser's call, and
    * #28 is explicit that Orrey surfaces it rather than deciding it.
@@ -101,10 +113,14 @@ export function requiredFor(target: ProjectionTarget): number | null {
  * - **A campaign.** A game day is the other rule by construction: it exists to
  *   find out who is coming, and `games.min_players` is the bar it is looking
  *   for. There is nothing unanimous about a hangout.
- * - **Past FORMING.** A forming campaign's roster is its *claimants*, and a claim
- *   is an expression of interest rather than a seat. Letting one of them veto the
- *   first session would let somebody who has not started playing move a date for
- *   the people who have.
+ * - **RUNNING, and only RUNNING.** A forming campaign's roster is its *claimants*,
+ *   and a claim is an expression of interest rather than a seat — letting one of
+ *   them veto the first session would let somebody who has not started playing
+ *   move a date for the people who have. HIATUS and CONCLUDED are excluded for
+ *   the opposite reason: their sessions are not published (`isProjectable` says
+ *   so) but their posts are still up and still clickable, and a paused campaign
+ *   whose post says "**On**" is Orrey asserting an evening nobody has planned.
+ *   `state !== "FORMING"` caught the first case and let both of those through.
  * - **Somebody on it.** Unanimity across nobody is vacuously true, and "it runs
  *   because there was nobody to object" is exactly the number-computed-from-
  *   nothing this repo keeps refusing to ship. A RUNNING campaign with an empty
@@ -115,7 +131,7 @@ export function requiredFor(target: ProjectionTarget): number | null {
 function isUnanimous(target: ProjectionTarget, roster: number): boolean {
   const { campaign } = target;
   return (
-    campaign !== null && campaign.state !== "FORMING" && campaign.quorum === null && roster > 0
+    campaign !== null && campaign.state === "RUNNING" && campaign.quorum === null && roster > 0
   );
 }
 
@@ -141,6 +157,7 @@ export function quorumOf(target: ProjectionTarget, rows: AttendanceRow[]): Quoru
       vetoes,
       met,
       confirmed,
+      state: target.session.state,
       slipped: confirmed && !met,
     };
   }
@@ -156,6 +173,7 @@ export function quorumOf(target: ProjectionTarget, rows: AttendanceRow[]): Quoru
     vetoes: [],
     met,
     confirmed,
+    state: target.session.state,
     slipped: confirmed && !met,
   };
 }
@@ -216,17 +234,32 @@ export function vetoed(quorum: Quorum, target: ProjectionTarget): boolean {
 
 /** The line the post carries about all this, or nothing when there is no rule to state. */
 export function quorumLine(quorum: Quorum): string | undefined {
-  const { rule, required, saidIn, roster, vetoes, met, confirmed, slipped } = quorum;
+  const { rule, required, saidIn, roster, vetoes, met, confirmed, slipped, state } = quorum;
 
   /**
    * Under the veto rule the line is the rule, not a tally — because the tally is
-   * not what decides. It says what silence means, which is the one thing a
-   * reader has to know before deciding whether to click anything.
+   * not what decides. It says what silence means, which is the one thing a reader
+   * has to know before deciding whether to click anything.
+   *
+   * **And it has to know what the session is**, which a tally never had to. "3 of
+   * 5 in" over a cancelled evening is stale; "**On** — 3 on the roster, press
+   * **Out** if you cannot make it" over one is a lie, and an invitation to press a
+   * button `takesIntent` will refuse. A click on a called-off session re-renders
+   * its post — that is the whole of the send-only design — so this is a line
+   * people will actually be shown.
    */
   if (rule === "unanimous") {
+    if (state === "CANCELLED" || state === "PLAYED") {
+      // The heading, the notice in the thread and the state itself all say what
+      // happened. A line about whether it runs has nothing left to add.
+      return undefined;
+    }
     if (!met) {
       const who = vetoes.length === 1 ? "one person" : `${vetoes.length} people`;
       return `**Can't run as it stands** — ${who} out of ${roster}. A date poll is the next step.`;
+    }
+    if (state === "LOCKED") {
+      return `**On** — ${roster} on the roster, nobody out. Locked: answers are closed.`;
     }
     return `**On** — ${roster} on the roster, nobody out. Silence counts as in; press **Out** if you cannot make it.`;
   }

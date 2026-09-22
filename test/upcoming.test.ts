@@ -27,6 +27,7 @@ const counted = (over: Partial<Quorum> = {}): Quorum => ({
   vetoes: [],
   met: false,
   confirmed: false,
+  state: "SCHEDULED",
   slipped: false,
   ...over,
 });

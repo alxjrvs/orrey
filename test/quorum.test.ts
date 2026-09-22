@@ -347,6 +347,42 @@ describe("the veto rule", () => {
     expect(quorum).toMatchObject({ rule: "quorum", required: 3, saidIn: 1, vetoes: [] });
   });
 
+  it("hands back to quorum for a campaign on hiatus or concluded", async () => {
+    for (const state of ["HIATUS", "CONCLUDED"] as const) {
+      await db(env)
+        .update(schema.campaigns)
+        .set({ state })
+        .where(eq(schema.campaigns.id, "age-of-umbra"));
+
+      // Their sessions are not published — `isProjectable` says so — but their
+      // posts are still up and still clickable. A paused campaign whose post says
+      // "**On**" is Orrey asserting an evening nobody has planned.
+      expect(quorumOf(await target(), [row("1", null)])).toMatchObject({ rule: "quorum" });
+    }
+  });
+
+  it("does not tell a called-off session it is on", async () => {
+    await setState("CANCELLED");
+
+    // Refresh is never refused and cancelling deliberately leaves the post alone,
+    // so this line is one people are actually shown. It used to read "**On** — 1
+    // on the roster … press **Out**", over an evening that was off, at a button
+    // `takesIntent` refuses.
+    expect(quorumLine(quorumOf(await target(), [row("1", null)]))).toBeUndefined();
+  });
+
+  it("stops inviting an answer once the table has stopped moving", async () => {
+    await db(env)
+      .update(schema.sessions)
+      .set({ state: "LOCKED" })
+      .where(eq(schema.sessions.id, SESSION_ID));
+
+    const line = quorumLine(quorumOf(await target(), [row("1", null), row("2", null)]))!;
+    expect(line).toContain("**On**");
+    expect(line).toContain("Locked: answers are closed");
+    expect(line).not.toContain("press **Out**");
+  });
+
   it("hands back to quorum for a campaign that has not started", async () => {
     await db(env)
       .update(schema.campaigns)
