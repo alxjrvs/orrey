@@ -112,16 +112,16 @@ describe("what is assumed", () => {
 
   it("writes the register and marks the session played", async () => {
     await member("said-in", "in");
-    await member("said-out", "out");
     await member("said-maybe", "maybe");
     await member("silent", null);
 
     await assumeAttendance(env, await target());
 
-    // Four roster members and no quorum set, so the evening ran under the veto
-    // rule and everybody who did not say `out` was there.
+    // Three roster members, no quorum set and nobody out, so the evening ran under
+    // the veto rule and everybody it counted in was there. An `out` is not in this
+    // list on purpose: under this rule one is a veto, and a vetoed evening is a
+    // different question — the test below it.
     expect(await register("said-in")).toMatchObject({ attended: 1, attendedSource: "auto" });
-    expect(await register("said-out")).toMatchObject({ attended: 0, attendedSource: "auto" });
     expect(await register("said-maybe")).toMatchObject({ attended: 1, attendedSource: "auto" });
     expect(await register("silent")).toMatchObject({ attended: 1, attendedSource: "auto" });
     expect(await stateOf()).toBe("PLAYED");
@@ -143,6 +143,39 @@ describe("what is assumed", () => {
     expect(await register("said-in")).toMatchObject({ attended: 1 });
     expect(await register("said-maybe")).toMatchObject({ attended: 0 });
     expect(await register("silent")).toMatchObject({ attended: 0 });
+  });
+
+  it("does not count a passer-by's note as having played", async () => {
+    await member("seated", null);
+    // Anybody in the guild can leave a **Note** on a campaign post, and that writes
+    // a row with a null intent. "Silence is in" applied to every row marked them as
+    // having played the session.
+    await db(env)
+      .insert(schema.users)
+      .values({ discordId: "passer-by", username: "passer-by", feedToken: "t-pb" });
+    await db(env)
+      .insert(schema.attendance)
+      .values({ sessionId: SESSION_ID, userId: "passer-by", note: "is this open to anyone?" });
+
+    await assumeAttendance(env, await target());
+
+    expect(await register("seated")).toMatchObject({ attended: 1 });
+    expect(await register("passer-by")).toMatchObject({ attended: 0 });
+  });
+
+  it("does not say an evening ran when the rule said it could not", async () => {
+    await member("said-out", "out");
+    await member("silent", null);
+
+    await assumeAttendance(env, await target());
+
+    // A vetoed session whose poll never resolved still reaches this job at its
+    // original end. Assuming from intent would write "one of two came" about a
+    // night Orrey's own post said could not go ahead, and hand it to flake memory
+    // as played and attended. The correction post is how the GM says they played
+    // anyway.
+    expect(await register("silent")).toMatchObject({ attended: 0, attendedSource: "auto" });
+    expect(await register("said-out")).toMatchObject({ attended: 0 });
   });
 
   it("writes a row for a roster member who never clicked anything", async () => {

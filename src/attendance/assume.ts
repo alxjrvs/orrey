@@ -72,6 +72,22 @@ export interface Assumed {
  * toggle per person. The question is only which way round the organiser has less
  * to correct.
  */
+/**
+ * One thing this cannot tell you: which rule the *last* session ran under.
+ *
+ * The rule is derived at write time and never recorded, so a campaign's history can
+ * be scored under two opposite meanings of silence — a RUNNING campaign with no
+ * roster entered counts silence as absent, and once the roster is in, later sessions
+ * count it as present. `flakeFor` reads both halves as one "came to 3 of 8", and the
+ * PLAYED early return above means the older registers are never revisited.
+ *
+ * Recording it would mean a column, and #173 is explicit that this phase adds none:
+ * a migration that rebuilt `campaigns` would cascade-delete every session
+ * (docs/GOTCHAS.md). The cost is bounded by what flake memory already does about
+ * thin data — under `ENOUGH` played sessions it says nothing at all — and by the
+ * span this can cover, which is the handful of sessions between a campaign starting
+ * and somebody entering its roster. Worth knowing; not worth a column.
+ */
 export function attendedFrom(
   intent: "in" | "out" | "maybe" | null,
   rule: RuleKind = "quorum",
@@ -106,11 +122,39 @@ export async function assumeAttendance(
   // Which rule the evening ran under, asked of the one function that decides it.
   // The register is a statement about what the rule meant, so it cannot be written
   // without knowing which one was in force.
-  const { rule } = quorumOf(target, rows);
+  const { rule, met } = quorumOf(target, rows);
+
+  /**
+   * An evening the rule said could not run is assumed not to have run.
+   *
+   * A vetoed session whose reschedule poll never resolved still reaches this job at
+   * its original end, and assuming from intent alone would write "four of five
+   * came" about a night Orrey's own post said could not go ahead — then hand it to
+   * flake memory as a played-and-attended session.
+   *
+   * So the veto wins over the intents, and it wins *downwards*, which is #31's rule
+   * about which way an assumption should fail: an assumption somebody was absent is
+   * a toggle the organiser can see and flip, and an assumption they were there is
+   * invisible when it is wrong. If the table played without one person, the
+   * correction post is a few taps and the truth; if it did not play, this is
+   * already right.
+   */
+  const couldNotRun = rule === "unanimous" && !met;
+
   const assumed: Assumed[] = rows.map((row) => ({
     userId: row.userId,
     name: row.name,
-    attended: attendedFrom(row.intent, rule),
+    /**
+     * Per person, and not per session.
+     *
+     * `quorumOf` scopes both the roster count and the veto list to `onRoster`, so
+     * the register has to be scoped the same way or the two disagree about the same
+     * evening. Anyone in the guild can leave a **Note** on a campaign post — that
+     * writes a row with a null intent — so "silence is in" applied to every row
+     * marked a passer-by as having played, and a player dropped from the roster
+     * before the session too.
+     */
+    attended: couldNotRun ? false : attendedFrom(row.intent, row.onRoster ? rule : "quorum"),
   }));
 
   const d = db(env);

@@ -158,6 +158,15 @@ describe("the post", () => {
 
 describe("the toggle", () => {
   beforeEach(async () => {
+    // Under a count, so that `out` is somebody who is not coming rather than a veto
+    // that says the evening could not run — which would assume everybody absent and
+    // make this a test about the veto rule instead of about the toggle. The toggle
+    // itself is rule-agnostic, and `test/assume.test.ts` is where each rule's
+    // register is pinned.
+    await db(env)
+      .update(schema.campaigns)
+      .set({ quorum: 3 })
+      .where(eq(schema.campaigns.id, "age-of-umbra"));
     await member(GM, "gm", "in");
     await member("p-1", "player", "out");
     await armAssume(env, SESSION_ID, Math.floor(Date.now() / 1000) - 60);
