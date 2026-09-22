@@ -2,10 +2,10 @@ import { DurableObject } from "cloudflare:workers";
 import { and, eq, sql } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
-import { SESSION_CONFIRMED } from "../db/audit.ts";
+import { SESSION_CONFIRMED, SESSION_VETOED } from "../db/audit.ts";
 import { rememberUser } from "../db/users.ts";
 import { attendanceRows } from "../attendance/rows.ts";
-import { crossesThreshold, quorumOf } from "../attendance/quorum.ts";
+import { crossesThreshold, quorumOf, vetoed } from "../attendance/quorum.ts";
 import { loadProjectionTarget } from "../projection/target.ts";
 import {
   capacityOf,
@@ -16,6 +16,8 @@ import {
 } from "../game-days/signups.ts";
 import { promoteFromWaitlist } from "../game-days/promote.ts";
 import { moveSession } from "../polls/move.ts";
+import { RESCHEDULE_JOB } from "../polls/reschedule.ts";
+import { rearmStatement } from "../jobs/arm.ts";
 import type { AttendanceRow } from "../attendance/render.ts";
 import type { InteractionUser } from "../discord/types.ts";
 
@@ -237,7 +239,71 @@ export class SessionLock extends DurableObject<Env> {
     const target = await loadProjectionTarget(this.env, sessionId);
     if (!target) return rows;
 
-    if (crossesThreshold(quorumOf(target, rows), target)) {
+    const quorum = quorumOf(target, rows);
+
+    /**
+     * Somebody on the roster cannot make it, under a rule where that is the
+     * whole answer. The evening has to move.
+     *
+     * One batch, for the reason the confirmation below is one: a session marked
+     * JEOPARDY with nothing armed to ask about a new date is a table left
+     * looking at a post that says the date will not work and offers nothing —
+     * and a reschedule armed without the state written would ask about a date
+     * nothing said was a problem.
+     *
+     * The poll is a job and not a call made here. A click has three seconds and
+     * has to spend them rewriting its own message; a poll is a D1 batch plus a
+     * Discord post, which is exactly what this repo puts on the next drain.
+     */
+    if (vetoed(quorum, target)) {
+      const d = db(this.env);
+      // The first of them, when several have said out. `openedBy` is one column,
+      // the poll is one question, and all of them are asking it.
+      const by = quorum.vetoes[0] as string;
+
+      await d.batch([
+        d
+          .update(schema.sessions)
+          .set({ state: "JEOPARDY", updatedAt: sql`(unixepoch())` })
+          // Guarded on what this read saw, like the clock's write is: LOCKED,
+          // CANCELLED and PLAYED cannot be reached from here — `takesIntent`
+          // refuses the click first — but a cancel landing between the read and
+          // this write must not be undone by it.
+          .where(
+            and(
+              eq(schema.sessions.id, sessionId),
+              sql`${schema.sessions.state} IN ('SCHEDULED', 'CONFIRMED', 'JEOPARDY')`,
+            ),
+          ),
+
+        // Re-armed rather than added, which is what makes a second veto free and
+        // a veto of an already-moved date work. What stops two polls about one
+        // evening is `date_polls_one_open_per_session`, not this row.
+        rearmStatement(d, [
+          {
+            id: `${RESCHEDULE_JOB}:${sessionId}`,
+            kind: RESCHEDULE_JOB,
+            payload: { sessionId, by },
+            runAt: Math.floor(Date.now() / 1000),
+          },
+        ]),
+
+        // Whose decision it was. The one state change here that a count did not
+        // make, so unlike `SESSION_CONFIRMED` this row names somebody.
+        d.insert(schema.auditLog).values({
+          id: crypto.randomUUID(),
+          actorUserId: by,
+          action: SESSION_VETOED,
+          targetType: "session",
+          targetId: sessionId,
+          detail: { before: target.session.state, after: "JEOPARDY", roster: quorum.roster },
+        }),
+      ]);
+
+      return rows;
+    }
+
+    if (crossesThreshold(quorum, target)) {
       const d = db(this.env);
       await d.batch([
         d
@@ -279,7 +345,7 @@ export class SessionLock extends DurableObject<Env> {
           action: SESSION_CONFIRMED,
           targetType: "session",
           targetId: sessionId,
-          detail: { required: quorumOf(target, rows).required },
+          detail: { required: quorum.required },
         }),
       ]);
     }

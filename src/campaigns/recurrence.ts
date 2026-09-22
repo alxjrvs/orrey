@@ -73,6 +73,21 @@ export function occurrencesFrom(cadence: Cadence): Occurrence[] {
   return occurrences;
 }
 
+/**
+ * The same time of day, `days` later, in that zone.
+ *
+ * The public face of the pair below, for the callers that want one date rather
+ * than a cadence — `p8/3` proposing the days around a session somebody cannot
+ * make. It is the same two steps `occurrencesFrom` takes, and it is exported
+ * rather than reimplemented for the reason this file exists at all: adding days
+ * to a calendar date keeps 20:30 at 20:30 across a DST change, and adding seconds
+ * does not. A reschedule that quietly moved a game an hour earlier because the
+ * clocks went back would be the same bug in a new place.
+ */
+export function sameTimeDaysLater(from: number, days: number, timeZone: string): number {
+  return startOf(wallClockOf(from, timeZone), days, timeZone);
+}
+
 /** The anchor as somebody in that zone would read it off a clock. */
 export interface WallClock {
   year: number;
