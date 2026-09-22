@@ -11,6 +11,25 @@ import {
   upcomingWithTotal,
   type UpcomingEntry,
 } from "../src/commands/upcoming.ts";
+import type { Quorum } from "../src/attendance/quorum.ts";
+
+/**
+ * A verdict under the counting rule, which is the one `/upcoming` has always
+ * rendered. `p8/1` added two fields to the shape and a second rule that answers
+ * with them; what this file is about is the wording of a tally, so it states the
+ * rule it means rather than leaning on a default.
+ */
+const counted = (over: Partial<Quorum> = {}): Quorum => ({
+  rule: "quorum",
+  required: null,
+  saidIn: 0,
+  roster: 0,
+  vetoes: [],
+  met: false,
+  confirmed: false,
+  slipped: false,
+  ...over,
+});
 
 /**
  * The agenda. One list across every campaign, read fresh, ephemeral — and the
@@ -160,7 +179,7 @@ describe("how it reads", () => {
     title: "Age of Umbra — Session 1",
     startsAt: NOW + 3 * DAY,
     state: "SCHEDULED",
-    quorum: { required: null, saidIn: 0, met: false, confirmed: false, slipped: false },
+    quorum: counted(),
     mine: null,
     ...over,
   });
@@ -175,7 +194,7 @@ describe("how it reads", () => {
 
   it("says how many more it takes, not just the tally", () => {
     const content = renderUpcoming(
-      [entry({ quorum: { required: 4, saidIn: 2, met: false, confirmed: false, slipped: false } })],
+      [entry({ quorum: counted({ required: 4, saidIn: 2 }) })],
       ASOF,
     );
 
@@ -189,12 +208,12 @@ describe("how it reads", () => {
   });
 
   it("says confirmed, and says when a confirmed session has slipped", () => {
-    const confirmed = { required: 3, saidIn: 3, met: true, confirmed: true, slipped: false };
+    const confirmed = counted({ required: 3, saidIn: 3, met: true, confirmed: true });
     expect(renderUpcoming([entry({ state: "CONFIRMED", quorum: confirmed })], ASOF)).toContain(
       "confirmed",
     );
 
-    const slipped = { required: 3, saidIn: 1, met: false, confirmed: true, slipped: true };
+    const slipped = counted({ required: 3, saidIn: 1, confirmed: true, slipped: true });
     expect(renderUpcoming([entry({ state: "CONFIRMED", quorum: slipped })], ASOF)).toContain(
       "confirmed, 1 of 3 in now",
     );
@@ -205,7 +224,7 @@ describe("how it reads", () => {
       [
         entry({
           state: "JEOPARDY",
-          quorum: { required: 4, saidIn: 1, met: false, confirmed: false, slipped: false },
+          quorum: counted({ required: 4, saidIn: 1 }),
         }),
       ],
       ASOF,

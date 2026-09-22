@@ -124,9 +124,9 @@ describe("who the post asks", () => {
 
     const rows = await attendanceRows(env, SESSION_ID);
     expect(rows).toEqual([
-      { userId: "p0", name: "Player p0", intent: null, note: null },
-      { userId: "p1", name: "Player p1", intent: null, note: null },
-      { userId: "p2", name: "Player p2", intent: null, note: null },
+      { userId: "p0", name: "Player p0", intent: null, note: null, onRoster: true },
+      { userId: "p1", name: "Player p1", intent: null, note: null, onRoster: true },
+      { userId: "p2", name: "Player p2", intent: null, note: null, onRoster: true },
     ]);
   });
 

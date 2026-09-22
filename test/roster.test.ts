@@ -127,8 +127,8 @@ describe("the post, now that there is a roster", () => {
       .values({ sessionId: SESSION_ID, userId: "1", intent: "in" });
 
     expect(await attendanceRows(env, SESSION_ID)).toEqual([
-      { userId: "1", name: "Ada", intent: "in", note: null },
-      { userId: "2", name: "Bob", intent: null, note: null },
+      { userId: "1", name: "Ada", intent: "in", note: null, onRoster: true },
+      { userId: "2", name: "Bob", intent: null, note: null, onRoster: true },
     ]);
   });
 
@@ -182,8 +182,8 @@ describe("a shortened post still accounts for everybody", () => {
     const target = (await loadProjectionTarget(env, SESSION_ID))!;
 
     const rows = [
-      { userId: "1", name: "Ada", intent: null, note: "running late" },
-      { userId: "2", name: "Bob", intent: null, note: null },
+      { userId: "1", name: "Ada", intent: null, note: "running late", onRoster: true },
+      { userId: "2", name: "Bob", intent: null, note: null, onRoster: true },
     ] as const;
 
     const full = renderAttendancePost({ target, rows: [...rows], asOf: new Date() });
@@ -198,6 +198,7 @@ describe("a shortened post still accounts for everybody", () => {
       name: `Somebody With A Fairly Long Display Name ${i}`,
       intent: null,
       note: `a note that is long enough to matter ${i}`,
+      onRoster: true,
     }));
     const shortened = renderAttendancePost({
       target,
