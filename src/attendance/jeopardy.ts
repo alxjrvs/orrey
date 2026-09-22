@@ -60,6 +60,23 @@ export async function armJeopardyCheck(
 
 export type JeopardyOutcome = "confirmed" | "in-jeopardy" | "no-quorum-set" | "not-waiting";
 
+/** The states a session can still be found short — or objected to — in. */
+const WATCHED = new Set(["SCHEDULED", "JEOPARDY", "CONFIRMED"]);
+
+/**
+ * The label the day-out notice is claimed under — **the date, not the session**.
+ *
+ * `postNoticeOnce` makes a notice once per label, and a session-scoped label made
+ * it once per *session*: a vetoed evening moved by a date poll, then vetoed again
+ * on its new date, found the old claim standing and posted nothing. The table
+ * would have been told the first time and never again, however many dates the
+ * campaign worked through. `moveSession` already date-scopes its own notice for
+ * exactly this reason.
+ */
+export function jeopardyLabel(startsAt: number): string {
+  return `jeopardy:${startsAt}`;
+}
+
 /**
  * What the check found. It writes `sessions.state` and nothing else — no notice,
  * no cancellation. #29 is explicit that when the answer is no the response is a
@@ -78,19 +95,29 @@ export async function checkJeopardy(
 ): Promise<JeopardyOutcome> {
   const { session } = target;
 
-  // Already confirmed, already cancelled, already played. None of these is a
-  // session waiting to find out whether it runs.
-  //
-  // **JEOPARDY is not one of them.** A session already marked short is one this
-  // check has run on before — and the run that marked it may well have failed to
-  // post the notice afterwards. Answering "not-waiting" here made the state
-  // write the thing that enforced "once", so a single refused Discord call lost
-  // the notice for ever: the retry could never reach the post again. The claim
-  // in `postNoticeOnce` is what makes it once; this only has to be honest about
-  // what it found.
-  if (session.state !== "SCHEDULED" && session.state !== "JEOPARDY") {
-    return session.state === "CONFIRMED" ? "confirmed" : "not-waiting";
-  }
+  /**
+   * Cancelled, played, locked: none of these is a session waiting to find out
+   * whether it runs.
+   *
+   * **JEOPARDY is not one of them.** A session already marked short is one this
+   * check has run on before — and the run that marked it may well have failed to
+   * post the notice afterwards. Answering "not-waiting" here made the state write
+   * the thing that enforced "once", so a single refused Discord call lost the
+   * notice for ever: the retry could never reach the post again. The claim in
+   * `postNoticeOnce` is what makes it once; this only has to be honest about what
+   * it found.
+   *
+   * **And nor, any longer, is CONFIRMED.** Under a count it is settled and stays
+   * settled — #28 is explicit that dropping below does not un-confirm, and the
+   * clock is not the thing that overrules that — so the early answer for it moved
+   * below the verdict rather than disappearing. Under the veto rule it is not
+   * settled at all: `vetoed()` lists CONFIRMED among the states an objection acts
+   * on, and answering "confirmed" here without looking meant an `out` that
+   * arrived from the console after a confirmation was invisible to the clock,
+   * over a post already reading "Can't run as it stands". Catching exactly that
+   * is why the clock runs this rule at all.
+   */
+  if (!WATCHED.has(session.state)) return "not-waiting";
 
   const quorum = quorumOf(target, await attendanceRows(env, session.id));
 
@@ -106,6 +133,9 @@ export async function checkJeopardy(
    * vetoed.
    */
   if (quorum.rule === "quorum" && quorum.required === null) return "no-quorum-set";
+  // #28's rule, now that CONFIRMED reaches the verdict: under a count, confirmed
+  // is confirmed however few are in.
+  if (quorum.rule === "quorum" && session.state === "CONFIRMED") return "confirmed";
   if (quorum.met) return "confirmed";
 
   /**
@@ -126,7 +156,26 @@ export async function checkJeopardy(
     .where(
       and(
         eq(schema.sessions.id, session.id),
-        inArray(schema.sessions.state, ["SCHEDULED", "JEOPARDY"]),
+        /**
+         * The guard depends on the rule, and it has to.
+         *
+         * Under a count, CONFIRMED is what the clock must never overwrite — a
+         * click crossing quorum between the read above and this write is newer
+         * information than a tally read a moment ago, and the early answer for
+         * CONFIRMED cannot cover it because that answer reads the *stale* state
+         * this call was handed. The guard is the only thing that sees the row as
+         * it is now. `test/jeopardy.test.ts` pins it.
+         *
+         * Under the veto rule there is no such race to lose: nothing writes
+         * CONFIRMED at all (`crossesThreshold` declines), so any CONFIRMED row is
+         * an older one or an organiser's, and marking it is exactly the point.
+         */
+        inArray(
+          schema.sessions.state,
+          quorum.rule === "unanimous"
+            ? ["SCHEDULED", "JEOPARDY", "CONFIRMED"]
+            : ["SCHEDULED", "JEOPARDY"],
+        ),
       ),
     );
 

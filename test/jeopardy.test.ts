@@ -212,6 +212,55 @@ describe("what the check writes", () => {
     expect(await stateOf()).toBe("SCHEDULED");
   });
 
+  it("says nothing when the objection was taken back before the drain ran", async () => {
+    await setQuorum(null);
+    await roster("gm-1", ["p-1"]);
+    await db(env)
+      .insert(schema.attendance)
+      .values({ sessionId: SESSION_ID, userId: "p-1", intent: "out" });
+    await armJeopardyCheck(env, SESSION_ID, Math.floor(Date.now() / 1000) + 3600);
+    await checkJeopardy(env, await target());
+
+    // Marked, and then withdrawn before the notice went out. The notice keys on
+    // the rule rather than the outcome, so it used to take the veto branch anyway
+    // and announce "0 of 1 cannot make it".
+    await db(env)
+      .update(schema.attendance)
+      .set({ intent: "in" })
+      .where(eq(schema.attendance.userId, "p-1"));
+    posted = [];
+
+    await drainJobs(env);
+
+    expect(posted).toEqual([]);
+  });
+
+  it("tells the table again when a second date is vetoed too", async () => {
+    await setQuorum(null);
+    await roster("gm-1", ["p-1"]);
+    await db(env)
+      .insert(schema.attendance)
+      .values({ sessionId: SESSION_ID, userId: "p-1", intent: "out" });
+
+    await armJeopardyCheck(env, SESSION_ID, Math.floor(Date.now() / 1000) + 3600);
+    await drainJobs(env);
+    const first = posted.length;
+
+    // The evening moves, and the new date does not work either. A session-scoped
+    // claim meant the table was told once and never again, however many dates the
+    // campaign worked through.
+    const moved = STARTS_AT + 7 * 86_400;
+    await db(env)
+      .update(schema.sessions)
+      .set({ startsAt: moved, endsAt: moved + 4 * 3600, state: "SCHEDULED" })
+      .where(eq(schema.sessions.id, SESSION_ID));
+    await armJeopardyCheck(env, SESSION_ID, Math.floor(Date.now() / 1000) + 3600);
+    await drainJobs(env);
+
+    expect(first).toBeGreaterThan(0);
+    expect(posted.length).toBeGreaterThan(first);
+  });
+
   it("leaves a confirmed session confirmed, however few are in now", async () => {
     await db(env)
       .update(schema.sessions)
@@ -420,6 +469,24 @@ describe("what the check writes, once there is a roster", () => {
 
     // The rule changed; #1 did not. When the answer is no the response is a date
     // poll, and this marks the session and leaves the deciding to people.
+    expect(await stateOf()).toBe("JEOPARDY");
+  });
+
+  it("finds an objection on a session that had already been confirmed", async () => {
+    await roster("gm-1", ["p-1", "p-2"]);
+    await db(env)
+      .update(schema.sessions)
+      .set({ state: "CONFIRMED" })
+      .where(eq(schema.sessions.id, SESSION_ID));
+    await db(env)
+      .insert(schema.attendance)
+      .values({ sessionId: SESSION_ID, userId: "p-1", intent: "out" });
+
+    // CONFIRMED is settled under a count and is not under this rule — `vetoed()`
+    // lists it. Answering "confirmed" without looking meant an `out` arriving from
+    // the console after a confirmation was invisible to the clock, over a post
+    // already reading "Can't run as it stands".
+    expect(await checkJeopardy(env, await target())).toBe("in-jeopardy");
     expect(await stateOf()).toBe("JEOPARDY");
   });
 

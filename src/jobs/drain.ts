@@ -6,7 +6,7 @@ import { surfacesFor } from "../campaigns/event-cap.ts";
 import { postAttendancePost } from "../attendance/post.ts";
 import { startSessionThread } from "../attendance/thread.ts";
 import { postNoticeOnce } from "../attendance/notice.ts";
-import { checkJeopardy } from "../attendance/jeopardy.ts";
+import { checkJeopardy, jeopardyLabel } from "../attendance/jeopardy.ts";
 import { sendReminder } from "../attendance/reminders.ts";
 import { assumeAttendance, registerRows } from "../attendance/assume.ts";
 import { gmOf } from "../campaigns/roster.ts";
@@ -178,16 +178,32 @@ async function runJob(job: typeof schema.jobs.$inferSelect, env: Env): Promise<v
       // returned null and the notice was skipped for the one session that most
       // needed one.
       const rows = await attendanceRows(env, sessionId);
+      const quorum = quorumOf(target, rows);
+
+      /**
+       * Read again, and it can disagree with the one the check made.
+       *
+       * `checkJeopardy` reads the rows, decides, and returns; this reads them a
+       * second time to render. A veto withdrawn between the two leaves the session
+       * marked with nobody out — and the notice keys on the *rule*, so it took the
+       * veto branch anyway and announced "**This one has to move.** … 0 of 3
+       * cannot make it", which is the fallback `outNames` calls impossible. There
+       * is nothing to say about an objection that has been taken back.
+       */
+      if (quorum.rule === "unanimous" && quorum.vetoes.length === 0) return;
 
       await postNoticeOnce(
         env,
         target,
-        "jeopardy",
+        // The date and not the session: a vetoed evening moved by a date poll and
+        // vetoed again on its new date found the old claim standing and posted
+        // nothing at all.
+        jeopardyLabel(target.session.startsAt),
         jeopardyNotice({
           target,
           rows,
           gmId: target.campaign ? await gmOf(env, target.campaign.id) : undefined,
-          quorum: quorumOf(target, rows),
+          quorum,
           asOf: new Date(),
         }),
       );
