@@ -1,8 +1,9 @@
-import { and, asc, count, eq, gte, inArray, lt } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, lt } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
 import { SETTING_DEFAULTS, SETTING_KEYS } from "../db/settings.ts";
 import { quorumOf, type Quorum } from "../attendance/quorum.ts";
+import type { AttendanceRow } from "../attendance/render.ts";
 import { isProjectable, sessionTitle, type ProjectionTarget } from "../projection/target.ts";
 
 /**
@@ -106,7 +107,7 @@ export async function agendaBetween(
   if (live.length === 0) return { asOf: unix(asOf), rows: [] };
 
   const answers = await answersFor(env, live.map(({ session }) => session.id));
-  const rosters = await rosterSizes(
+  const rosters = await rosterMembers(
     env,
     live.map(({ campaign }) => campaign?.id).filter((id): id is string => id !== undefined && id !== null),
     live.map(({ gameDay }) => gameDay?.id).filter((id): id is string => id !== undefined && id !== null),
@@ -116,11 +117,12 @@ export async function agendaBetween(
     asOf: unix(asOf),
     rows: live.map((row) => {
       const said = answers.get(row.session.id) ?? [];
-      const rosterSize = row.campaign
-        ? (rosters.campaigns.get(row.campaign.id) ?? 0)
+      const assigned = row.campaign
+        ? (rosters.campaigns.get(row.campaign.id) ?? [])
         : row.gameDay
-          ? (rosters.days.get(row.gameDay.id) ?? 0)
-          : 0;
+          ? (rosters.days.get(row.gameDay.id) ?? [])
+          : [];
+      const rosterSize = assigned.length;
 
       const tally = tallyOf(said, rosterSize);
 
@@ -138,8 +140,11 @@ export async function agendaBetween(
         rosterSize,
         tally,
         // `quorumOf` is the same function the attendance post and `/upcoming`
-        // render from, given the same rows. Nothing here re-derives it.
-        quorum: quorumOf(row.target, said.map(asAttendanceRow)),
+        // render from, given the same rows. Nothing here re-derives it — and
+        // "the same rows" now has to include the silence, because the veto rule
+        // reads who is assigned and not only who answered. A page given the
+        // answers alone would see a roster of however many people had clicked.
+        quorum: quorumOf(row.target, rowsFor(said, assigned)),
         inJeopardy: row.session.state === "JEOPARDY",
       };
     }),
@@ -163,8 +168,31 @@ interface Said {
   note: string | null;
 }
 
-function asAttendanceRow(said: Said) {
-  return { userId: said.userId, name: said.userId, intent: said.intent, note: said.note };
+/**
+ * The answers and the silence, in the shape `quorumOf` reads — the same set
+ * `attendanceRows` builds for the post, assembled from a batched query instead of
+ * one per session.
+ *
+ * The display name is the id: nothing on this path renders a name, and the rail
+ * that does asks `session-detail` for it. A name fetched here would be a join per
+ * row for a string thrown away.
+ */
+function rowsFor(said: Said[], assigned: string[]): AttendanceRow[] {
+  const onRoster = new Set(assigned);
+  const answered = said.map((row) => ({
+    userId: row.userId,
+    name: row.userId,
+    intent: row.intent,
+    note: row.note,
+    onRoster: onRoster.has(row.userId),
+  }));
+
+  const heard = new Set(said.map((row) => row.userId));
+  const silent = assigned
+    .filter((userId) => !heard.has(userId))
+    .map((userId) => ({ userId, name: userId, intent: null, note: null, onRoster: true }));
+
+  return [...answered, ...silent];
 }
 
 function tallyOf(said: Said[], rosterSize: number): AgendaTally {
@@ -205,29 +233,42 @@ async function answersFor(env: Env, sessionIds: string[]): Promise<Map<string, S
 }
 
 /**
- * How many people each roster holds.
+ * Who each roster holds.
  *
  * A campaign's is `campaign_members`; a game day's is its **seated** signups,
- * which is the same answer `attendanceRows` gives. Two grouped counts rather
+ * which is the same answer `attendanceRows` gives. Two grouped queries rather
  * than one per row.
+ *
+ * The ids and not a count, since `p8/1`: the veto rule has to know *which* people
+ * are assigned to tell an objection from a seat that has been given up, and
+ * `rosterSize` is `.length` of the same answer. One query cannot be wrong about
+ * two things; two queries counting the same rows two ways eventually are.
  */
-async function rosterSizes(env: Env, campaignIds: string[], gameDayIds: string[]) {
-  const campaigns = new Map<string, number>();
-  const days = new Map<string, number>();
+async function rosterMembers(env: Env, campaignIds: string[], gameDayIds: string[]) {
+  const campaigns = new Map<string, string[]>();
+  const days = new Map<string, string[]>();
+
+  const push = (into: Map<string, string[]>, key: string, userId: string) => {
+    const list = into.get(key) ?? [];
+    list.push(userId);
+    into.set(key, list);
+  };
 
   if (campaignIds.length > 0) {
     const rows = await db(env)
-      .select({ campaignId: schema.campaignMembers.campaignId, n: count() })
+      .select({
+        campaignId: schema.campaignMembers.campaignId,
+        userId: schema.campaignMembers.userId,
+      })
       .from(schema.campaignMembers)
       .where(inArray(schema.campaignMembers.campaignId, campaignIds))
-      .groupBy(schema.campaignMembers.campaignId)
       .all();
-    for (const row of rows) campaigns.set(row.campaignId, row.n);
+    for (const row of rows) push(campaigns, row.campaignId, row.userId);
   }
 
   if (gameDayIds.length > 0) {
     const rows = await db(env)
-      .select({ targetId: schema.signups.targetId, n: count() })
+      .select({ targetId: schema.signups.targetId, userId: schema.signups.userId })
       .from(schema.signups)
       .where(
         and(
@@ -236,9 +277,8 @@ async function rosterSizes(env: Env, campaignIds: string[], gameDayIds: string[]
           inArray(schema.signups.targetId, gameDayIds),
         ),
       )
-      .groupBy(schema.signups.targetId)
       .all();
-    for (const row of rows) days.set(row.targetId, row.n);
+    for (const row of rows) push(days, row.targetId, row.userId);
   }
 
   return { campaigns, days };

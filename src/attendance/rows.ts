@@ -36,24 +36,34 @@ export async function attendanceRows(env: Env, sessionId: string): Promise<Atten
     .orderBy(asc(schema.attendance.updatedAt), asc(schema.attendance.userId))
     .all();
 
+  // Asked before the answers are shaped, because whether somebody is *on* the
+  // roster is now part of the row rather than a second list appended to it: the
+  // veto rule reads it, and an `out` from somebody who has left the table must
+  // not hold an evening the table is still having.
+  const roster = await rosterFor(env, sessionId);
+  const assigned = new Set(roster.map((member) => member.userId));
+
   const answered: AttendanceRow[] = rows.map((row) => ({
     userId: row.userId,
     name: row.globalName ?? row.username ?? `<@${row.userId}>`,
     intent: row.intent,
     note: row.note,
+    onRoster: assigned.has(row.userId),
   }));
 
   // Anyone already holding a row is already in the list, whatever they said —
   // including somebody who has since left the roster, because they answered and
   // that answer is still true of them.
   const heard = new Set(answered.map((row) => row.userId));
-  const silent = (await rosterFor(env, sessionId))
+  const silent = roster
     .filter((member) => !heard.has(member.userId))
     .map((member) => ({
       userId: member.userId,
       name: member.name,
       intent: null,
       note: null,
+      // By definition: this list *is* the roster.
+      onRoster: true,
     }));
 
   return [...answered, ...silent];

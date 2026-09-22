@@ -48,7 +48,8 @@ const row = (
   name: string,
   intent: AttendanceRow["intent"],
   note: string | null = null,
-): AttendanceRow => ({ userId, name, intent, note });
+  onRoster = true,
+): AttendanceRow => ({ userId, name, intent, note, onRoster });
 
 beforeEach(async () => {
   posts = [];
@@ -113,7 +114,10 @@ describe("rendering the post", () => {
     const content = (await render([row("1", "Ada", null)])()).content;
     expect(content).toContain("**Not heard from (1)** — Ada");
     expect(content).not.toContain("Nobody has said yet");
-    expect(content).not.toContain("Out");
+    // The tally, not the word: since `p8/1` the answer line under the veto rule
+    // names the **Out** button, which is the opposite of reading silence as out —
+    // it is telling the one person who cannot make it how to say so.
+    expect(content).not.toContain("**Out (");
   });
 
   it("shows a note beside the name that left it", async () => {
@@ -212,9 +216,12 @@ describe("posting it", () => {
       { sessionId: SESSION_ID, userId: "2", intent: "out", updatedAt: 2_000 },
     ]);
 
+    // `onRoster` is false for both: they answered, and nothing put them on
+    // `campaign_members`. An answer is still an answer — the tallies count it —
+    // but the veto rule reads a seat, and neither of these is one.
     expect(await attendanceRows(env, SESSION_ID)).toEqual([
-      { userId: "1", name: "Ada", intent: "in", note: null },
-      { userId: "2", name: "bob", intent: "out", note: null },
+      { userId: "1", name: "Ada", intent: "in", note: null, onRoster: false },
+      { userId: "2", name: "bob", intent: "out", note: null, onRoster: false },
     ]);
   });
 });

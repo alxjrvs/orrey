@@ -24,6 +24,21 @@ export interface AttendanceRow {
   name: string;
   intent: "in" | "out" | "maybe" | null;
   note: string | null;
+  /**
+   * Whether this person is *assigned* to the session, rather than somebody who
+   * answered about it.
+   *
+   * Nearly everybody is both. The two come apart for exactly one person — one who
+   * answered and has since left the roster — and that person is why this is a
+   * field rather than an assumption. Under the veto rule a single `out` moves the
+   * evening, and an `out` left behind by somebody no longer at the table would
+   * move it for ever, with nothing anyone could click to put it back.
+   *
+   * So the rule reads this and not the answer alone: a veto is a seat saying it
+   * cannot make the date. The tallies above go on counting every answer, because
+   * an answer is still true of the person who gave it.
+   */
+  onRoster: boolean;
 }
 
 export interface AttendanceView {
