@@ -5,7 +5,7 @@ import { escapeMarkdown } from "../discord/markdown.ts";
 
 export { escapeMarkdown };
 import { suggestRow } from "../polls/buttons.ts";
-import { quorumLine, quorumOf, type Quorum } from "./quorum.ts";
+import { quorumLine, quorumOf, type Quorum, type RuleKind } from "./quorum.ts";
 
 /**
  * The attendance post, rendered from D1 and nothing else.
@@ -324,7 +324,11 @@ function tallyPhrase(quorum: Quorum): string {
  * post and every button in this repo sits on the thing it concerns — so it says
  * where to answer instead, and the link takes them there.
  */
-export function remindDm(target: ProjectionTarget, hours: number): MessagePayload {
+export function remindDm(
+  target: ProjectionTarget,
+  hours: number,
+  rule: RuleKind = "quorum",
+): MessagePayload {
   const { session, campaign } = target;
   const where =
     campaign?.discordChannelId && session.discordMessageId
@@ -334,12 +338,32 @@ export function remindDm(target: ProjectionTarget, hours: number): MessagePayloa
   return {
     content: [
       `**${escapeMarkdown(sessionTitle(target))}** — ${inWords(hours)}.`,
-      `<t:${session.startsAt}:F>. You have not said whether you are coming.`,
+      `<t:${session.startsAt}:F>. ${nudge(rule)}`,
       ...(where ? [where] : ["Answer on the attendance post."]),
     ].join("\n"),
     components: [],
     allowed_mentions: { parse: [], roles: [] },
   };
+}
+
+/**
+ * What the nudge is actually asking for, which is not the same thing under the
+ * two rules.
+ *
+ * Under a quorum it is asking for an answer: the tally cannot clear a bar without
+ * one, and somebody who has said nothing is a gap in it.
+ *
+ * Under the veto rule it is asking for *nothing*, and saying so is the point. They
+ * are already counted in; the reminder exists because this is their last easy
+ * chance to say they cannot make it, and telling somebody they "have not said" when
+ * the rule already took their silence as yes is telling them to do something that
+ * has no effect. It is also the sentence most likely to make a table start
+ * answering a post it never had to answer.
+ */
+function nudge(rule: RuleKind): string {
+  return rule === "unanimous"
+    ? "You are down as **in** — silence counts as coming. Press **Out** only if you cannot make it."
+    : "You have not said whether you are coming.";
 }
 
 /**
@@ -351,12 +375,15 @@ export function remindInThread(
   target: ProjectionTarget,
   hours: number,
   userIds: string[],
+  rule: RuleKind = "quorum",
 ): MessagePayload {
   return {
     content: [
       `${userIds.map((id) => `<@${id}>`).join(" ")} — ${inWords(hours)}.`,
       `**${escapeMarkdown(sessionTitle(target))}**, <t:${target.session.startsAt}:F>.`,
-      "Answering on the post above is what changes it.",
+      rule === "unanimous"
+        ? "You are down as in. Say so on the post above only if you cannot make it."
+        : "Answering on the post above is what changes it.",
     ].join("\n"),
     components: [],
     allowed_mentions: { parse: [], roles: [], users: [...new Set(userIds)] },

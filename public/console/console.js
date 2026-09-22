@@ -234,6 +234,34 @@ function segmented(options, value, onChange) {
   return wrap;
 }
 
+/**
+ * Does it run, in a phrase — the same answer the attendance post gives.
+ *
+ * Under the veto rule a tally is the wrong shape of sentence: "3 of 5 in" over a
+ * session that is going ahead reads as a shortfall, and the campaign has no bar to
+ * be short of. So the line is the standing, and the counts stay in the bar beside
+ * it where they belong.
+ *
+ * `tally` is optional because the session rail has no bar to explain and nothing to
+ * say about who has not answered.
+ */
+function standingLine(quorum, tally) {
+  if (quorum.rule === "unanimous") {
+    if (quorum.vetoes.length === 0) {
+      return tally
+        ? `on — ${quorum.roster} on the roster, nobody out`
+        : `on — nobody out of ${quorum.roster}`;
+    }
+    const who = quorum.vetoes.length === 1 ? "1 person" : `${quorum.vetoes.length} people`;
+    return `has to move — ${who} of ${quorum.roster} out`;
+  }
+
+  if (quorum.required !== null) return `${quorum.saidIn} of ${quorum.required} in`;
+  return tally
+    ? `${tally.in} in, ${tally.noReply} not heard from`
+    : `${quorum.saidIn} in`;
+}
+
 /** In / maybe / out against the roster, as a bar and a sentence. */
 function quorumMeter(row) {
   const cell = document.createElement("td");
@@ -255,12 +283,7 @@ function quorumMeter(row) {
 
   const line = document.createElement("div");
   line.className = "muted";
-  // The quorum line the post carries, or the tally on its own when nothing has
-  // asked for a number.
-  line.textContent =
-    row.quorum.required === null
-      ? `${row.tally.in} in, ${row.tally.noReply} not heard from`
-      : `${row.quorum.saidIn} of ${row.quorum.required} in`;
+  line.textContent = standingLine(row.quorum, row.tally);
   cell.append(line);
   return cell;
 }
@@ -376,10 +399,7 @@ function detailRail(detail) {
 
   const quorum = document.createElement("p");
   quorum.className = "muted";
-  quorum.textContent =
-    detail.quorum.required === null
-      ? `${detail.quorum.saidIn} in`
-      : `${detail.quorum.saidIn} of ${detail.quorum.required} in`;
+  quorum.textContent = standingLine(detail.quorum);
   rail.append(quorum);
 
   rail.append(
@@ -811,7 +831,10 @@ const FIELDS = [
   ["discordRoleId", "Role id", "text"],
   ["recurrenceAnchor", "Anchor (unix seconds)", "number"],
   ["intervalWeeks", "Interval (weeks)", "number"],
-  ["quorum", "Quorum", "number"],
+  // Blank is not "unset", it is the veto rule: a campaign with a roster and no
+  // quorum is unanimous, and a number here is how an organiser opts back into
+  // counting. The label has to say so, because the form is where somebody decides.
+  ["quorum", "Quorum (blank = unanimous)", "number"],
   ["capacity", "Capacity", "number"],
   ["maxSessions", "Max sessions", "number"],
   ["firstSessionNumber", "First session number", "number"],
@@ -1048,7 +1071,7 @@ function campaignFacts(plan) {
   const facts = [
     ["Game", text(plan.gameName ?? plan.gameId)],
     ["Cadence", cadence({ intervalWeeks: plan.cadence.intervalWeeks, recurrenceAnchor: plan.cadence.anchor })],
-    ["Quorum", text(plan.quorum)],
+    ["Quorum", plan.quorum === null ? "unanimous — one out and it moves" : text(plan.quorum)],
     ["Capacity", text(plan.capacity)],
     ["Sessions left", plan.maxSessions === null ? "open-ended" : String(plan.remaining)],
     ["Numbering from", String(plan.firstSessionNumber)],

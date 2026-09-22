@@ -174,9 +174,21 @@ function line(entry: UpcomingEntry): string {
   return parts.join(" · ");
 }
 
-/** Does it run — the same three answers the post gives, in one phrase. */
+/** Does it run — the same answers the post gives, in one phrase. */
 function standingOf(entry: UpcomingEntry): string | undefined {
-  const { required, saidIn, slipped } = entry.quorum;
+  const { rule, required, saidIn, slipped, vetoes, roster } = entry.quorum;
+
+  /**
+   * Under the veto rule there is no tally worth printing, so the phrase is the
+   * standing itself. "3 of 5 in" over a session that is going ahead is the reading
+   * this phase exists to stop, and `/upcoming` is where somebody skims six of
+   * them at once — the line that says "on" has to mean it.
+   */
+  if (rule === "unanimous") {
+    if (vetoes.length === 0) return "on";
+    const who = vetoes.length === 1 ? "1 person" : `${vetoes.length} people`;
+    return `moving — ${who} of ${roster} out`;
+  }
 
   if (entry.state === "JEOPARDY") {
     return required === null ? "in jeopardy" : `in jeopardy — ${saidIn} of ${required} in`;
