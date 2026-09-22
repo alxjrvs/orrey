@@ -307,3 +307,72 @@ describe("a rung that has to be retried", () => {
     expect(dms()).toHaveLength(1);
   });
 });
+
+/**
+ * What the nudge asks for, which is not the same thing under the two rules (#173).
+ */
+describe("what the nudge says", () => {
+  it("tells a table on the veto rule to answer only if something is wrong", async () => {
+    await member("silent", null);
+
+    await sendReminder(env, await target(), 24);
+
+    // Telling somebody they "have not said" when the rule already took their
+    // silence as yes is asking them to do something with no effect — and it is the
+    // sentence most likely to make a table start answering a post it never had to.
+    const content = String(dms()[0]?.body.content ?? "");
+    expect(content).toContain("down as **in**");
+    expect(content).toContain("only an **Out** takes you off it");
+    expect(content).not.toContain("have not said");
+  });
+
+  it("asks a campaign that counts for an answer, as it always did", async () => {
+    await db(env)
+      .update(schema.campaigns)
+      .set({ quorum: 3 })
+      .where(eq(schema.campaigns.id, "age-of-umbra"));
+    await member("silent", null);
+
+    await sendReminder(env, await target(), 24);
+
+    // A tally cannot clear a bar without an answer, so somebody who has said
+    // nothing is a gap in it.
+    expect(String(dms()[0]?.body.content ?? "")).toContain(
+      "have not said whether you are coming",
+    );
+  });
+
+  it("says the same thing in the thread when a DM is shut", async () => {
+    await member("a", null);
+    closedDms.add("a");
+
+    await sendReminder(env, await target(), 24);
+
+    expect(String(threadPosts()[0]?.body.content ?? "")).toContain("down as in");
+  });
+});
+
+/**
+ * Which rule the nudge speaks under is decided per recipient. Only a roster
+ * member's `out` is a veto, so the sentence that says pressing Out is all they
+ * need to do must not reach somebody it would not be true for.
+ */
+describe("who the veto wording is true for", () => {
+  it("asks somebody who has left the table for an answer instead", async () => {
+    await member("gone", "maybe");
+    await db(env)
+      .delete(schema.campaignMembers)
+      .where(eq(schema.campaignMembers.userId, "gone"));
+    await member("seated", null);
+
+    await sendReminder(env, await target(), 24);
+
+    const to = (userId: string) =>
+      String(dms().find((call) => call.path.includes(`dm-${userId}`))?.body.content ?? "");
+
+    // Their Out would write nothing, move nothing and open no poll — pointing
+    // them at it would be pointing at a button that does not work for them.
+    expect(to("gone")).toContain("have not said whether you are coming");
+    expect(to("seated")).toContain("down as **in**");
+  });
+});

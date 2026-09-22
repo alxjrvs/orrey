@@ -4,6 +4,7 @@ import { db, schema } from "../db/index.ts";
 import { rearm, type ArmedJob } from "../jobs/arm.ts";
 import { SETTING_DEFAULTS, SETTING_KEYS, settingOr } from "../db/settings.ts";
 import { attendanceRows } from "./rows.ts";
+import { quorumOf } from "./quorum.ts";
 import { tryDm } from "./dm.ts";
 import { postNoticeOnce } from "./notice.ts";
 import { claim, record } from "../projection/publications.ts";
@@ -79,6 +80,18 @@ export async function sendReminder(
   const silent = rows.filter((row) => row.intent === null || row.intent === "maybe");
   if (silent.length === 0) return nothing;
 
+  /**
+   * The ladder still nudges the silent under the veto rule, and it is worth saying
+   * why, because "silence is in" sounds like a reason to stop.
+   *
+   * It is the reason to keep going. The rule holds an evening together on the
+   * assumption that anybody who cannot make it will say so, and a DM the day
+   * before is the last easy moment to say it. What changes is the *wording* — the
+   * nudge asks them to do nothing unless something is wrong, rather than telling
+   * a table that took the post at its word that it has not answered.
+   */
+  const { rule } = quorumOf(target, rows);
+
   const dmed: string[] = [];
   const mentioned: string[] = [];
 
@@ -117,7 +130,11 @@ export async function sendReminder(
     }
 
     // One person's shut DMs must not stop the rest being asked.
-    const outcome = await tryDm(env, row.userId, remindDm(target, hours)).catch((error) => {
+    // Per recipient, not per session: only a roster member's `out` is a veto, so
+    // telling somebody who has left the table that pressing Out is all they need
+    // to do would be pointing them at a button that writes nothing.
+    const theirs = row.onRoster ? rule : "quorum";
+    const outcome = await tryDm(env, row.userId, remindDm(target, hours, theirs)).catch((error) => {
       console.error("reminder DM failed", session.id, row.userId, error);
       return "closed" as const;
     });
@@ -132,7 +149,18 @@ export async function sendReminder(
   // and three separate mentions of three people is three notifications for all
   // of them.
   if (mentioned.length > 0) {
-    await postNoticeOnce(env, target, label(hours), remindInThread(target, hours, mentioned));
+    // One message for several people, so it can only carry the wording that is
+    // true of all of them. A mixed list falls back to asking for an answer, which
+    // is the reading that is never wrong for anybody.
+    const seats = new Set(silent.filter((row) => row.onRoster).map((row) => row.userId));
+    const everyoneSeated = mentioned.every((userId) => seats.has(userId));
+
+    await postNoticeOnce(
+      env,
+      target,
+      label(hours),
+      remindInThread(target, hours, mentioned, everyoneSeated ? rule : "quorum"),
+    );
   }
 
   return { dmed, mentioned };

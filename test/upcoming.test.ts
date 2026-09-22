@@ -220,6 +220,58 @@ describe("how it reads", () => {
     );
   });
 
+  it("says on, and nothing that reads like a shortfall", () => {
+    const unanimous = counted({
+      rule: "unanimous",
+      required: null,
+      saidIn: 3,
+      roster: 5,
+      met: true,
+    });
+
+    const content = renderUpcoming([entry({ quorum: unanimous })], ASOF);
+    // The standing as the line carries it, delimited. "**Upcoming — 1 session**"
+    // contains "on" too, so a bare `toContain("on")` stayed green with the whole
+    // unanimous branch deleted.
+    expect(content).toContain(" · on · ");
+    // "3 of 5 in" over a session that is going ahead is exactly the reading the
+    // veto rule exists to stop, and `/upcoming` is where six of them are skimmed
+    // at once.
+    expect(content).not.toMatch(/\d+ of \d+ in/);
+    expect(content).not.toContain("short by");
+  });
+
+  it("does not call a rescheduled session on just because the vetoes are gone", () => {
+    const settled = counted({
+      rule: "unanimous",
+      required: null,
+      saidIn: 0,
+      roster: 4,
+      met: true,
+    });
+
+    // `moveSession` leaves a rescheduled session JEOPARDY and `carryOver` clears
+    // every intent with the date, so this exact shape — no vetoes, still marked —
+    // is what a resolved poll leaves behind.
+    expect(renderUpcoming([entry({ state: "JEOPARDY", quorum: settled })], ASOF)).toContain(
+      " · moving · ",
+    );
+  });
+
+  it("says a vetoed session is moving, and how many are out", () => {
+    const vetoed = counted({
+      rule: "unanimous",
+      required: null,
+      saidIn: 2,
+      roster: 4,
+      vetoes: ["p-1"],
+    });
+
+    expect(renderUpcoming([entry({ state: "JEOPARDY", quorum: vetoed })], ASOF)).toContain(
+      "moving — 1 person of 4 out",
+    );
+  });
+
   it("says in jeopardy for a session the clock has marked", () => {
     const content = renderUpcoming(
       [

@@ -234,6 +234,42 @@ function segmented(options, value, onChange) {
   return wrap;
 }
 
+/**
+ * Does it run, in a phrase — the same answer the attendance post gives.
+ *
+ * Under the veto rule a tally is the wrong shape of sentence: "3 of 5 in" over a
+ * session that is going ahead reads as a shortfall, and the campaign has no bar to
+ * be short of. So the line is the standing, and the counts stay in the bar beside
+ * it where they belong.
+ *
+ * `tally` is optional because the session rail has no bar to explain and nothing to
+ * say about who has not answered.
+ */
+function standingLine(quorum, tally) {
+  if (quorum.rule === "unanimous") {
+    if (quorum.vetoes.length > 0) {
+      const who = quorum.vetoes.length === 1 ? "1 person" : `${quorum.vetoes.length} people`;
+      return `has to move — ${who} of ${quorum.roster} out`;
+    }
+    /**
+     * No "nobody out" where a bar is drawn beside it.
+     *
+     * The bar is built from `tally.out`, which counts every answer, and `vetoes`
+     * counts only seats — so somebody who answered Out and then left the roster
+     * drew a red segment underneath a sentence denying there was one. Both were
+     * right and the pair was not. Where there is a bar it says what was answered
+     * and this says what it means; where there is none (the session rail) the
+     * count has to be in the sentence or it is nowhere.
+     */
+    return tally ? `on — ${quorum.roster} on the roster` : `on — nobody out of ${quorum.roster}`;
+  }
+
+  if (quorum.required !== null) return `${quorum.saidIn} of ${quorum.required} in`;
+  return tally
+    ? `${tally.in} in, ${tally.noReply} not heard from`
+    : `${quorum.saidIn} in`;
+}
+
 /** In / maybe / out against the roster, as a bar and a sentence. */
 function quorumMeter(row) {
   const cell = document.createElement("td");
@@ -255,12 +291,7 @@ function quorumMeter(row) {
 
   const line = document.createElement("div");
   line.className = "muted";
-  // The quorum line the post carries, or the tally on its own when nothing has
-  // asked for a number.
-  line.textContent =
-    row.quorum.required === null
-      ? `${row.tally.in} in, ${row.tally.noReply} not heard from`
-      : `${row.quorum.saidIn} of ${row.quorum.required} in`;
+  line.textContent = standingLine(row.quorum, row.tally);
   cell.append(line);
   return cell;
 }
@@ -376,10 +407,7 @@ function detailRail(detail) {
 
   const quorum = document.createElement("p");
   quorum.className = "muted";
-  quorum.textContent =
-    detail.quorum.required === null
-      ? `${detail.quorum.saidIn} in`
-      : `${detail.quorum.saidIn} of ${detail.quorum.required} in`;
+  quorum.textContent = standingLine(detail.quorum);
   rail.append(quorum);
 
   rail.append(
@@ -811,7 +839,12 @@ const FIELDS = [
   ["discordRoleId", "Role id", "text"],
   ["recurrenceAnchor", "Anchor (unix seconds)", "number"],
   ["intervalWeeks", "Interval (weeks)", "number"],
-  ["quorum", "Quorum", "number"],
+  // Blank is the veto rule — but only once the campaign has started and has
+  // somebody on it, which a campaign being created here has not. A number is how
+  // an organiser opts back into counting. The label says both halves, because the
+  // form is where somebody decides and "blank = unanimous" on its own promises a
+  // new campaign a rule that will not apply to it for a while yet.
+  ["quorum", "Quorum (blank = unanimous, once it has a roster)", "number"],
   ["capacity", "Capacity", "number"],
   ["maxSessions", "Max sessions", "number"],
   ["firstSessionNumber", "First session number", "number"],
@@ -1042,13 +1075,35 @@ function hours(seconds) {
   return `${Math.round(h / 24)} days`;
 }
 
+/**
+ * What a blank quorum means for *this* campaign, which is not one thing.
+ *
+ * Reading it off `quorum === null` alone told a FORMING campaign — and a running
+ * one with nobody entered — that a single `out` would move its evenings. Neither
+ * is true: `isUnanimous` wants a campaign past FORMING **and** somebody on the
+ * roster, so `quorumOf` answers `quorum` for both, the clock answers
+ * `no-quorum-set`, and nothing moves. All three of the real campaigns are in the
+ * second case today, so the page was wrong about every campaign it had.
+ *
+ * CLAUDE.md says nothing may decide the rule a second way. What keeps this the
+ * right side of that line is that it reports the rule rather than applying it —
+ * and when the rule does not hold it says which condition is missing, because
+ * "not set" on its own is the answer that sent somebody looking for a bug.
+ */
+function quorumFact(plan) {
+  if (plan.quorum !== null) return text(plan.quorum);
+  if (plan.state === "FORMING") return "unanimous once it starts — a claim is not a seat";
+  if (plan.roster.length === 0) return "not set — nobody on the roster to be unanimous about";
+  return "unanimous — one out and it moves";
+}
+
 function campaignFacts(plan) {
   const list = document.createElement("dl");
   list.className = "facts";
   const facts = [
     ["Game", text(plan.gameName ?? plan.gameId)],
     ["Cadence", cadence({ intervalWeeks: plan.cadence.intervalWeeks, recurrenceAnchor: plan.cadence.anchor })],
-    ["Quorum", text(plan.quorum)],
+    ["Quorum", quorumFact(plan)],
     ["Capacity", text(plan.capacity)],
     ["Sessions left", plan.maxSessions === null ? "open-ended" : String(plan.remaining)],
     ["Numbering from", String(plan.firstSessionNumber)],

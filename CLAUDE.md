@@ -17,6 +17,12 @@ rules that are easy to violate by accident.
   command seems necessary, that is a sign the console needs a page.
 - **Signups attach to campaigns at formation and to game days — never to an individual
   session.** Enforced by a CHECK constraint.
+- **Once a campaign has a roster, attendance is unanimous.** Silence is in, and one
+  `out` from a roster member means the evening moves — to a date poll, never to a
+  cancellation. A quorum is what a table still being *found* is measured by: a
+  forming campaign, a game day. `campaigns.quorum` is the opt-out and the only one,
+  and which rule applies is derived in `src/attendance/quorum.ts` rather than stored.
+  Nothing else may decide it a second way.
 - **Never write to the user's Social calendar.** Orrey writes only to the Orrey calendar.
 - Every component id goes through `src/discord/custom-id.ts`. Unknown ids must degrade to
   the retired-post response, never to "interaction failed".
