@@ -4,6 +4,9 @@ import { db, schema } from "../db/index.ts";
 import { mintId } from "../db/ids.ts";
 import { SETTING_KEYS, getSetting } from "../db/settings.ts";
 import { rememberUser } from "../db/users.ts";
+import { loadProjectionTarget } from "../projection/target.ts";
+import { attendanceRows } from "../attendance/rows.ts";
+import { quorumOf } from "../attendance/quorum.ts";
 import { armPollClose, CLOSE_JOB } from "./schedule.ts";
 import type { ParsedDate } from "./parse-dates.ts";
 import type { WinRule } from "./win-rule.ts";
@@ -96,6 +99,20 @@ export async function openPoll(
    */
   const derived = await defaultRuleFor(env, { targetSessionId, gameId, winRule, winThreshold });
 
+  /**
+   * A poll about a session belongs to that session's campaign, whether the caller
+   * said so or not.
+   *
+   * `quorum_of_roster` cannot be computed without knowing *whose* roster, and the
+   * readers of a poll all ask `date_polls.campaign_id` for it. The Discord
+   * `/reschedule` path passes it; the console's passes whatever the request body
+   * held, which for a targeted poll is often nothing — and a whole-roster rule on
+   * a poll with no campaign resolves to a roster of zero, under which no date can
+   * ever win. Filling it from the session is not a default: it is the same fact,
+   * read from the row that holds it.
+   */
+  const parent = campaignId ?? (await campaignOf(env, targetSessionId));
+
   const windowHours =
     (await getSetting<number>(env, SETTING_KEYS.pollWindowHours)) ?? DEFAULT_WINDOW_HOURS;
   const closesAt = Math.floor(now.getTime() / 1000) + windowHours * 3600;
@@ -123,7 +140,7 @@ export async function openPoll(
       d.insert(schema.datePolls).values({
         id: pollId,
         ...(targetSessionId ? { targetSessionId } : {}),
-        ...(campaignId ? { campaignId } : {}),
+        ...(parent ? { campaignId: parent } : {}),
         ...(gameId ? { gameId } : {}),
         ...(gameDayKind ? { gameDayKind } : {}),
         winRule: derived.winRule,
@@ -227,9 +244,29 @@ async function defaultRuleFor(
     return winThreshold === undefined ? { winRule } : { winRule, winThreshold };
   }
 
-  // Moving an existing session is about who can make the new date, and the
-  // roster is already the answer to "who".
-  if (targetSessionId) return { winRule: "best_available" };
+  /**
+   * Moving an existing session is about who can make the new date, and the roster
+   * is already the answer to "who" — so on a campaign whose attendance is
+   * unanimous, the bar for the new date is the same bar that moved it off the old
+   * one: **everybody assigned to be there**. `quorum_of_roster` at 1.0 is exactly
+   * that, so nothing new had to be invented for it.
+   *
+   * This is the one place the veto rule leaves a count worth having, and #173 says
+   * why: a date that only most of the table can make is a date the game would have
+   * to move off again.
+   *
+   * The rule is asked, not re-derived. `quorumOf` is the single place that knows
+   * when a campaign is unanimous, and a second copy of that test here would be one
+   * that disagrees with the post by the phase after next. Everything else — a
+   * forming campaign, a game day, a campaign with nobody entered, one that set a
+   * quorum — keeps `best_available`, which is what a poll about a table still being
+   * found should have.
+   */
+  if (targetSessionId) {
+    return (await isUnanimous(env, targetSessionId))
+      ? { winRule: "quorum_of_roster", winThreshold: WHOLE_ROSTER }
+      : { winRule: "best_available" };
+  }
 
   const game = gameId
     ? await db(env)
@@ -242,4 +279,31 @@ async function defaultRuleFor(
   return game?.minPlayers
     ? { winRule: "min_players", winThreshold: game.minPlayers }
     : { winRule: "best_available" };
+}
+
+/** Whose campaign a session belongs to, for a caller that did not say. */
+async function campaignOf(env: Env, sessionId: string | undefined) {
+  if (!sessionId) return undefined;
+  const row = await db(env)
+    .select({ campaignId: schema.sessions.campaignId })
+    .from(schema.sessions)
+    .where(eq(schema.sessions.id, sessionId))
+    .get();
+  return row?.campaignId ?? undefined;
+}
+
+/**
+ * `ceil(rosterSize * 1)` is the whole roster, which is what "everyone assigned to
+ * be there can make it" means as a number.
+ */
+const WHOLE_ROSTER = 1;
+
+/**
+ * Whether this session's attendance is unanimous — asked of the one function that
+ * decides it, given the same rows the post renders from.
+ */
+async function isUnanimous(env: Env, sessionId: string): Promise<boolean> {
+  const target = await loadProjectionTarget(env, sessionId);
+  if (!target) return false;
+  return quorumOf(target, await attendanceRows(env, sessionId)).rule === "unanimous";
 }

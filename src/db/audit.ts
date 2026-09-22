@@ -23,3 +23,14 @@ export const SESSION_MOVED = "session.move";
  * nobody decided this, the count did.
  */
 export const SESSION_CONFIRMED = "session.confirm";
+
+/**
+ * Somebody assigned to a session said they cannot make it, under a rule where
+ * that is enough to move the evening.
+ *
+ * Its `actor_user_id` is the person who said so — unlike `SESSION_CONFIRMED`,
+ * this *was* somebody's decision, and the trail should say whose. It is the row
+ * that explains a JEOPARDY nothing counted its way into, which is otherwise the
+ * one state change in this repo with no visible cause.
+ */
+export const SESSION_VETOED = "session.veto";

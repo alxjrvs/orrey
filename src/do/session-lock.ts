@@ -2,10 +2,10 @@ import { DurableObject } from "cloudflare:workers";
 import { and, eq, sql } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
-import { SESSION_CONFIRMED } from "../db/audit.ts";
+import { SESSION_CONFIRMED, SESSION_VETOED } from "../db/audit.ts";
 import { rememberUser } from "../db/users.ts";
 import { attendanceRows } from "../attendance/rows.ts";
-import { crossesThreshold, quorumOf } from "../attendance/quorum.ts";
+import { crossesThreshold, quorumOf, vetoed } from "../attendance/quorum.ts";
 import { loadProjectionTarget } from "../projection/target.ts";
 import {
   capacityOf,
@@ -16,6 +16,8 @@ import {
 } from "../game-days/signups.ts";
 import { promoteFromWaitlist } from "../game-days/promote.ts";
 import { moveSession } from "../polls/move.ts";
+import { RESCHEDULE_JOB } from "../polls/reschedule.ts";
+import { rearmStatement } from "../jobs/arm.ts";
 import type { AttendanceRow } from "../attendance/render.ts";
 import type { InteractionUser } from "../discord/types.ts";
 
@@ -52,7 +54,7 @@ export class SessionLock extends DurableObject<Env> {
           set: { intent, updatedAt: sql`(unixepoch())` },
         });
 
-      return this.settle(sessionId);
+      return this.settle(sessionId, actor.id);
     });
   }
 
@@ -231,13 +233,127 @@ export class SessionLock extends DurableObject<Env> {
    * whether a confirmed session is still on once somebody drops out is the
    * organiser's call, so the post says what happened and Orrey decides nothing.
    */
-  private async settle(sessionId: string): Promise<AttendanceRow[]> {
+  private async settle(sessionId: string, actorId?: string): Promise<AttendanceRow[]> {
     const rows = await attendanceRows(this.env, sessionId);
 
     const target = await loadProjectionTarget(this.env, sessionId);
     if (!target) return rows;
 
-    if (crossesThreshold(quorumOf(target, rows), target)) {
+    const quorum = quorumOf(target, rows);
+
+    /**
+     * Somebody on the roster cannot make it, under a rule where that is the
+     * whole answer. The evening has to move.
+     *
+     * One batch, for the reason the confirmation below is one: a session marked
+     * JEOPARDY with nothing armed to ask about a new date is a table left
+     * looking at a post that says the date will not work and offers nothing —
+     * and a reschedule armed without the state written would ask about a date
+     * nothing said was a problem.
+     *
+     * The poll is a job and not a call made here. A click has three seconds and
+     * has to spend them rewriting its own message; a poll is a D1 batch plus a
+     * Discord post, which is exactly what this repo puts on the next drain.
+     */
+    if (vetoed(quorum, target) && !(await this.rescheduleInFlight(sessionId))) {
+      const d = db(this.env);
+      // The first of them, when several have said out. `openedBy` is one column,
+      // the poll is one question, and all of them are asking it.
+      const by = quorum.vetoes[0] as string;
+
+      await d.batch([
+        d
+          .update(schema.sessions)
+          .set({ state: "JEOPARDY", updatedAt: sql`(unixepoch())` })
+          // Guarded on what this read saw, like the clock's write is: LOCKED,
+          // CANCELLED and PLAYED cannot be reached from here — `takesIntent`
+          // refuses the click first — but a cancel landing between the read and
+          // this write must not be undone by it.
+          .where(
+            and(
+              eq(schema.sessions.id, sessionId),
+              sql`${schema.sessions.state} IN ('SCHEDULED', 'CONFIRMED', 'JEOPARDY')`,
+            ),
+          ),
+
+        // Re-armed rather than added, which is what makes a veto of an
+        // already-moved date work: the job row from the last cycle is `done`, and
+        // this moves it rather than failing on its id.
+        rearmStatement(d, [
+          {
+            id: `${RESCHEDULE_JOB}:${sessionId}`,
+            kind: RESCHEDULE_JOB,
+            payload: { sessionId, by },
+            runAt: Math.floor(Date.now() / 1000),
+          },
+        ]),
+
+        // Whose decision it was. The one state change here that a count did not
+        // make, so unlike `SESSION_CONFIRMED` this row names somebody — and it
+        // names *the person who clicked*, not the first `out` in row order. Those
+        // are usually the same person and the trail is worth nothing on the
+        // occasion they are not.
+        d.insert(schema.auditLog).values({
+          id: crypto.randomUUID(),
+          actorUserId: actorId ?? by,
+          action: SESSION_VETOED,
+          targetType: "session",
+          targetId: sessionId,
+          detail: { before: target.session.state, after: "JEOPARDY", roster: quorum.roster },
+        }),
+      ]);
+
+      return rows;
+    }
+
+    /**
+     * The objection was taken back, and nothing has gone out about it.
+     *
+     * The click path wrote JEOPARDY, so the click path can undo it — and only
+     * while that is still all that happened. Once a poll is up the evening is
+     * being discussed in the channel and taking the question back down is the
+     * organiser's, like every other reversal here; `docs/PHASE-8-STACK.md` says so
+     * and this does not change it.
+     *
+     * Without this a withdrawal left the session marked for ever: nothing else
+     * writes a session out of JEOPARDY under this rule — `crossesThreshold`
+     * declines and `checkJeopardy` only ever writes it *in* — so `/upcoming` and
+     * the console would have gone on calling a perfectly fine evening "moving".
+     */
+    if (
+      quorum.rule === "unanimous" &&
+      quorum.vetoes.length === 0 &&
+      target.session.state === "JEOPARDY" &&
+      !(await this.pollIsOpen(sessionId))
+    ) {
+      const d = db(this.env);
+      await d.batch([
+        d
+          .update(schema.sessions)
+          .set({ state: "SCHEDULED", updatedAt: sql`(unixepoch())` })
+          // Guarded, like every other state write out here in the drain's world: a
+          // cancel landing between the read and this must not be undone by it.
+          .where(and(eq(schema.sessions.id, sessionId), eq(schema.sessions.state, "JEOPARDY"))),
+
+        // And the question it was about to ask is called off rather than left to
+        // run and refuse itself. `openRescheduleFor` would decline it — it re-reads
+        // the verdict for this exact reason — but a job that exists only to log
+        // that there was nothing to do is a job somebody has to read past.
+        d
+          .update(schema.jobs)
+          .set({ state: "cancelled", claimedUntil: null, lastError: null })
+          .where(
+            and(
+              eq(schema.jobs.id, `${RESCHEDULE_JOB}:${sessionId}`),
+              eq(schema.jobs.state, "pending"),
+            ),
+          ),
+      ]);
+
+      return rows;
+    }
+
+    if (crossesThreshold(quorum, target)) {
       const d = db(this.env);
       await d.batch([
         d
@@ -279,12 +395,62 @@ export class SessionLock extends DurableObject<Env> {
           action: SESSION_CONFIRMED,
           targetType: "session",
           targetId: sessionId,
-          detail: { required: quorumOf(target, rows).required },
+          detail: { required: quorum.required },
         }),
       ]);
     }
 
     return rows;
+  }
+
+  /**
+   * Whether this evening is already being rescheduled.
+   *
+   * The veto branch is reached by **every** click on a session that has a standing
+   * objection — including Refresh, which writes nothing — because `vetoed()` reads
+   * the rows and not the click. Without this it re-armed the job and wrote a
+   * second, third, fourth audit row every time somebody looked at the post, and
+   * once a poll had closed without a winner each further click opened another
+   * identical poll.
+   *
+   * Two questions, and they are **not** the same question — which is the thing
+   * that took two goes to get right. An **open poll** means the question is
+   * already out in the channel and cannot be taken back by a click. A **pending or
+   * claimed job** only means a click is on its way to the drain, which is a minute
+   * that has not happened yet.
+   *
+   * So arming is blocked by either, and *un*-arming by the poll alone: a
+   * withdrawal inside that minute is precisely the case the un-veto exists for,
+   * and treating the armed job as a done deal is what stopped it working.
+   *
+   * Neither is the same as "this session is JEOPARDY". `moveSession` leaves that
+   * behind on purpose, which is exactly why a veto has to be able to act on a
+   * JEOPARDY session at all.
+   */
+  private async pollIsOpen(sessionId: string): Promise<boolean> {
+    const open = await db(this.env)
+      .select({ id: schema.datePolls.id })
+      .from(schema.datePolls)
+      .where(
+        and(
+          eq(schema.datePolls.targetSessionId, sessionId),
+          eq(schema.datePolls.status, "open"),
+        ),
+      )
+      .get();
+    return open !== undefined;
+  }
+
+  private async rescheduleInFlight(sessionId: string): Promise<boolean> {
+    if (await this.pollIsOpen(sessionId)) return true;
+
+    const job = await db(this.env)
+      .select({ state: schema.jobs.state })
+      .from(schema.jobs)
+      .where(eq(schema.jobs.id, `${RESCHEDULE_JOB}:${sessionId}`))
+      .get();
+
+    return job?.state === "pending" || job?.state === "claimed";
   }
 
   /**

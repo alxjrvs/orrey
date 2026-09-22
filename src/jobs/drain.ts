@@ -12,6 +12,8 @@ import { assumeAttendance, registerRows } from "../attendance/assume.ts";
 import { gmOf } from "../campaigns/roster.ts";
 import { attendanceRows } from "../attendance/rows.ts";
 import { quorumOf } from "../attendance/quorum.ts";
+import { RESCHEDULE_JOB, openRescheduleFor } from "../polls/reschedule.ts";
+import { rearm } from "./arm.ts";
 import { confirmedNotice, correctionPost, jeopardyNotice } from "../attendance/render.ts";
 import { isMultiDaySession } from "../attendance/tables.ts";
 import { announceGameDay, postCloseNotice, postPollPost } from "../polls/post.ts";
@@ -188,7 +190,8 @@ async function runJob(job: typeof schema.jobs.$inferSelect, env: Env): Promise<v
        * marked with nobody out — and the notice keys on the *rule*, so it took the
        * veto branch anyway and announced "**This one has to move.** … 0 of 3
        * cannot make it", which is the fallback `outNames` calls impossible. There
-       * is nothing to say about an objection that has been taken back.
+       * is nothing to say about an objection that has been taken back, and nothing
+       * to arm either.
        */
       if (quorum.rule === "unanimous" && quorum.vetoes.length === 0) return;
 
@@ -204,6 +207,86 @@ async function runJob(job: typeof schema.jobs.$inferSelect, env: Env): Promise<v
           rows,
           gmId: target.campaign ? await gmOf(env, target.campaign.id) : undefined,
           quorum,
+          asOf: new Date(),
+        }),
+      );
+
+      /**
+       * Under the veto rule the notice says a date poll is the next step, so the
+       * next step is armed here rather than waited for.
+       *
+       * The clock has to be able to start this and not only a click, because an
+       * `out` reaches D1 from the console too, and somebody can be added to a
+       * roster after the post went up. Neither is a click on a post.
+       *
+       * Under a quorum nothing is armed: being short is a question asked of the
+       * table, and people turning up is the answer it is waiting for. Opening a
+       * poll on their behalf would answer it for them.
+       *
+       * There is a veto here by construction — the guard above returned if there
+       * was not — so `vetoes[0]` is somebody rather than `undefined`.
+       */
+      if (quorum.rule === "unanimous") {
+        await rearm(db(env), [
+          {
+            id: `${RESCHEDULE_JOB}:${sessionId}`,
+            kind: RESCHEDULE_JOB,
+            payload: { sessionId, by: quorum.vetoes[0] },
+            runAt: Math.floor(Date.now() / 1000),
+          },
+        ]);
+      }
+      return;
+    }
+
+    /**
+     * A roster member cannot make it, so the table is asked when instead.
+     *
+     * The poll before the notice, on purpose: the notice says a date poll is the
+     * next step, and a notice that says so with no poll behind it is worse than
+     * one that arrives a minute later. `openPoll` refuses a session that already
+     * has one open, and `postNoticeOnce` claims its label, so a retry of this
+     * whole job opens nothing twice and says nothing twice.
+     */
+    case RESCHEDULE_JOB: {
+      const { sessionId, by } = job.payload as { sessionId?: string; by?: string };
+      if (!sessionId) throw new Error(`${RESCHEDULE_JOB} job ${job.id} has no sessionId`);
+
+      const opened = await openRescheduleFor(env, sessionId, { by, now: new Date() });
+
+      /**
+       * **`already-open` is not a reason to stop**, and returning on it was a bug
+       * of exactly one line's placement. The notice lives below this; a notice
+       * Discord refused with a 4xx has its claim released by `postNoticeOnce`
+       * precisely so a retry can make it — and the retry returned here, one line
+       * above the post it was retrying for. The poll being open is the state this
+       * job is trying to reach.
+       *
+       * Every other refusal is a session that is gone, a campaign with nobody on
+       * it, or an objection that has been taken back, and those do stop: nothing
+       * is wrong with the job and a retry would reach the same answer.
+       */
+      if (!opened.ok && opened.reason !== "already-open") {
+        console.log(RESCHEDULE_JOB, sessionId, opened.reason);
+        return;
+      }
+
+      const target = await loadProjectionTarget(env, sessionId);
+      if (!target) return;
+      const rows = await attendanceRows(env, sessionId);
+
+      // The same notice the clock posts a day out, under the same date-scoped
+      // label — so whichever of them gets there first is the one that speaks, and
+      // the other finds the claim taken.
+      await postNoticeOnce(
+        env,
+        target,
+        jeopardyLabel(target.session.startsAt),
+        jeopardyNotice({
+          target,
+          rows,
+          gmId: target.campaign ? await gmOf(env, target.campaign.id) : undefined,
+          quorum: quorumOf(target, rows),
           asOf: new Date(),
         }),
       );

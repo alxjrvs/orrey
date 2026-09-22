@@ -1,4 +1,4 @@
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { Env } from "../env.ts";
 import { db, schema } from "../db/index.ts";
 import { SESSION_MOVED } from "../db/audit.ts";
@@ -78,6 +78,26 @@ export async function moveSession(
       updatedAt: sql`(unixepoch())`,
     })
     .where(eq(schema.sessions.id, sessionId));
+
+  /**
+   * The objections went with the date.
+   *
+   * `carryOver` already clears every intent when a *poll* resolves, for the reason
+   * it states: a stale "out" about a Tuesday is not an answer about a Thursday. A
+   * move made any other way — the console, a `p7/12` edit somebody made in Google
+   * — did not, and since `p8/3` that is not a cosmetic difference: an `out` is the
+   * one intent that now *does* something, so one left behind vetoed the new date
+   * the moment it existed, and the date after that, for ever.
+   *
+   * Only the `out` rows, and deliberately so. An `in` or a `maybe` is surface-only
+   * and carrying it over is the behaviour every caller already had; an `out` is
+   * load-bearing now, and it is the one that cannot outlive the evening it was
+   * about.
+   */
+  await db(env)
+    .update(schema.attendance)
+    .set({ intent: null, updatedAt: sql`(unixepoch())` })
+    .where(and(eq(schema.attendance.sessionId, sessionId), eq(schema.attendance.intent, "out")));
 
   // The move, on the record. Written here rather than at each caller because a
   // session moves from three places — a poll that resolved, a reschedule, and
