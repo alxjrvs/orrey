@@ -359,10 +359,20 @@ export function remindDm(
  * the rule already took their silence as yes is telling them to do something that
  * has no effect. It is also the sentence most likely to make a table start
  * answering a post it never had to answer.
+ *
+ * "Only an **Out** takes you off it" rather than "silence counts as coming",
+ * because this reaches the people who clicked **Maybe** as well as the ones who
+ * said nothing — and a maybe-clicker told that silence counts is being answered
+ * about somebody else. Both are down as in; one sentence is true of both.
+ *
+ * Which rule it is is decided **per recipient** and not per session. Only a
+ * roster member's `out` is a veto, so somebody who answered and has since left
+ * the table would otherwise be told to press a button that writes nothing, moves
+ * nothing and opens no poll.
  */
 function nudge(rule: RuleKind): string {
   return rule === "unanimous"
-    ? "You are down as **in** — silence counts as coming. Press **Out** only if you cannot make it."
+    ? "You are down as **in** — only an **Out** takes you off it."
     : "You have not said whether you are coming.";
 }
 

@@ -130,7 +130,11 @@ export async function sendReminder(
     }
 
     // One person's shut DMs must not stop the rest being asked.
-    const outcome = await tryDm(env, row.userId, remindDm(target, hours, rule)).catch((error) => {
+    // Per recipient, not per session: only a roster member's `out` is a veto, so
+    // telling somebody who has left the table that pressing Out is all they need
+    // to do would be pointing them at a button that writes nothing.
+    const theirs = row.onRoster ? rule : "quorum";
+    const outcome = await tryDm(env, row.userId, remindDm(target, hours, theirs)).catch((error) => {
       console.error("reminder DM failed", session.id, row.userId, error);
       return "closed" as const;
     });
@@ -145,7 +149,18 @@ export async function sendReminder(
   // and three separate mentions of three people is three notifications for all
   // of them.
   if (mentioned.length > 0) {
-    await postNoticeOnce(env, target, label(hours), remindInThread(target, hours, mentioned, rule));
+    // One message for several people, so it can only carry the wording that is
+    // true of all of them. A mixed list falls back to asking for an answer, which
+    // is the reading that is never wrong for anybody.
+    const seats = new Set(silent.filter((row) => row.onRoster).map((row) => row.userId));
+    const everyoneSeated = mentioned.every((userId) => seats.has(userId));
+
+    await postNoticeOnce(
+      env,
+      target,
+      label(hours),
+      remindInThread(target, hours, mentioned, everyoneSeated ? rule : "quorum"),
+    );
   }
 
   return { dmed, mentioned };

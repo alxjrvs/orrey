@@ -184,10 +184,20 @@ function standingOf(entry: UpcomingEntry): string | undefined {
    * this phase exists to stop, and `/upcoming` is where somebody skims six of
    * them at once — the line that says "on" has to mean it.
    */
+  /**
+   * **The state is read before the vetoes**, and that ordering is the whole of it.
+   * `moveSession` leaves a rescheduled session JEOPARDY and `carryOver` clears
+   * every intent with the date, so a session whose poll has already resolved has
+   * no vetoes left — and a tally-first reading called it "on" over a row the
+   * database, the console and the thread all still call JEOPARDY. This line is the
+   * only state signal `/upcoming` carries, so it cannot be the one that disagrees.
+   */
   if (rule === "unanimous") {
-    if (vetoes.length === 0) return "on";
     const who = vetoes.length === 1 ? "1 person" : `${vetoes.length} people`;
-    return `moving — ${who} of ${roster} out`;
+    const out = vetoes.length === 0 ? undefined : `${who} of ${roster} out`;
+
+    if (entry.state === "JEOPARDY") return out ? `moving — ${out}` : "moving";
+    return out ? `moving — ${out}` : "on";
   }
 
   if (entry.state === "JEOPARDY") {

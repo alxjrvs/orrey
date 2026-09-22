@@ -322,7 +322,7 @@ describe("what the nudge says", () => {
     // sentence most likely to make a table start answering a post it never had to.
     const content = String(dms()[0]?.body.content ?? "");
     expect(content).toContain("down as **in**");
-    expect(content).toContain("Press **Out** only if you cannot make it");
+    expect(content).toContain("only an **Out** takes you off it");
     expect(content).not.toContain("have not said");
   });
 
@@ -349,5 +349,30 @@ describe("what the nudge says", () => {
     await sendReminder(env, await target(), 24);
 
     expect(String(threadPosts()[0]?.body.content ?? "")).toContain("down as in");
+  });
+});
+
+/**
+ * Which rule the nudge speaks under is decided per recipient. Only a roster
+ * member's `out` is a veto, so the sentence that says pressing Out is all they
+ * need to do must not reach somebody it would not be true for.
+ */
+describe("who the veto wording is true for", () => {
+  it("asks somebody who has left the table for an answer instead", async () => {
+    await member("gone", "maybe");
+    await db(env)
+      .delete(schema.campaignMembers)
+      .where(eq(schema.campaignMembers.userId, "gone"));
+    await member("seated", null);
+
+    await sendReminder(env, await target(), 24);
+
+    const to = (userId: string) =>
+      String(dms().find((call) => call.path.includes(`dm-${userId}`))?.body.content ?? "");
+
+    // Their Out would write nothing, move nothing and open no poll — pointing
+    // them at it would be pointing at a button that does not work for them.
+    expect(to("gone")).toContain("have not said whether you are coming");
+    expect(to("seated")).toContain("down as **in**");
   });
 });
