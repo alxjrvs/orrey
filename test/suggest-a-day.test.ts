@@ -10,6 +10,7 @@ import { fakeDiscord } from "./discord.ts";
 import { loadProjectionTarget } from "../src/projection/target.ts";
 import { renderAttendancePost, jeopardyNotice } from "../src/attendance/render.ts";
 import { suggestButton } from "../src/polls/buttons.ts";
+import { quorumOf } from "../src/attendance/quorum.ts";
 
 /**
  * The same modal, from the post it concerns. One mint, two places — and adding a
@@ -124,7 +125,7 @@ describe("where the button sits", () => {
       target: await target(),
       rows: [],
       gmId: "gm-1",
-      required: 3,
+      quorum: quorumOf(await target(), []),
       asOf: ASOF,
     });
 

@@ -65,6 +65,12 @@ export type JeopardyOutcome = "confirmed" | "in-jeopardy" | "no-quorum-set" | "n
  * no cancellation. #29 is explicit that when the answer is no the response is a
  * date poll rather than a cancellation, so this marks the session and leaves the
  * deciding to people.
+ *
+ * `in-jeopardy` means two different things now and deliberately keeps one name:
+ * short of a quorum, or vetoed by somebody on the roster. Both are "this will not
+ * run as it stands", both are written as JEOPARDY, and the notice above this reads
+ * the verdict itself to say which — an outcome per rule would be a second place
+ * that has to know what the rules are.
  */
 export async function checkJeopardy(
   env: Env,
@@ -88,9 +94,18 @@ export async function checkJeopardy(
 
   const quorum = quorumOf(target, await attendanceRows(env, session.id));
 
-  // A campaign that never said what quorum is has not asked this question, and
-  // Orrey does not get to answer it on their behalf.
-  if (quorum.required === null) return "no-quorum-set";
+  /**
+   * A campaign that never said what quorum is has not asked this question, and
+   * Orrey does not get to answer it on their behalf.
+   *
+   * Only under the counting rule. Under the veto rule there is no number to be
+   * short of and none missing — `met` is "nobody assigned to this has said they
+   * cannot make it", which is a question the clock can answer on its own, and the
+   * one this check exists to ask a day out. Reading `required` first is what made
+   * a rostered campaign answer `no-quorum-set` to a session somebody had already
+   * vetoed.
+   */
+  if (quorum.rule === "quorum" && quorum.required === null) return "no-quorum-set";
   if (quorum.met) return "confirmed";
 
   /**

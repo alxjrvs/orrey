@@ -11,7 +11,7 @@ import { sendReminder } from "../attendance/reminders.ts";
 import { assumeAttendance, registerRows } from "../attendance/assume.ts";
 import { gmOf } from "../campaigns/roster.ts";
 import { attendanceRows } from "../attendance/rows.ts";
-import { requiredFor } from "../attendance/quorum.ts";
+import { quorumOf } from "../attendance/quorum.ts";
 import { confirmedNotice, correctionPost, jeopardyNotice } from "../attendance/render.ts";
 import { isMultiDaySession } from "../attendance/tables.ts";
 import { announceGameDay, postCloseNotice, postPollPost } from "../polls/post.ts";
@@ -172,8 +172,12 @@ async function runJob(job: typeof schema.jobs.$inferSelect, env: Env): Promise<v
       // session is happening is worse than silence.
       if (outcome !== "in-jeopardy") return;
 
-      const required = requiredFor(target);
-      if (required == null) return;
+      // The verdict, not a second reading of one column. `in-jeopardy` is reached
+      // two ways — short of a quorum, or vetoed — and the notice is the thing that
+      // knows the difference. Asking `requiredFor` here meant a rostered campaign
+      // returned null and the notice was skipped for the one session that most
+      // needed one.
+      const rows = await attendanceRows(env, sessionId);
 
       await postNoticeOnce(
         env,
@@ -181,9 +185,9 @@ async function runJob(job: typeof schema.jobs.$inferSelect, env: Env): Promise<v
         "jeopardy",
         jeopardyNotice({
           target,
-          rows: await attendanceRows(env, sessionId),
+          rows,
           gmId: target.campaign ? await gmOf(env, target.campaign.id) : undefined,
-          required,
+          quorum: quorumOf(target, rows),
           asOf: new Date(),
         }),
       );
