@@ -402,3 +402,149 @@ describe("a reschedule somebody types", () => {
     expect((await polls())[0]).toMatchObject({ winRule: "best_available" });
   });
 });
+
+/**
+ * What the review found: a veto is read off the rows, not off the click, so every
+ * click on a session carrying one took the veto branch again — and the minute
+ * between arming the job and draining it is long enough for the reason to vanish.
+ */
+describe("the second look, and the ones after it", () => {
+  beforeEach(async () => {
+    await roster("gm-1", ["p-1", "p-2"]);
+  });
+
+  function audits() {
+    return db(env)
+      .select()
+      .from(schema.auditLog)
+      .where(eq(schema.auditLog.action, SESSION_VETOED))
+      .all();
+  }
+
+  it("writes one audit row however often the post is refreshed", async () => {
+    await lock().setIntent({ sessionId: SESSION_ID, actor: actor("p-1"), intent: "out" });
+
+    await lock().readIntents(SESSION_ID);
+    await lock().readIntents(SESSION_ID);
+
+    // Refresh writes nothing and decides nothing. It used to write a second and a
+    // third row saying somebody had just decided the evening could not run.
+    expect(await audits()).toHaveLength(1);
+  });
+
+  it("opens one poll however many clicks land on a vetoed session", async () => {
+    await lock().setIntent({ sessionId: SESSION_ID, actor: actor("p-1"), intent: "out" });
+    await drainJobs(env);
+    await lock().readIntents(SESSION_ID);
+    await lock().setIntent({ sessionId: SESSION_ID, actor: actor("p-2"), intent: "out" });
+    await drainJobs(env);
+
+    expect(await polls()).toHaveLength(1);
+  });
+
+  it("names the person who clicked, not the first out in row order", async () => {
+    // `p-1`'s objection is already on the record — from the console, say — with no
+    // job armed for it. `p-2` is the one who clicks.
+    await db(env)
+      .insert(schema.attendance)
+      .values({ sessionId: SESSION_ID, userId: "p-1", intent: "out", updatedAt: 1_000 });
+
+    await lock().setIntent({ sessionId: SESSION_ID, actor: actor("p-2"), intent: "out" });
+
+    expect((await audits())[0]).toMatchObject({ actorUserId: "p-2" });
+  });
+
+  it("puts the session back when the objection is withdrawn before anything goes out", async () => {
+    await lock().setIntent({ sessionId: SESSION_ID, actor: actor("p-1"), intent: "out" });
+    expect(await stateOf()).toBe("JEOPARDY");
+
+    await lock().setIntent({ sessionId: SESSION_ID, actor: actor("p-1"), intent: "in" });
+
+    // Nothing else writes a session out of JEOPARDY under this rule, so without
+    // this a withdrawal left a perfectly fine evening reading "moving" for ever.
+    expect(await stateOf()).toBe("SCHEDULED");
+  });
+
+  it("leaves it marked once the question is out in the channel", async () => {
+    await lock().setIntent({ sessionId: SESSION_ID, actor: actor("p-1"), intent: "out" });
+    await drainJobs(env);
+
+    await lock().setIntent({ sessionId: SESSION_ID, actor: actor("p-1"), intent: "in" });
+
+    // The evening is already being discussed. Taking the question back down is the
+    // organiser's, like every other reversal here.
+    expect(await stateOf()).toBe("JEOPARDY");
+    expect(await polls()).toHaveLength(1);
+  });
+
+  it("asks nothing when the objection is taken back before the drain runs", async () => {
+    await lock().setIntent({ sessionId: SESSION_ID, actor: actor("p-1"), intent: "out" });
+    await db(env)
+      .update(schema.attendance)
+      .set({ intent: "in" })
+      .where(eq(schema.attendance.userId, "p-1"));
+
+    await drainJobs(env);
+
+    // A payload is what was true when it was written. Opening a poll on it would
+    // be asking a question nobody has, and announcing "0 of 3 cannot make it".
+    expect(await polls()).toEqual([]);
+  });
+
+  it("asks nothing about a session that has been called off", async () => {
+    await lock().setIntent({ sessionId: SESSION_ID, actor: actor("p-1"), intent: "out" });
+    await db(env)
+      .update(schema.sessions)
+      .set({ state: "CANCELLED" })
+      .where(eq(schema.sessions.id, SESSION_ID));
+
+    await drainJobs(env);
+
+    expect(await polls()).toEqual([]);
+  });
+
+  it("still posts the notice on a retry once the poll is open", async () => {
+    await lock().setIntent({ sessionId: SESSION_ID, actor: actor("p-1"), intent: "out" });
+    await drainJobs(env);
+
+    // Discord refused the notice with a 4xx, so `postNoticeOnce` released its
+    // claim precisely so a retry could make it. The retry used to return on
+    // `already-open` — one line above the post it was retrying for.
+    await env.DB.prepare("DELETE FROM publications").run();
+    posted = [];
+    await db(env)
+      .update(schema.jobs)
+      .set({ state: "pending", claimedUntil: null })
+      .where(eq(schema.jobs.id, `${RESCHEDULE_JOB}:${SESSION_ID}`));
+
+    await drainJobs(env);
+
+    expect(
+      posted.some((call) =>
+        String((call.body as { content?: string }).content ?? "").includes("has to move"),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not let an out outlive the date it was about", async () => {
+    const { moveSession } = await import("../src/polls/move.ts");
+    await db(env)
+      .insert(schema.attendance)
+      .values({ sessionId: SESSION_ID, userId: "p-1", intent: "out" });
+
+    await moveSession(env, SESSION_ID, {
+      startsAt: STARTS_AT + 3 * 86_400,
+      endsAt: STARTS_AT + 3 * 86_400 + 3 * 3600,
+    });
+
+    // `carryOver` already clears intents when a poll resolves, for this exact
+    // reason. A move made any other way did not — and an `out` left behind vetoed
+    // the new date the moment it existed, and the date after that, for ever.
+    const [row] = await db(env)
+      .select({ intent: schema.attendance.intent })
+      .from(schema.attendance)
+      .where(eq(schema.attendance.userId, "p-1"))
+      .all();
+    expect(row?.intent).toBeNull();
+  });
+});

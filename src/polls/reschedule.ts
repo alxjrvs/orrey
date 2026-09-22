@@ -4,6 +4,8 @@ import { eq } from "drizzle-orm";
 import { SETTING_DEFAULTS, SETTING_KEYS, settingOr } from "../db/settings.ts";
 import { sameTimeDaysLater } from "../campaigns/recurrence.ts";
 import { loadProjectionTarget } from "../projection/target.ts";
+import { attendanceRows } from "../attendance/rows.ts";
+import { quorumOf } from "../attendance/quorum.ts";
 import { rosterOf } from "../campaigns/roster.ts";
 import { openPoll, type OpenResult } from "./open.ts";
 import type { ParsedDate } from "./parse-dates.ts";
@@ -51,9 +53,19 @@ export const PROPOSED_DAYS = 4;
  */
 export const WHOLE_ROSTER_THRESHOLD = 1;
 
+/**
+ * The states an evening can still be moved from. The same set `vetoed()` uses, and
+ * for the same reason — a cancelled, locked or played session is not one a date
+ * poll has anything to ask about.
+ */
+const UNSETTLED = new Set(["SCHEDULED", "CONFIRMED", "JEOPARDY"]);
+
 export type RescheduleResult =
   | { ok: true; pollId: string }
-  | { ok: false; reason: "no-session" | "no-campaign" | "no-dates" | "nobody" | OpenFailure };
+  | {
+      ok: false;
+      reason: "no-session" | "no-campaign" | "no-dates" | "nobody" | "settled" | "no-veto" | OpenFailure;
+    };
 
 type OpenFailure = Extract<OpenResult, { ok: false }>["reason"];
 
@@ -74,6 +86,26 @@ export async function openRescheduleFor(
   // unreachable from a veto — a veto is a roster member — and worth refusing by
   // name rather than opening a poll no answer can ever win.
   if (roster.length === 0) return { ok: false, reason: "nobody" };
+
+  /**
+   * Asked again here, and not only where the job was armed.
+   *
+   * Up to a minute passes between the click and this running, and that minute is
+   * long enough for the whole reason to disappear: the vetoer clicks In again, the
+   * organiser calls the evening off, the table locks. Opening a poll then is
+   * asking a question nobody has, and the notice that follows it announced "**This
+   * one has to move.** … 0 of 3 cannot make it" — over a session that was fine, or
+   * cancelled.
+   *
+   * So the verdict is re-read from D1 rather than carried in the job payload. A
+   * payload is what was true when it was written; this is a decision about now.
+   */
+  if (!UNSETTLED.has(session.state)) return { ok: false, reason: "settled" };
+
+  const verdict = quorumOf(target, await attendanceRows(env, sessionId));
+  if (verdict.rule !== "unanimous" || verdict.vetoes.length === 0) {
+    return { ok: false, reason: "no-veto" };
+  }
 
   const timezone = await settingOr(env, SETTING_KEYS.timezone, SETTING_DEFAULTS.timezone);
   const dates = proposalsFor(session, { timezone, now });
